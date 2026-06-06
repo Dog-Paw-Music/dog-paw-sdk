@@ -1,0 +1,7 @@
+{
+    "name": "dog_paw_home_screen",
+    "displayName": "Home Screen",
+    "flutterApp": "dog_paw_home_screen",
+    "visible": "never",
+    "version": "0.1"
+}

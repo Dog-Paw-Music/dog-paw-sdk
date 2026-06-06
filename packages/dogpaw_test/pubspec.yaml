@@ -1,0 +1,21 @@
+name: dogpaw_test
+description: Public Dog Paw test helpers for widget and app integration tests
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+  flutter: ">=3.10.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  dogpaw:
+    path: ../dogpaw
+  path: ^1.9.0
+  test: ^1.24.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0

@@ -1,0 +1,8 @@
+{
+  "name": "hello_dogpaw",
+  "displayName": "Hello Dog Paw",
+  "visible": "always",
+  "flutterApp": "hello_dogpaw",
+  "icon": "hello_dogpaw_icon.png",
+  "version": "1.0"
+}

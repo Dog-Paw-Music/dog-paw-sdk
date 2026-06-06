@@ -1,0 +1,8 @@
+{
+  "name": "HW2MPE",
+  "displayName": "Hardware to MPE",
+  "type": "headless",
+  "visible": "never",
+  "executable": "HW2MPE",
+  "version": "1.0"
+}

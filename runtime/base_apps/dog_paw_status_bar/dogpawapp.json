@@ -1,0 +1,8 @@
+{
+  "name": "dog_paw_status_bar",
+  "displayName": "Status Bar",
+  "flutterApp": "dog_paw_status_bar",
+  "windowManagement": "layer_shell",
+  "visible": "never",
+  "version": "0.1"
+}

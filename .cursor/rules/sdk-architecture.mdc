@@ -1,0 +1,11 @@
+---
+description: Public SDK architecture and runtime ownership
+alwaysApply: true
+---
+
+# SDK Architecture
+
+- Treat `tools/dogpaw` as the public workflow front door.
+- Treat `runtime/` as tooling-owned seed content, not a live runtime root for apps.
+- Apps should resolve binaries, assets, and state from installed layouts created by the Dog Paw install workflows.
+- Prefer updating public source docs and examples directly instead of relying on export-only rewrites.

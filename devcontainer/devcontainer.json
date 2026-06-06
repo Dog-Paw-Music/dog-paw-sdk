@@ -1,0 +1,19 @@
+{
+  "name": "Dog Paw SDK",
+  "image": "ghcr.io/cirruslabs/flutter:3.24.5",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "Dart-Code.flutter",
+        "Dart-Code.dart-code"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  },
+  "postCreateCommand": "flutter --disable-analytics && dart --disable-analytics",
+  "remoteEnv": {
+    "CI": "false"
+  }
+}

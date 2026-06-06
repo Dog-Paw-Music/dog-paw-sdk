@@ -1,0 +1,8 @@
+{
+  "name": "rain_pond",
+  "displayName": "Rain Pond",
+  "visible": "always",
+  "flutterApp": "rain_pond",
+  "icon": "rain_pond_icon.png",
+  "version": "1.0"
+}

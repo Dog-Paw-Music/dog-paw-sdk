@@ -1,0 +1,12 @@
+---
+description: Editing Flutter apps in the Dog Paw SDK
+alwaysApply: true
+---
+
+# Flutter App Edits
+
+- Keep `main.dart` thin and use it as the composition root.
+- Put reusable logic in services or controllers so it can be tested without rendering the full UI.
+- Keep `dogpawapp.json` accurate when changing app names, icons, visibility, or runtime assets.
+- Prefer widget tests for UI behavior, and use `dogpaw_test` for Epiphany-backed integration tests.
+- Follow the example progression intentionally: `hello_dogpaw` for minimal patterns, `rain_pond` for intermediate structure, and `namer` for fuller app structure.

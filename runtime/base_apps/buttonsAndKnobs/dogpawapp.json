@@ -1,0 +1,8 @@
+{
+  "name": "buttonsAndKnobs",
+  "displayName": "Buttons and Knobs",
+  "type": "headless",
+  "visible": "never",
+  "executable": "buttonsAndKnobs",
+  "version": "1.0"
+}

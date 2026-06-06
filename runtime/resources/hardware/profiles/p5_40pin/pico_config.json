@@ -1,0 +1,38 @@
+{
+  "name": "p5_40pin",
+  "description": "Pico firmware configuration for 40-pin Pi 5 standalone units",
+
+  "blade": {
+    "defaultLedPin": 25,
+    "spiPins": [16, 17, 18, 19],
+    "spiInstance": 0,
+
+    "muxer0Pins": [2, 3, 4],
+    "muxer1Pins": [15, 14, 13],
+
+    "sensorDataIdx": [14, 9, 12, 11, 10, 13, 8, 15, 2, 3, 6, 7, 0, 1, 4, 5],
+
+    "adcPins": [26, 27],
+    "adcInputMapping": "p6"
+  },
+
+  "shadowBlade": {
+    "defaultLedPin": 25,
+    "spiPins": [16, 17, 18, 19],
+    "spiInstance": 0,
+    "ledPins": [13, 12, 11, 10, 9, 8, 7, 6],
+    "has5VEnable": false,
+    "hasPiOn": false,
+    "5venPin": -1,
+    "piOnPin": -1
+  },
+
+  "frontPanel": {
+    "enabled": false,
+    "ledPin": 25,
+    "i2cSdaPin": 0,
+    "i2cSclPin": 1,
+    "buttonPins": [-1, -1, -1, -1, -1, -1],
+    "encoderPins0": [-1, -1, -1, -1, -1, -1]
+  }
+}

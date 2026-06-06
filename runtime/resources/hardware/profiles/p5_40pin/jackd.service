@@ -1,0 +1,28 @@
+[Unit]
+Description=Dog Paw Audio: jackd (system)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dppi
+Environment=JACK_NO_AUDIO_RESERVATION=1
+# Lock to Core 3 (isolated from general scheduler via isolcpus=3 in cmdline.txt)
+CPUAffinity=3
+# Realtime capabilities
+LimitRTPRIO=infinity
+LimitMEMLOCK=infinity
+# Run with realtime scheduling (-R) and high priority (-P 85)
+# Using alsa backend with HDMI audio output on Pi5 40-pin
+# Sample rate 48000, Period size 256, Periods 2
+ExecStart=/usr/bin/jackd -R -P 85 -d alsa -d hdmi:0,0 -r 48000 -p 256 -n 2
+Restart=on-failure
+RestartSec=2
+# Give jackd a chance to shut down cleanly
+TimeoutStopSec=15s
+# journal is default, but explicit doesn't hurt
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

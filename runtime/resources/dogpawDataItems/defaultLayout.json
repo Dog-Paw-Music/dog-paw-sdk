@@ -1,0 +1,9 @@
+{
+  "name": "__DEFAULT_CURRENT__",
+  "namespaceSelector": {
+    "type": "GLOBAL"
+  },
+  "spec": {
+    "displayName": "Empty Layout"
+  }
+}

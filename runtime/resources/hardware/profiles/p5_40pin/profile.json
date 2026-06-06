@@ -1,0 +1,29 @@
+{
+  "name": "p5_40pin",
+  "description": "Raspberry Pi 5 with 40-pin header (older standalone units)",
+
+  "picoComms": {
+    "spiBus": 0,
+    "spiDevice": 0
+  },
+
+  "ledComms": {
+    "spiBus": 1,
+    "spiDevice": 0
+  },
+
+  "buttonsAndKnobs": {
+    "i2cDevice": "/dev/i2c-1",
+    "i2cAddress": 66
+  },
+
+  "pedalIO": {
+    "enabled": false,
+    "spiBus": 0,
+    "adcDevice": 0,
+    "dacDevice": 1,
+    "ioExpanderDevice": 2
+  },
+
+  "deviceTreeOverlays": []
+}

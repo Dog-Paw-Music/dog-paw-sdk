@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "actions": [
+    {
+      "type": "launch_app",
+      "app": "LEDComms",
+      "required": true,
+      "args": [
+        "--simulate",
+        "--no-simulator-ui"
+      ]
+    },
+    {
+      "type": "launch_app",
+      "app": "buttonsAndKnobs",
+      "required": true,
+      "args": [
+        "--simulator",
+        "--no-simulator-ui"
+      ]
+    },
+    {
+      "type": "launch_app",
+      "app": "System",
+      "required": true,
+      "args": [
+        "--simulate"
+      ]
+    },
+    {
+      "type": "launch_app",
+      "app": "picoComms",
+      "required": true,
+      "args": [
+        "--simulate",
+        "--publish-interval-ms",
+        "33"
+      ]
+    },
+    {
+      "type": "launch_app",
+      "app": "dog_paw_status_bar",
+      "required": true,
+      "env": {
+        "WAYLAND_DEBUG": "1"
+      }
+    },
+    {
+      "type": "launch_app",
+      "app": "dog_paw_home_screen",
+      "required": true
+    }
+  ]
+}

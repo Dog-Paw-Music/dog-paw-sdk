@@ -1,0 +1,8 @@
+{
+  "name": "System",
+  "displayName": "System",
+  "type": "headless",
+  "visible": "never",
+  "executable": "System",
+  "version": "0.1"
+}

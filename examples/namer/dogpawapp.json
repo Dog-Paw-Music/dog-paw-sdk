@@ -1,0 +1,8 @@
+{
+  "name": "Namer",
+  "displayName": "Key Namer",
+  "icon": "namer_icon.png",
+  "visible": "always",
+  "flutterApp": "namer",
+  "version": "1.0"
+}

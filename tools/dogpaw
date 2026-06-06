@@ -1,0 +1,2184 @@
+#!/usr/bin/env python3
+"""Dog Paw workflow dispatcher for developer and deployment tooling."""
+
+from __future__ import annotations
+
+import argparse
+from dataclasses import dataclass
+import json
+import os
+import shlex
+import signal
+import socket
+import subprocess
+import sys
+from pathlib import Path, PurePosixPath
+from typing import Sequence
+
+
+WORKSPACE_ROOT = Path(__file__).resolve().parents[1]
+INVOCATION_CWD = Path.cwd()
+EXPORTED_SDK = True
+BOOTSTRAP_TOOL = WORKSPACE_ROOT / "tools" / "bootstrap_pi_runtime.sh"
+PI_RESOURCE_SCRIPTS_ROOT = WORKSPACE_ROOT / "_unsupported_exported_sdk_v1" / "scripts"
+DEPLOY_HEADLESS_APPS_TOOL = PI_RESOURCE_SCRIPTS_ROOT / "deploy_headless_apps.sh"
+DEPLOY_AND_RUN_TOOL = PI_RESOURCE_SCRIPTS_ROOT / "deploy_and_run.sh"
+EMULATOR_TOOL = WORKSPACE_ROOT / "runtime" / "emulator" / "dogpaw_emulator.py"
+LOCAL_CONFIG_TOOL = PI_RESOURCE_SCRIPTS_ROOT / "dev" / "local_config.sh"
+PLAN_PATH = WORKSPACE_ROOT / "logs" / "2026" / "may" / "DOGPAW_WORKFLOW_TOOLING_PLAN.md"
+INSTALL_SUPPORT_TOOLS_ROOT = WORKSPACE_ROOT / "runtime" / "emulator"
+FLUTTER_WORKSPACE_ROOT = WORKSPACE_ROOT
+DEFAULT_CXX_BUILD_DIR = WORKSPACE_ROOT / "_unsupported_exported_sdk_v1" / "build"
+DEFAULT_EMULATOR_BUILD_DIR = WORKSPACE_ROOT / "_unsupported_exported_sdk_v1" / "emulator-build"
+DEFAULT_EMULATOR_EPIPHANY = WORKSPACE_ROOT / "_unsupported_exported_sdk_v1" / "Epiphany"
+WORKFLOW_AREAS = ("target", "app", "debug", "local", "emulator")
+TOP_LEVEL_HELP_AREAS = ("local", "emulator")
+SSH_BASE_ARGS = (
+    "ssh",
+    "-o",
+    "IdentityAgent=none",
+    "-o",
+    "ConnectTimeout=5",
+    "-o",
+    "StrictHostKeyChecking=accept-new",
+)
+RSYNC_BASE_ARGS = (
+    "rsync",
+    "-az",
+    "--delete",
+    "--exclude",
+    ".git",
+    "--exclude",
+    ".dart_tool",
+    "--exclude",
+    "build",
+)
+REMOTE_SOURCE_ROOT = PurePosixPath("/home/dppi/.cache/dogpaw/flutter-install")
+REMOTE_APP_ROOT = PurePosixPath("/home/dppi/.local/share/dogpaw/apps")
+REMOTE_FLUTTER_ROOT = PurePosixPath("/home/dppi/repos/flutter")
+REMOTE_BASE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+REMOTE_FLUTTER_DEBUG_ROOT = PurePosixPath("/home/dppi/.cache/dogpaw/flutter-debug")
+DEFAULT_REMOTE_FLUTTER_DEBUG_PORT = "2464"
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build the top-level Dog Paw workflow parser.
+
+    Purpose:
+        Defines the single user-facing command surface under `tools/` for Dog
+        Paw workflows that span Pi setup, app installation, remote debugging,
+        and emulator management.
+    Parameters:
+        None.
+    Return value:
+        Configured parser that accepts one workflow area plus pass-through
+        trailing arguments for area-specific dispatch.
+    Requirements:
+        None.
+    Guarantees:
+        Help output names the supported workflow areas and explains that deeper
+        scripts are implementation details behind this dispatcher.
+    Invariants:
+        Parser construction does not inspect the filesystem or launch external
+        commands.
+    """
+
+    parser = argparse.ArgumentParser(
+        prog="dogpaw",
+        description="Dog Paw workflow front door.",
+        epilog=(
+            "Start here:\n"
+            "  dogpaw emulator --help\n"
+            "  dogpaw emulator run --help\n"
+            "  dogpaw emulator screen --help\n"
+            "  dogpaw emulator logs --name default"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "area",
+        nargs="?",
+        metavar="area",
+        help=(
+            "Workflow area. Primary v1 areas: "
+            f"{', '.join(TOP_LEVEL_HELP_AREAS)}."
+        ),
+    )
+    parser.add_argument(
+        "args",
+        nargs=argparse.REMAINDER,
+        help="Arguments passed to the selected workflow area.",
+    )
+    return parser
+
+
+def shell_join(words: Sequence[str]) -> str:
+    """Render shell-safe text for one command line.
+
+    Purpose:
+        Produces readable dry-run command lines while preserving argument
+        boundaries for paths and flags that contain spaces or punctuation.
+    Parameters:
+        words: Command words in execution order.
+    Return value:
+        POSIX-shell-quoted command string.
+    Requirements:
+        Each item in `words` must already be the intended literal token.
+    Guarantees:
+        Returned text preserves original token boundaries when pasted into a
+        POSIX shell.
+    Invariants:
+        Does not inspect the filesystem or mutate process state.
+    """
+
+    return " ".join(shlex.quote(word) for word in words)
+
+
+def run_external(command: Sequence[str]) -> int:
+    """Run one external command and return its exit code.
+
+    Purpose:
+        Centralizes subprocess launching so workflow dispatch remains explicit
+        while preserving the caller's original shell working directory for
+        relative local path arguments.
+    Parameters:
+        command: Executable path plus arguments for the delegated tool.
+    Return value:
+        Exit code from the delegated process.
+    Requirements:
+        `command` must contain at least one element and the executable must be
+        runnable by the current environment.
+    Guarantees:
+        Child stdout and stderr stream directly through this process, and the
+        child runs with the user's invocation directory as its current working
+        directory.
+    Invariants:
+        This helper does not rewrite arguments or mutate repository files by
+        itself; any side effects come only from the delegated tool.
+    """
+
+    completed = subprocess.run(command, cwd=INVOCATION_CWD, check=False)
+    return int(completed.returncode)
+
+
+def is_help_request(args: Sequence[str]) -> bool:
+    """Return whether one argument list only asks for help text.
+
+    Purpose:
+        Lets exported-SDK gating preserve command discovery while still failing
+        unsupported workflow execution from the public CLI surface.
+    Parameters:
+        args: Remaining command arguments after one workflow selector.
+    Return value:
+        `True` when the arguments are empty or begin with a standard help token.
+    Requirements:
+        `args` must preserve the user's original argument order.
+    Guarantees:
+        Recognizes `-h`, `--help`, and `help`.
+    Invariants:
+        Does not inspect the filesystem or mutate process state.
+    """
+
+    return len(args) == 0 or args[0] in ("-h", "--help", "help")
+
+
+def args_include_option(args: Sequence[str], option_names: set[str]) -> bool:
+    """Return whether one argument list already supplies any named option.
+
+    Purpose:
+        Lets wrapper dispatch add source-repo convenience defaults only when the
+        user did not already make an explicit choice.
+    Parameters:
+        args: Raw delegated argument sequence.
+        option_names: Long or short option spellings to detect.
+    Return value:
+        `True` when `args` contains one of the options, including `--opt=value`
+        forms.
+    Requirements:
+        `option_names` should contain canonical option spellings.
+    Guarantees:
+        Stops scanning at a literal `--` separator.
+    Invariants:
+        Does not resolve paths or mutate the input sequence.
+    """
+
+    for token in args:
+        if token == "--":
+            return False
+        if token in option_names:
+            return True
+        if any(token.startswith(f"{option_name}=") for option_name in option_names):
+            return True
+    return False
+
+
+def with_source_emulator_defaults(args: Sequence[str]) -> list[str]:
+    """Inject source-checkout emulator defaults when the user omitted them.
+
+    Purpose:
+        Preserves convenient local dev-repo emulator workflows while the public
+        `dogpaw_emulator.py` stays portable and exported-SDK-safe.
+    Parameters:
+        args: Raw emulator arguments after the top-level `emulator` selector.
+    Return value:
+        Argument list extended with source-repo `--epiphany` and `--build-dir`
+        defaults when needed.
+    Requirements:
+        `args` must preserve the user's original argument order.
+    Guarantees:
+        Explicit user-supplied `--epiphany` or `--build-dir` values win.
+    Invariants:
+        Exported SDK dispatch does not use these source-repo defaults.
+    """
+
+    rewritten_args = list(args)
+    if not args_include_option(rewritten_args, {"--epiphany"}):
+        rewritten_args.extend(["--epiphany", str(DEFAULT_EMULATOR_EPIPHANY)])
+    if not args_include_option(rewritten_args, {"--build-dir"}):
+        rewritten_args.extend(["--build-dir", str(DEFAULT_EMULATOR_BUILD_DIR)])
+    return rewritten_args
+
+
+def exported_sdk_v1_message(area: str, args: Sequence[str]) -> str:
+    """Build the exported-SDK error for unsupported non-emulator workflows.
+
+    Purpose:
+        Gives the generated public SDK one intentional failure mode for workflow
+        families that still depend on internal Pi-repo tooling outside the
+        agreed emulator-first v1 surface.
+    Parameters:
+        area: Top-level workflow area that the user selected.
+        args: Remaining arguments after that workflow area.
+    Return value:
+        Human-readable stderr message for the unsupported exported command.
+    Requirements:
+        `area` must name a workflow area shown by the top-level parser.
+    Guarantees:
+        The returned text explains that the exported SDK currently supports only
+        emulator-first workflows and points users at the public emulator surface.
+    Invariants:
+        Does not inspect the filesystem or mutate global state.
+    """
+
+    attempted = f"{area} {' '.join(args)}".strip()
+    return (
+        f"'dogpaw {attempted}' is not supported in exported SDK v1.\n"
+        "Exported SDK v1 currently supports the emulator-first workflow surface:\n"
+        "  dogpaw emulator create ...\n"
+        "  dogpaw emulator run ...\n"
+        "  dogpaw emulator screen ...\n"
+        "  dogpaw emulator install-flutter ...\n"
+        "  dogpaw emulator install-headless ...\n"
+        "  dogpaw emulator logs ...\n"
+        "  dogpaw emulator doctor ..."
+    )
+
+
+def validate_tcp_port_text(port_text: str, option_name: str) -> int:
+    """Parse and validate one TCP port option value.
+
+    Purpose:
+        Gives remote-debug workflows one shared validation path for user-supplied
+        TCP port strings before they are used for local binds, SSH forwards, or
+        remote `flutter run` arguments.
+    Parameters:
+        port_text: Decimal TCP port string from CLI input.
+        option_name: Human-readable option name used in validation errors.
+    Return value:
+        Parsed integer TCP port.
+    Requirements:
+        `port_text` must be a base-10 integer in the TCP port range.
+    Guarantees:
+        Raises `ValueError` when the port is invalid.
+    Invariants:
+        Does not bind, reserve, or mutate any socket state.
+    """
+
+    try:
+        port = int(port_text)
+    except ValueError as exc:
+        raise ValueError(f"invalid TCP port for {option_name}: {port_text}") from exc
+    if port < 1 or port > 65535:
+        raise ValueError(f"invalid TCP port for {option_name}: {port_text}")
+    return port
+
+
+def ensure_local_tcp_port_available(port_text: str) -> None:
+    """Fail when the requested localhost TCP port is already occupied.
+
+    Purpose:
+        Prevents long remote sync/build work from starting when a static debug
+        attach port is already held by another local tunnel or process.
+    Parameters:
+        port_text: Decimal TCP port string from CLI input.
+    Return value:
+        None.
+    Requirements:
+        `port_text` must parse as an integer in the TCP port range.
+    Guarantees:
+        Raises `ValueError` when the port is invalid or currently unavailable.
+    Invariants:
+        Leaves the port unbound after a successful check.
+    """
+
+    port = validate_tcp_port_text(port_text, "--local-port")
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        probe.bind(("127.0.0.1", port))
+    except OSError as exc:
+        raise ValueError(f"local port already in use: {port}") from exc
+    finally:
+        probe.close()
+
+
+def choose_available_local_tcp_port() -> str:
+    """Allocate one currently free localhost TCP port number.
+
+    Purpose:
+        Lets IDE-driven Flutter attach flows avoid brittle fixed local forward
+        ports by selecting a fresh ephemeral port for each launch.
+    Parameters:
+        None.
+    Return value:
+        Decimal TCP port string that was free at selection time.
+    Requirements:
+        The local machine must permit binding an ephemeral localhost TCP port.
+    Guarantees:
+        Returns a syntactically valid TCP port string.
+    Invariants:
+        The helper releases the probe socket before returning, so the port is
+        not reserved after selection.
+    """
+
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        probe.bind(("127.0.0.1", 0))
+        return str(probe.getsockname()[1])
+    finally:
+        probe.close()
+
+
+def remove_file_if_exists(path: Path) -> None:
+    """Delete one local file when it already exists.
+
+    Purpose:
+        Prevents stale Flutter attach metadata files from leaking an old VM
+        service URI into a new launch attempt.
+    Parameters:
+        path: File path to remove if present.
+    Return value:
+        None.
+    Requirements:
+        `path` points to the local filesystem.
+    Guarantees:
+        Missing files are ignored without error.
+    Invariants:
+        Parent directories are not removed.
+    """
+
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+
+
+def write_flutter_service_info_file(path: Path, uri: str) -> None:
+    """Write Dart/Flutter attach metadata for file-driven IDE attach.
+
+    Purpose:
+        Bridges custom `tools/dogpaw debug flutter` launches to the Dart debug
+        adapter by materializing the selected forwarded localhost VM service URI
+        in the JSON shape currently used by this workflow.
+    Parameters:
+        path: Local file path the IDE will poll.
+        uri: Local VM service websocket URI exposed through the SSH tunnel.
+    Return value:
+        None.
+    Requirements:
+        `uri` must be a valid websocket URI reachable from the local machine.
+    Guarantees:
+        Parent directories are created and the file is replaced for the current
+        launch attempt.
+    Invariants:
+        The JSON payload always contains exactly one top-level `uri` field.
+    """
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"uri": uri}), encoding="utf-8")
+
+
+def stream_flutter_debug_launch(
+    launch_command: Sequence[str],
+    local_port: str,
+    service_info_file: Path | None,
+) -> int:
+    """Run the long-lived Flutter SSH tunnel and stream its output.
+
+    Purpose:
+        Keeps the remote `flutter run` session alive for IDE attach while
+        translating the remote ready signal into a local `vmServiceInfoFile`
+        update once the forwarded tunnel is actually the intended attach target.
+    Parameters:
+        launch_command: SSH command that owns both the port forward and the
+            remote Flutter process lifecycle.
+        local_port: Selected localhost port exposed to the IDE.
+        service_info_file: Optional local metadata file to write when the VM
+            service becomes attach-ready.
+    Return value:
+        Child process exit code.
+    Requirements:
+        `launch_command` must be executable and produce readiness output on
+        stdout or stderr.
+    Guarantees:
+        Child output is relayed to stdout, stale service-info files are cleared
+        before launch, and termination signals are forwarded to the SSH process
+        group.
+    Invariants:
+        The helper never writes service-info metadata before the remote launch
+        reports `Flutter VM service ready: ...`.
+    """
+
+    if service_info_file is not None:
+        remove_file_if_exists(service_info_file)
+    process = subprocess.Popen(
+        list(launch_command),
+        cwd=INVOCATION_CWD,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        start_new_session=True,
+    )
+    original_handlers: dict[int, object] = {}
+
+    def forward_signal_to_child(signum: int, _frame: object) -> None:
+        if process.poll() is None:
+            try:
+                os.killpg(process.pid, signum)
+            except ProcessLookupError:
+                pass
+
+    for signal_name in ("SIGINT", "SIGTERM", "SIGHUP"):
+        if hasattr(signal, signal_name):
+            signum = getattr(signal, signal_name)
+            original_handlers[signum] = signal.getsignal(signum)
+            signal.signal(signum, forward_signal_to_child)
+
+    wrote_service_info = False
+    local_vmservice_uri = f"ws://127.0.0.1:{local_port}/ws"
+    try:
+        if process.stdout is not None:
+            for raw_line in process.stdout:
+                print(raw_line, end="", flush=True)
+                if (
+                    service_info_file is not None
+                    and not wrote_service_info
+                    and raw_line.startswith("Flutter VM service ready: ")
+                ):
+                    write_flutter_service_info_file(
+                        service_info_file,
+                        local_vmservice_uri,
+                    )
+                    print(
+                        f"Flutter attach metadata ready: {local_vmservice_uri}",
+                        flush=True,
+                    )
+                    wrote_service_info = True
+        return int(process.wait())
+    finally:
+        for signum, handler in original_handlers.items():
+            signal.signal(signum, handler)
+        if service_info_file is not None and not wrote_service_info:
+            remove_file_if_exists(service_info_file)
+        if process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait(timeout=5)
+
+
+def run_commands(commands: Sequence[Sequence[str]], dry_run: bool) -> int:
+    """Run a sequence of external commands or print them for dry-run mode.
+
+    Purpose:
+        Keeps multi-step workflow implementations consistent across dry-run and
+        real execution modes.
+    Parameters:
+        commands: Ordered command vectors to print or execute.
+        dry_run: When true, print the commands instead of executing them.
+    Return value:
+        `0` when all commands succeed or when dry-run printing completes;
+        otherwise the first failing command's exit code.
+    Requirements:
+        Each command vector must contain at least one token.
+    Guarantees:
+        Commands run in order from the user's invocation directory. Dry-run mode
+        emits one shell-safe line per command.
+    Invariants:
+        This helper does not mutate command contents between print and execute
+        paths.
+    """
+
+    for command in commands:
+        if dry_run:
+            print(shell_join(command))
+            continue
+        exit_code = run_external(command)
+        if exit_code != 0:
+            return exit_code
+    return 0
+
+
+def resolve_local_cli_path(path_text: str) -> Path:
+    """Resolve one local CLI path argument from the invocation directory.
+    
+    Purpose:
+        Keeps local file and directory arguments consistent whether `dogpaw` is
+        launched as `./tools/dogpaw` from the repo root or via a PATH entry from
+        some other directory.
+    Parameters:
+        path_text: User-provided local path argument. May be absolute, relative,
+            or start with `~`.
+    Return value:
+        Absolute normalized local filesystem path.
+    Requirements:
+        `path_text` names a local path, not a remote target path on the Pi.
+    Guarantees:
+        Relative paths are anchored at the user's original invocation directory,
+        not at the repository root or any delegated tool directory.
+    Invariants:
+        Path resolution is pure; it does not create files or directories.
+    """
+
+    local_path = Path(path_text).expanduser()
+    if not local_path.is_absolute():
+        local_path = INVOCATION_CWD / local_path
+    return local_path.resolve()
+
+
+def rewrite_local_path_option_values(
+    args: Sequence[str],
+    local_path_options: set[str],
+) -> list[str]:
+    """Rewrite selected option values to absolute local paths.
+
+    Purpose:
+        Normalizes delegated-tool arguments whose values refer to local files or
+        directories so the effective path semantics stay tied to the user's
+        invocation directory and dry-run output matches real execution.
+    Parameters:
+        args: Raw option sequence to rewrite.
+        local_path_options: Option names whose next token, or `--opt=value`
+            payload, should be treated as a local path.
+    Return value:
+        New argument list with matching local path option values rewritten to
+        absolute paths.
+    Requirements:
+        `local_path_options` must contain only options whose values are local
+        filesystem paths. Remote Pi paths must not be included.
+    Guarantees:
+        Argument order is preserved. Tokens after a literal `--` separator are
+        left untouched.
+    Invariants:
+        Does not inspect or mutate tokens for options outside
+        `local_path_options`.
+    """
+
+    rewritten_args: list[str] = []
+    index = 0
+    while index < len(args):
+        token = args[index]
+        if token == "--":
+            rewritten_args.extend(args[index:])
+            break
+
+        matched_inline_option = False
+        for option_name in local_path_options:
+            inline_prefix = f"{option_name}="
+            if token.startswith(inline_prefix):
+                resolved_value = resolve_local_cli_path(token[len(inline_prefix) :])
+                rewritten_args.append(f"{option_name}={resolved_value}")
+                matched_inline_option = True
+                break
+        if matched_inline_option:
+            index += 1
+            continue
+
+        rewritten_args.append(token)
+        if token in local_path_options and index + 1 < len(args):
+            rewritten_args.append(str(resolve_local_cli_path(args[index + 1])))
+            index += 2
+            continue
+        index += 1
+
+    return rewritten_args
+
+
+def resolve_target(explicit_target: str | None) -> str:
+    """Resolve the SSH target for remote workflows.
+
+    Purpose:
+        Keeps target lookup consistent across remote install and setup commands
+        by honoring an explicit flag first, then the existing local config
+        helper, then a final repository default.
+    Parameters:
+        explicit_target: User-supplied SSH target, or `None`.
+    Return value:
+        SSH target string in `user@host` form.
+    Requirements:
+        None.
+    Guarantees:
+        Returns a non-empty target string when local config lookup succeeds or
+        when the built-in fallback is used.
+    Invariants:
+        Does not persist configuration changes.
+    """
+
+    if explicit_target is not None and explicit_target != "":
+        return explicit_target
+    if LOCAL_CONFIG_TOOL.is_file() and LOCAL_CONFIG_TOOL.stat().st_mode & 0o111:
+        completed = subprocess.run(
+            [str(LOCAL_CONFIG_TOOL), "--target"],
+            cwd=WORKSPACE_ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if completed.returncode == 0:
+            resolved = completed.stdout.strip()
+            if resolved != "":
+                return resolved
+    return "dppi@dogpaw"
+
+
+def print_target_help() -> None:
+    """Print concise help for the `target` workflow area.
+
+    Purpose:
+        Explains the currently supported `target` subcommands without requiring
+        users to inspect deeper bootstrap scripts.
+    Parameters:
+        None.
+    Return value:
+        None.
+    Requirements:
+        None.
+    Guarantees:
+        Writes help text to stdout describing the supported target workflow
+        entrypoints.
+    Invariants:
+        Does not inspect the environment or filesystem.
+    """
+
+    print("Usage: dogpaw target apply [bootstrap options]")
+    print("")
+    print("Commands:")
+    print("  apply    Bootstrap or update a Pi target via the current bootstrap flow.")
+
+
+def print_app_help() -> None:
+    """Print concise help for the `app` workflow area.
+
+    Purpose:
+        Names the current app-install workflow shape so developers can discover
+        the intended command family without browsing deeper scripts.
+    Parameters:
+        None.
+    Return value:
+        None.
+    Requirements:
+        None.
+    Guarantees:
+        Writes app workflow usage text to stdout.
+    Invariants:
+        Does not inspect the filesystem or environment.
+    """
+
+    print("Usage: dogpaw app install <headless|flutter> [options]")
+    print("")
+    print("Commands:")
+    print("  install headless   Install or update one or more headless apps on a Pi.")
+    print("  install flutter    Sync one Flutter app source tree to a Pi, build it there, and install it.")
+
+
+def print_debug_help() -> None:
+    """Print concise help for the `debug` workflow area.
+
+    Purpose:
+        Names the current remote C++ debug command family so users can discover
+        the canonical front door without browsing VS Code task definitions.
+    Parameters:
+        None.
+    Return value:
+        None.
+    Requirements:
+        None.
+    Guarantees:
+        Writes debug workflow usage text to stdout.
+    Invariants:
+        Does not inspect the filesystem or environment.
+    """
+
+    print("Usage: dogpaw debug <cxx|flutter> ...")
+    print("")
+    print("Commands:")
+    print("  cxx    Install-aware remote C++ debug launch for Pi targets.")
+    print("  flutter Sync a Flutter app to a Pi, refresh its installed assets, and open a Dart VM service attach port.")
+
+
+def print_emulator_help() -> None:
+    """Print concise help for the `emulator` workflow area.
+
+    Purpose:
+        Points users at the emulator subcommands while keeping the top-level
+        `tools/dogpaw` command as the discoverable front door.
+    Parameters:
+        None.
+    Return value:
+        None.
+    Requirements:
+        None.
+    Guarantees:
+        Writes help text to stdout naming the delegated emulator tool.
+    Invariants:
+        Does not inspect the environment or filesystem.
+    """
+
+    print("Usage: dogpaw emulator [emulator command and options]")
+    print("")
+    print("Examples:")
+    print("  dogpaw emulator run --name alpha")
+    print("  dogpaw emulator screen --name alpha")
+    print("  dogpaw emulator install-flutter --name alpha --manifest examples/hello_dogpaw/dogpawapp.json")
+    print("  dogpaw emulator install-headless --name alpha --manifest path/to/dogpawapp.json")
+    print("  dogpaw emulator logs --name alpha")
+    print("  dogpaw emulator doctor --json")
+
+
+def unimplemented_message(area: str, args: Sequence[str]) -> str:
+    """Build an actionable not-yet-implemented workflow message.
+
+    Purpose:
+        Keeps later-phase workflow placeholders explicit while pointing users at
+        the supported front-door commands that already exist.
+    Parameters:
+        area: Top-level workflow area that was selected.
+        args: Remaining arguments after the area token. The first item, when
+            present, is typically the attempted subcommand.
+    Return value:
+        Human-readable error message for stderr.
+    Requirements:
+        `area` must be one of the declared workflow areas not currently
+        implemented by this dispatcher.
+    Guarantees:
+        The returned text points users back to the current source-of-truth plan
+        and at least one working workflow command.
+    Invariants:
+        Does not inspect the filesystem or mutate global state.
+    """
+
+    attempted = f"{area} {' '.join(args)}".strip()
+    return (
+        f"'dogpaw {attempted}' is not implemented yet.\n"
+        f"Currently supported workflows include:\n"
+        f"  dogpaw target apply ...\n"
+        f"  dogpaw app install <headless|flutter> ...\n"
+        f"  dogpaw debug <cxx|flutter> ...\n"
+        f"  dogpaw emulator ...\n"
+        f"See the current workflow plan at: {PLAN_PATH.relative_to(WORKSPACE_ROOT)}"
+    )
+
+
+def split_passthrough_args(args: Sequence[str]) -> tuple[list[str], list[str]]:
+    """Split dispatcher arguments at the first explicit `--` separator.
+
+    Purpose:
+        Keeps wrapper option parsing independent from the remote binary's own
+        arguments when subcommands need to forward trailing argv entries.
+    Parameters:
+        args: Raw argument sequence after a subcommand selector.
+    Return value:
+        Tuple of `wrapper_args` before `--` and `passthrough_args` after it.
+    Requirements:
+        None.
+    Guarantees:
+        The separator itself is omitted from both returned lists.
+    Invariants:
+        Returned argument order matches the input order.
+    """
+
+    if "--" not in args:
+        return list(args), []
+    separator = list(args).index("--")
+    return list(args[:separator]), list(args[separator + 1 :])
+
+
+def load_manifest_payload(manifest_path: Path) -> dict:
+    """Load one Dog Paw manifest from disk.
+
+    Purpose:
+        Centralizes manifest parsing for debug and install workflows that need a
+        small amount of manifest metadata to compute command arguments.
+    Parameters:
+        manifest_path: Path to a readable `dogpawapp.json` file.
+    Return value:
+        Parsed manifest object.
+    Requirements:
+        `manifest_path` exists and contains valid JSON object text.
+    Guarantees:
+        Raises `ValueError` if the top-level JSON value is not an object.
+    Invariants:
+        Reads the manifest without modifying it.
+    """
+
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("Manifest must be a JSON object")
+    return payload
+
+
+def require_manifest_string_field(manifest_path: Path, payload: dict, field_name: str) -> str:
+    """Read one required string field from a manifest payload.
+
+    Purpose:
+        Keeps manifest validation errors consistent for lightweight dispatcher
+        workflows that only need a few manifest fields.
+    Parameters:
+        manifest_path: Manifest path used only for clear error messages.
+        payload: Parsed manifest dictionary.
+        field_name: Required top-level field name.
+    Return value:
+        Non-empty string field value.
+    Requirements:
+        `payload` came from `load_manifest_payload()`.
+    Guarantees:
+        Raises `ValueError` with the manifest path when the field is missing or
+        not a non-empty string.
+    Invariants:
+        Does not mutate the payload.
+    """
+
+    value = payload.get(field_name)
+    if not isinstance(value, str) or value == "":
+        raise ValueError(f"Manifest {manifest_path} requires non-empty string field: {field_name}")
+    return value
+
+
+@dataclass(frozen=True)
+class FlutterManifestContext:
+    """Resolved local and remote metadata for one Flutter app manifest.
+
+    Purpose:
+        Centralizes the source-tree facts shared by Flutter install and debug
+        workflows so the front door does not duplicate manifest validation and
+        relative-path calculations.
+    Parameters:
+        manifest_path: Absolute local `dogpawapp.json` path.
+        manifest_payload: Parsed manifest payload.
+        app_name: Manifest `name` field.
+        manifest_relative: Manifest path relative to the local Flutter workspace
+            root.
+        app_dir: Local app directory that contains the manifest.
+        app_relative: App directory relative to the local Flutter workspace
+            root.
+        flutter_project_rel: Manifest `flutterApp` directory name.
+        flutter_project_dir: Absolute local Flutter package directory.
+    Return value:
+        Immutable context bundle for one Flutter app.
+    Requirements:
+        The manifest must exist under `FLUTTER_WORKSPACE_ROOT` and declare a
+        valid `flutterApp` directory.
+    Guarantees:
+        Construction does not mutate local or remote files.
+    Invariants:
+        `flutter_project_dir` always lives under `app_dir`.
+    """
+
+    manifest_path: Path
+    manifest_payload: dict
+    app_name: str
+    manifest_relative: Path
+    app_dir: Path
+    app_relative: Path
+    flutter_project_rel: str
+    flutter_project_dir: Path
+
+
+def resolve_flutter_manifest_context(manifest_arg: str) -> FlutterManifestContext:
+    """Resolve one Flutter manifest into reusable workflow context.
+
+    Purpose:
+        Keeps Flutter install/debug behavior aligned by validating manifests in
+        one place and deriving the common relative paths used for remote sync.
+    Parameters:
+        manifest_arg: Local manifest path from CLI input.
+    Return value:
+        Fully resolved `FlutterManifestContext`.
+    Requirements:
+        `manifest_arg` names a manifest under `FLUTTER_WORKSPACE_ROOT`.
+    Guarantees:
+        Raises `ValueError` on invalid paths or missing required fields.
+    Invariants:
+        Relative paths are always computed against `FLUTTER_WORKSPACE_ROOT`.
+    """
+
+    manifest_path = resolve_local_cli_path(manifest_arg)
+    if not manifest_path.is_file():
+        raise ValueError(f"manifest not found: {manifest_path}")
+    try:
+        manifest_relative = manifest_path.relative_to(FLUTTER_WORKSPACE_ROOT)
+    except ValueError as exc:
+        raise ValueError(f"manifest must live under {FLUTTER_WORKSPACE_ROOT}") from exc
+
+    manifest_payload = load_manifest_payload(manifest_path)
+    app_name = require_manifest_string_field(manifest_path, manifest_payload, "name")
+    flutter_project_rel = require_manifest_string_field(
+        manifest_path,
+        manifest_payload,
+        "flutterApp",
+    )
+    app_dir = manifest_path.parent
+    app_relative = app_dir.relative_to(FLUTTER_WORKSPACE_ROOT)
+    flutter_project_dir = (app_dir / flutter_project_rel).resolve()
+    if not flutter_project_dir.is_dir():
+        raise ValueError(f"Flutter project not found: {flutter_project_dir}")
+    return FlutterManifestContext(
+        manifest_path=manifest_path,
+        manifest_payload=manifest_payload,
+        app_name=app_name,
+        manifest_relative=manifest_relative,
+        app_dir=app_dir,
+        app_relative=app_relative,
+        flutter_project_rel=flutter_project_rel,
+        flutter_project_dir=flutter_project_dir,
+    )
+
+
+def build_flutter_remote_paths(
+    context: FlutterManifestContext,
+    remote_source_root: PurePosixPath,
+) -> dict[str, PurePosixPath]:
+    """Build remote source-tree paths for one Flutter app workflow.
+
+    Purpose:
+        Ensures install and debug flows agree on where synced packages, tools,
+        manifests, and Flutter project files live on the remote Pi.
+    Parameters:
+        context: Resolved local Flutter manifest metadata.
+        remote_source_root: Remote root that should contain the temporary
+            Flutter workspace source tree.
+    Return value:
+        Mapping of named remote paths used by higher-level workflow builders.
+    Requirements:
+        `remote_source_root` must be an absolute Pi path.
+    Guarantees:
+        Returns only pure path calculations; no network or filesystem I/O occurs.
+    Invariants:
+        Returned paths remain under `remote_source_root`.
+    """
+
+    remote_ui_root = remote_source_root
+    remote_app_dir = remote_ui_root / PurePosixPath(context.app_relative.as_posix())
+    return {
+        "remote_ui_root": remote_ui_root,
+        "remote_ui_tools_dir": remote_ui_root / "tools",
+        "remote_packages_dir": remote_ui_root / "packages",
+        "remote_app_dir": remote_app_dir,
+        "remote_manifest_path": remote_ui_root
+        / PurePosixPath(context.manifest_relative.as_posix()),
+        "remote_flutter_project_dir": remote_app_dir / context.flutter_project_rel,
+    }
+
+
+def build_flutter_source_sync_commands(
+    context: FlutterManifestContext,
+    target: str,
+    remote_source_root: PurePosixPath,
+    remote_app_root: PurePosixPath,
+) -> list[list[str]]:
+    """Build the common remote source-sync commands for Flutter workflows.
+
+    Purpose:
+        Shares the temporary-source sync contract between install and debug so
+        both flows stage the same files on the Pi.
+    Parameters:
+        context: Resolved Flutter manifest context.
+        target: Remote SSH target.
+        remote_source_root: Remote temporary Flutter workspace source root.
+        remote_app_root: Remote installed Dog Paw app root.
+    Return value:
+        Ordered command list for directory creation and rsync operations.
+    Requirements:
+        `target` must be a non-empty SSH host string.
+    Guarantees:
+        Sync set includes shared `packages/`, the selected app tree, and the
+        install helper scripts needed by the remote build.
+    Invariants:
+        The returned list does not depend on current network state.
+    """
+
+    remote_paths = build_flutter_remote_paths(context, remote_source_root)
+    ssh_transport = shell_join(SSH_BASE_ARGS)
+    tools_dir = FLUTTER_WORKSPACE_ROOT / "tools"
+
+    remote_prepare_command = shell_join(
+        [
+            "mkdir",
+            "-p",
+            str(remote_paths["remote_ui_tools_dir"]),
+            str(remote_paths["remote_packages_dir"]),
+            str(remote_paths["remote_app_dir"]),
+            str(remote_app_root),
+        ]
+    )
+    return [
+        [*SSH_BASE_ARGS, target, remote_prepare_command],
+        [
+            *RSYNC_BASE_ARGS,
+            "-e",
+            ssh_transport,
+            f"{FLUTTER_WORKSPACE_ROOT / 'packages'}/",
+            f"{target}:{remote_paths['remote_packages_dir']}/",
+        ],
+        [
+            *RSYNC_BASE_ARGS,
+            "-e",
+            ssh_transport,
+            f"{context.app_dir}/",
+            f"{target}:{remote_paths['remote_app_dir']}/",
+        ],
+        [
+            "rsync",
+            "-az",
+            "-e",
+            ssh_transport,
+            str(tools_dir / "build_and_install_flutter_app.sh"),
+            str(INSTALL_SUPPORT_TOOLS_ROOT / "install_app.py"),
+            str(INSTALL_SUPPORT_TOOLS_ROOT / "install_fingerprint.py"),
+            f"{target}:{remote_paths['remote_ui_tools_dir']}/",
+        ],
+    ]
+
+
+def build_remote_flutter_install_command(
+    context: FlutterManifestContext,
+    remote_source_root: PurePosixPath,
+    remote_app_root: PurePosixPath,
+    remote_flutter_root: PurePosixPath,
+    bridge_lib: str,
+    build_mode: str,
+) -> str:
+    """Build the remote build-and-install shell command for one Flutter app.
+
+    Purpose:
+        Reuses the existing remote installer so Flutter install and debug flows
+        both refresh the installed app root through the same bundle layout.
+    Parameters:
+        context: Resolved Flutter manifest context.
+        remote_source_root: Remote temporary Flutter workspace source root.
+        remote_app_root: Remote installed Dog Paw app root.
+        remote_flutter_root: Remote Flutter SDK root.
+        bridge_lib: Remote bridge library path required by installed Dart apps.
+        build_mode: Flutter Linux build mode to pass through.
+    Return value:
+        Shell command string for one remote `bash -lc` invocation.
+    Requirements:
+        `build_mode` must be valid for `flutter build linux`.
+    Guarantees:
+        Returned command adds the remote Flutter SDK to PATH, sets
+        `DOGPAW_APP_DIR` for the installer, and fails loudly before the build if
+        the required bridge library is missing on the target.
+    Invariants:
+        The command references only the supplied remote roots.
+    """
+
+    remote_paths = build_flutter_remote_paths(context, remote_source_root)
+    remote_installer = remote_paths["remote_ui_tools_dir"] / "build_and_install_flutter_app.sh"
+    remote_path = f"{remote_flutter_root}/bin:{REMOTE_BASE_PATH}"
+    return (
+        f"chmod +x {shlex.quote(str(remote_installer))} && "
+        f"if [[ ! -f {shlex.quote(bridge_lib)} ]]; then "
+        # SDK2 branch note: this bridge ownership is expected to move when sdk2
+        # merges, so update this install-time preflight to match the new runtime
+        # ownership model instead of preserving the current /home/dppi/libs path.
+        # Revisit architecture expectations there too; if sdk2 does not make the
+        # source architecture explicit, this install flow must keep guarding
+        # against copying a host build onto the Pi by mistake.
+        f"echo 'Missing required dogpaw bridge library at {bridge_lib}. "
+        f"Installed Dart apps will not start correctly until the bridge is deployed.' >&2; "
+        f"exit 1; "
+        f"fi && "
+        f"env PATH={shlex.quote(remote_path)} "
+        f"DOGPAW_APP_DIR={shlex.quote(str(remote_app_root))} "
+        f"{shlex.quote(str(remote_installer))} "
+        f"--manifest {shlex.quote(str(remote_paths['remote_manifest_path']))} "
+        f"--app-root {shlex.quote(str(remote_app_root))} "
+        f"--build-mode {shlex.quote(build_mode)}"
+    )
+
+
+def build_debug_cxx_parser() -> argparse.ArgumentParser:
+    """Build the parser for `tools/dogpaw debug cxx`.
+
+    Purpose:
+        Defines a single install-aware remote C++ debug contract that can launch
+        either installed headless apps or directly deployed binaries.
+    Parameters:
+        None.
+    Return value:
+        Configured parser for the C++ debug workflow.
+    Requirements:
+        None.
+    Guarantees:
+        Encodes required gdbserver port input and the optional manifest-backed
+        versus direct-binary launch modes in one parser instance.
+    Invariants:
+        Parser construction performs no filesystem or network I/O.
+    """
+
+    parser = argparse.ArgumentParser(
+        prog="dogpaw debug cxx",
+        description="Launch a remote C++ binary under gdbserver after preparing the target with the canonical Dog Paw tooling surface.",
+    )
+    parser.add_argument("--target", help="Remote SSH target. Defaults to local_config.sh --target.")
+    parser.add_argument("--port", required=True, help="Remote gdbserver port to open and tunnel.")
+    parser.add_argument("--manifest", help="Headless app manifest to install before debugging.")
+    parser.add_argument("--binary", help="Local binary path for direct deploy/debug flows.")
+    parser.add_argument(
+        "--build-dir",
+        default=str(DEFAULT_CXX_BUILD_DIR),
+        help="ARM build directory used to resolve manifest executables.",
+    )
+    parser.add_argument(
+        "--hardware-profile",
+        default="p8_2",
+        help="Hardware profile passed through to headless app install flows.",
+    )
+    parser.add_argument(
+        "--remote-app-root",
+        default=str(REMOTE_APP_ROOT),
+        help="Remote Dog Paw installed-app root for manifest-backed debug launches.",
+    )
+    parser.add_argument("--workdir", help="Remote working directory override for deploy_and_run.sh.")
+    parser.add_argument("--sync", action="append", default=[], help="Extra local binary to sync for direct debug flows.")
+    parser.add_argument("--env", action="append", default=[], help="Remote NAME=VALUE environment export for the launched process.")
+    parser.add_argument("--sync-asset", action="append", default=[], help="Extra asset file to sync for direct debug flows.")
+    parser.add_argument("--asset-dest", help="Remote asset destination directory for direct debug flows.")
+    stdin_mode_group = parser.add_mutually_exclusive_group()
+    stdin_mode_group.add_argument(
+        "--interactive-stdin",
+        action="store_true",
+        help="Run the remote debug target with an interactive SSH TTY-backed stdin session.",
+    )
+    stdin_mode_group.add_argument(
+        "--non-interactive-stdin",
+        action="store_true",
+        help="Run the remote debug target without an interactive SSH stdin session.",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="Print install and launch commands without executing them.")
+    return parser
+
+
+def build_debug_flutter_parser() -> argparse.ArgumentParser:
+    """Build the parser for `tools/dogpaw debug flutter`.
+
+    Purpose:
+        Defines the first host-driven remote Flutter debug flow that stages a
+        source tree on the Pi, refreshes the installed app layout, and opens a
+        forwarded Dart VM service for IDE attach.
+    Parameters:
+        None.
+    Return value:
+        Configured parser for the Flutter debug workflow.
+    Requirements:
+        None.
+    Guarantees:
+        The parser captures the manifest-backed source sync, installed-assets
+        root, local/remote VM service handoff, and remote runtime environment
+        inputs.
+    Invariants:
+        Parser construction performs no filesystem or network I/O.
+    """
+
+    parser = argparse.ArgumentParser(
+        prog="dogpaw debug flutter",
+        description=(
+            "Sync one Flutter app to a Pi, rebuild it there for debug, refresh "
+            "the installed app layout, and keep a forwarded Dart VM service open "
+            "for local attach."
+        ),
+    )
+    parser.add_argument("--manifest", required=True, help="Path to the Flutter app dogpawapp.json.")
+    parser.add_argument("--target", help="Remote SSH target. Defaults to local_config.sh --target.")
+    parser.add_argument(
+        "--port",
+        help="Legacy shorthand that fixes both the local forwarded port and the remote Dart VM service port.",
+    )
+    parser.add_argument(
+        "--local-port",
+        help="Explicit local forwarded Dart VM service port. When omitted, a free local port is chosen automatically.",
+    )
+    parser.add_argument(
+        "--remote-port",
+        help=f"Remote Dart VM service port used on the Pi. Defaults to {DEFAULT_REMOTE_FLUTTER_DEBUG_PORT} when --port is not supplied.",
+    )
+    parser.add_argument(
+        "--service-info-file",
+        help="Optional local JSON file where the tool writes vmServiceInfoFile metadata for IDE attach.",
+    )
+    parser.add_argument(
+        "--remote-source-root",
+        default=str(REMOTE_FLUTTER_DEBUG_ROOT),
+        help="Remote temporary Flutter workspace source root used for Flutter debug runs.",
+    )
+    parser.add_argument(
+        "--remote-app-root",
+        default=str(REMOTE_APP_ROOT),
+        help="Remote Dog Paw installed-app root exposed to the app as DOGPAW_APP_DIR.",
+    )
+    parser.add_argument(
+        "--remote-flutter-root",
+        default=str(REMOTE_FLUTTER_ROOT),
+        help="Remote Flutter SDK root whose bin directory will be added to PATH.",
+    )
+    parser.add_argument(
+        "--bridge-lib",
+        default="/home/dppi/libs/libdogpaw_bridge.so",
+        help="Remote dogpaw bridge library path to export through DOGPAW_BRIDGE_LIB when present.",
+    )
+    parser.add_argument(
+        "--instance",
+        default="default",
+        help="Epiphany instance name exported to the debugged app.",
+    )
+    parser.add_argument(
+        "--device-id",
+        default="linux",
+        help="Flutter device id passed to `flutter run` on the Pi.",
+    )
+    parser.add_argument(
+        "--build-mode",
+        default="debug",
+        help="Flutter Linux build mode used to refresh the installed app layout before launch.",
+    )
+    parser.add_argument(
+        "--start-paused",
+        action="store_true",
+        help="Start paused and wait for the debugger to continue execution.",
+    )
+    parser.add_argument(
+        "--stop",
+        action="store_true",
+        help="Stop a previously launched remote Flutter debug session for this app/port.",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="Print sync/build/launch commands without executing them.")
+    return parser
+
+
+def append_env_if_missing(assignments: Sequence[str], assignment: str) -> list[str]:
+    """Append one remote env assignment only when its key is absent.
+
+    Purpose:
+        Lets wrapper workflows supply default runtime environment values without
+        overwriting explicit user-provided assignments.
+    Parameters:
+        assignments: Existing NAME=VALUE assignments.
+        assignment: Default NAME=VALUE assignment to append when missing.
+    Return value:
+        New assignment list preserving original order.
+    Requirements:
+        `assignment` must contain `=`.
+    Guarantees:
+        The returned list contains exactly one assignment for the given key.
+    Invariants:
+        Existing assignment strings are preserved byte-for-byte.
+    """
+
+    key = assignment.split("=", 1)[0]
+    if any(existing.split("=", 1)[0] == key for existing in assignments):
+        return list(assignments)
+    return [*assignments, assignment]
+
+
+def build_remote_flutter_debug_command(
+    context: FlutterManifestContext,
+    remote_source_root: PurePosixPath,
+    remote_app_root: PurePosixPath,
+    remote_flutter_root: PurePosixPath,
+    bridge_lib: str,
+    instance_name: str,
+    remote_port: str,
+    device_id: str,
+    start_paused: bool,
+) -> str:
+    """Build the remote wrapper command for one Flutter debug session.
+
+    Purpose:
+        Launches `flutter run` inside the synced remote source tree while
+        exporting installed-path runtime variables and recovering the active
+        Sway/Wayland session from the Pi so the Linux desktop app can render.
+    Parameters:
+        context: Resolved Flutter manifest context.
+        remote_source_root: Remote temporary Flutter workspace source root.
+        remote_app_root: Remote installed app root for `DOGPAW_APP_DIR`.
+        remote_flutter_root: Remote Flutter SDK root whose `bin/` must be in PATH.
+        bridge_lib: Remote bridge library path to export when it exists.
+        instance_name: `EPIPHANY_INSTANCE` value for the debugged app.
+        remote_port: Remote Dart VM service port used by `flutter run` on the Pi.
+        device_id: Flutter device id to pass to `flutter run`.
+        start_paused: Whether `flutter run` should wait for debugger attach.
+    Return value:
+        One `bash -lc` command string suitable for execution over SSH.
+    Requirements:
+        `remote_port` and `instance_name` are non-empty strings.
+    Guarantees:
+        The wrapper prints `Flutter VM service ready: ...` once the VM service
+        URL file is populated and kills the child `flutter run` process on shell
+        exit or disconnect.
+    Invariants:
+        Runtime asset lookup remains rooted at `remote_app_root`, not the
+        temporary source tree.
+    """
+
+    remote_paths = build_flutter_remote_paths(context, remote_source_root)
+    remote_project_dir = remote_paths["remote_flutter_project_dir"]
+    remote_vmservice_file = remote_project_dir / ".dogpaw-vmservice-uri"
+    remote_path = f"{remote_flutter_root}/bin:{REMOTE_BASE_PATH}"
+    start_paused_flag = "--start-paused" if start_paused else ""
+    return f"""set -euo pipefail
+resolve_wayland_env() {{
+python3 - <<'PY'
+import os
+import subprocess
+import sys
+
+KEYS = ("WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "SWAYSOCK", "DBUS_SESSION_BUS_ADDRESS")
+
+
+def emit_exports(env: dict[str, str]) -> None:
+    for key in KEYS:
+        value = env.get(key)
+        if value:
+            print(f"export {{key}}={{value!r}}")
+
+
+def parse_key_value_lines(text: str) -> dict[str, str]:
+    env: dict[str, str] = {{}}
+    for line in text.splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        env[key] = value
+    return env
+
+
+def enrich_from_runtime_dir(env: dict[str, str]) -> dict[str, str]:
+    runtime_dir = env.get("XDG_RUNTIME_DIR")
+    if not runtime_dir or not os.path.isdir(runtime_dir):
+        return env
+    if not env.get("WAYLAND_DISPLAY"):
+        wayland_candidates = sorted(
+            name
+            for name in os.listdir(runtime_dir)
+            if name.startswith("wayland-") and not name.endswith(".lock")
+        )
+        if wayland_candidates:
+            env["WAYLAND_DISPLAY"] = wayland_candidates[0]
+    if not env.get("SWAYSOCK"):
+        sway_candidates = sorted(
+            name
+            for name in os.listdir(runtime_dir)
+            if name.startswith("sway-ipc.") and name.endswith(".sock")
+        )
+        if sway_candidates:
+            env["SWAYSOCK"] = os.path.join(runtime_dir, sway_candidates[0])
+    if not env.get("DBUS_SESSION_BUS_ADDRESS"):
+        bus_path = os.path.join(runtime_dir, "bus")
+        if os.path.exists(bus_path):
+            env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={{bus_path}}"
+    return env
+
+
+def parse_proc_environ(pid: str) -> dict[str, str]:
+    with open(f"/proc/{{pid}}/environ", "rb") as environ_file:
+        raw_entries = environ_file.read().split(b"\\0")
+    env: dict[str, str] = {{}}
+    for entry in raw_entries:
+        if not entry or b"=" not in entry:
+            continue
+        key, value = entry.split(b"=", 1)
+        env[key.decode("utf-8", "ignore")] = value.decode("utf-8", "ignore")
+    return env
+
+show_environment = subprocess.run(
+    ["systemctl", "--user", "show-environment"],
+    text=True,
+    capture_output=True,
+    check=False,
+)
+if show_environment.returncode == 0:
+    systemd_env = enrich_from_runtime_dir(parse_key_value_lines(show_environment.stdout))
+    if systemd_env.get("WAYLAND_DISPLAY") and systemd_env.get("XDG_RUNTIME_DIR"):
+        emit_exports(systemd_env)
+        raise SystemExit(0)
+
+pids: list[str] = []
+for pid in sorted(pid for pid in os.listdir("/proc") if pid.isdigit()):
+    try:
+        with open(f"/proc/{{pid}}/comm", "r", encoding="utf-8") as comm_file:
+            if comm_file.read().strip() != "sway":
+                continue
+        pids.append(pid)
+    except OSError:
+        continue
+
+if not pids:
+    raise SystemExit("Could not find a running sway session on the remote Pi")
+
+env = enrich_from_runtime_dir(parse_proc_environ(pids[0]))
+required_keys = ["WAYLAND_DISPLAY", "XDG_RUNTIME_DIR"]
+missing = [key for key in required_keys if not env.get(key)]
+if missing:
+    raise SystemExit(
+        "Sway session is missing required environment values: " + ", ".join(missing)
+    )
+
+emit_exports(env)
+PY
+}}
+
+cleanup() {{
+    if [[ -n "${{watcher_pid:-}}" ]]; then
+        kill "${{watcher_pid}}" 2>/dev/null || true
+        wait "${{watcher_pid}}" 2>/dev/null || true
+    fi
+    if [[ -n "${{flutter_pgid:-}}" ]]; then
+        kill -- -"${{flutter_pgid}}" 2>/dev/null || true
+    elif [[ -n "${{flutter_pid:-}}" ]]; then
+        kill "${{flutter_pid}}" 2>/dev/null || true
+    fi
+    if [[ -n "${{flutter_pid:-}}" ]]; then
+        wait "${{flutter_pid}}" 2>/dev/null || true
+    fi
+}}
+
+ssh_parent_pid=$PPID
+watch_parent_session() {{
+    while kill -0 "${{ssh_parent_pid}}" 2>/dev/null; do
+        sleep 1
+    done
+    if [[ -n "${{flutter_pgid:-}}" ]]; then
+        kill -- -"${{flutter_pgid}}" 2>/dev/null || true
+    elif [[ -n "${{flutter_pid:-}}" ]]; then
+        kill "${{flutter_pid}}" 2>/dev/null || true
+    fi
+}}
+
+trap cleanup EXIT HUP INT TERM
+eval "$(resolve_wayland_env)"
+unset DISPLAY
+export GDK_BACKEND=wayland
+export PATH={shlex.quote(remote_path)}
+export DOGPAW_APP_DIR={shlex.quote(str(remote_app_root))}
+export EPIPHANY_INSTANCE={shlex.quote(instance_name)}
+export DOGPAW_ENTITY_NAME={shlex.quote(context.app_name)}
+if [[ -f {shlex.quote(bridge_lib)} ]]; then
+    export DOGPAW_BRIDGE_LIB={shlex.quote(bridge_lib)}
+fi
+cd {shlex.quote(str(remote_project_dir))}
+rm -f {shlex.quote(str(remote_vmservice_file))}
+fuser -k {shlex.quote(remote_port)}/tcp 2>/dev/null || true
+setsid flutter run -d {shlex.quote(device_id)} --debug --machine --no-pub --disable-service-auth-codes --vm-service-port {shlex.quote(remote_port)} --vmservice-out-file {shlex.quote(str(remote_vmservice_file))} {start_paused_flag} &
+flutter_pid=$!
+flutter_pgid=$flutter_pid
+watch_parent_session &
+watcher_pid=$!
+while [[ ! -s {shlex.quote(str(remote_vmservice_file))} ]]; do
+    if ! kill -0 "${{flutter_pid}}" 2>/dev/null; then
+        wait "${{flutter_pid}}"
+        exit $?
+    fi
+    sleep 0.25
+done
+echo "Flutter VM service ready: $(cat {shlex.quote(str(remote_vmservice_file))})"
+wait "${{flutter_pid}}"
+"""
+
+
+def build_remote_flutter_stop_command(
+    context: FlutterManifestContext,
+    remote_source_root: PurePosixPath,
+    remote_port: str,
+) -> str:
+    """Build the remote stop command for one Flutter debug session.
+
+    Purpose:
+        Stops a previously launched remote Flutter debug session by killing the
+        VM service listener on the fixed debug port and any matching debug bundle
+        executable that may still be running after detach.
+    Parameters:
+        context: Resolved Flutter manifest context.
+        remote_source_root: Remote temporary Flutter workspace source root used by the
+            debug workflow.
+        remote_port: Fixed remote Dart VM service TCP port for this debug session.
+    Return value:
+        One shell command string suitable for execution over SSH.
+    Requirements:
+        `remote_port` must be a non-empty TCP port string.
+    Guarantees:
+        The command is idempotent and succeeds even when no matching process is
+        currently running.
+    Invariants:
+        Only the requested port and the matching app bundle executable are
+        targeted for termination.
+    """
+
+    remote_paths = build_flutter_remote_paths(context, remote_source_root)
+    remote_project_dir = remote_paths["remote_flutter_project_dir"]
+    remote_bundle_pattern = shlex.quote(
+        f"{remote_project_dir}/build/linux/.*/debug/bundle/{context.flutter_project_rel}"
+    )
+    return (
+        f"fuser -k {shlex.quote(remote_port)}/tcp >/dev/null 2>&1 || true; "
+        f"pkill -f {remote_bundle_pattern} >/dev/null 2>&1 || true; "
+        "true"
+    )
+
+
+def build_flutter_install_parser() -> argparse.ArgumentParser:
+    """Build the parser for `tools/dogpaw app install flutter`.
+
+    Purpose:
+        Defines the host-side remote Flutter install contract while keeping the
+        top-level dispatcher small and testable.
+    Parameters:
+        None.
+    Return value:
+        Configured parser for the Flutter remote install flow.
+    Requirements:
+        None.
+    Guarantees:
+        Required arguments and repository-root defaults are encoded in one
+        parser instance.
+    Invariants:
+        Parser construction performs no filesystem or network I/O.
+    """
+
+    parser = argparse.ArgumentParser(
+        prog="dogpaw app install flutter",
+        description="Sync one Flutter app to a Pi, build it there, and install it into the Dog Paw app registry.",
+    )
+    parser.add_argument("--manifest", required=True, help="Path to the Flutter app dogpawapp.json.")
+    parser.add_argument("--target", help="Remote SSH target. Defaults to local_config.sh --target.")
+    parser.add_argument(
+        "--remote-source-root",
+        default=str(REMOTE_SOURCE_ROOT),
+        help="Remote temporary Flutter workspace source root used for synced Flutter app builds.",
+    )
+    parser.add_argument(
+        "--remote-app-root",
+        default=str(REMOTE_APP_ROOT),
+        help="Remote Dog Paw installed-app root.",
+    )
+    parser.add_argument(
+        "--remote-flutter-root",
+        default=str(REMOTE_FLUTTER_ROOT),
+        help="Remote Flutter SDK root whose bin directory will be added to PATH.",
+    )
+    parser.add_argument(
+        "--bridge-lib",
+        default="/home/dppi/libs/libdogpaw_bridge.so",
+        help="Remote dogpaw bridge library path required by installed Flutter apps.",
+    )
+    parser.add_argument("--build-mode", default="release", help="Flutter Linux build mode.")
+    parser.add_argument("--dry-run", action="store_true", help="Print sync/build commands without executing them.")
+    return parser
+
+
+def dispatch_target(args: Sequence[str]) -> int:
+    """Dispatch the `target` workflow area.
+
+    Purpose:
+        Provides the canonical top-level entrypoint for Pi target setup while
+        temporarily delegating the real work to the existing bootstrap tool.
+    Parameters:
+        args: Remaining command-line arguments after `target`.
+    Return value:
+        Exit code from the delegated bootstrap flow, or `2` for invalid target
+        subcommand usage.
+    Requirements:
+        `BOOTSTRAP_TOOL` must exist and be executable for delegation to succeed.
+    Guarantees:
+        `target apply ...` maps directly onto the current bootstrap command
+        without rewriting the bootstrap-specific options.
+    Invariants:
+        This dispatcher does not implement bootstrap logic itself.
+    """
+
+    if is_help_request(args):
+        print_target_help()
+        return 0
+    if EXPORTED_SDK:
+        print(exported_sdk_v1_message("target", args), file=sys.stderr)
+        return 2
+    if args[0] != "apply":
+        print(f"Unsupported target command: {args[0]}", file=sys.stderr)
+        print_target_help()
+        return 2
+    apply_args = rewrite_local_path_option_values(
+        args[1:],
+        {"--identity-file"},
+    )
+    return run_external([str(BOOTSTRAP_TOOL), *apply_args])
+
+
+def dispatch_app_install_headless(args: Sequence[str]) -> int:
+    """Dispatch `tools/dogpaw app install headless`.
+
+    Purpose:
+        Reuses the existing remote headless-app deployment tool behind the new
+        workflow surface instead of reimplementing manifest staging logic.
+    Parameters:
+        args: Remaining arguments after `app install headless`.
+    Return value:
+        Exit code from the delegated headless-app deployment tool.
+    Requirements:
+        `DEPLOY_HEADLESS_APPS_TOOL` must exist and be executable.
+    Guarantees:
+        All remaining flags pass through unchanged to the existing headless
+        deployment tool.
+    Invariants:
+        This dispatcher does not mutate the argument list.
+    """
+
+    delegated_args = rewrite_local_path_option_values(
+        args,
+        {"--build-dir", "-b", "--manifest"},
+    )
+    return run_external([str(DEPLOY_HEADLESS_APPS_TOOL), *delegated_args])
+
+
+def dispatch_app_install_flutter(args: Sequence[str]) -> int:
+    """Dispatch `tools/dogpaw app install flutter`.
+
+    Purpose:
+        Implements a host-side remote Flutter install flow by syncing the
+        selected app plus shared Flutter workspace packages/tools to the target
+        Pi, then invoking the existing remote build-and-install script there.
+    Parameters:
+        args: Remaining arguments after `app install flutter`.
+    Return value:
+        Exit code from the dry-run print path or the first failing sync/build
+        command.
+    Requirements:
+        Manifest path must exist and live under `FLUTTER_WORKSPACE_ROOT`.
+    Guarantees:
+        The sync set includes only shared `packages/`, the specific app tree,
+        and the install scripts needed for the remote build.
+    Invariants:
+        Dry-run mode does not create, modify, or delete local or remote files.
+    """
+
+    parser = build_flutter_install_parser()
+    parsed = parser.parse_args(list(args))
+    try:
+        context = resolve_flutter_manifest_context(parsed.manifest)
+    except ValueError as exc:
+        parser.error(str(exc))
+        raise AssertionError("unreachable") from exc
+
+    target = resolve_target(parsed.target)
+    remote_source_root = PurePosixPath(parsed.remote_source_root)
+    remote_app_root = PurePosixPath(parsed.remote_app_root)
+    remote_flutter_root = PurePosixPath(parsed.remote_flutter_root)
+    commands = build_flutter_source_sync_commands(
+        context,
+        target,
+        remote_source_root,
+        remote_app_root,
+    )
+    commands.append(
+        [
+            *SSH_BASE_ARGS,
+            target,
+            build_remote_flutter_install_command(
+                context,
+                remote_source_root,
+                remote_app_root,
+                remote_flutter_root,
+                parsed.bridge_lib,
+                parsed.build_mode,
+            ),
+        ]
+    )
+    return run_commands(commands, parsed.dry_run)
+
+
+def dispatch_debug_flutter(args: Sequence[str]) -> int:
+    """Dispatch `tools/dogpaw debug flutter`.
+
+    Purpose:
+        Implements the first host-driven remote Flutter debug flow by syncing a
+        source checkout to the Pi, refreshing installed assets in the canonical
+        app registry, then keeping a forwarded Dart VM service alive for local
+        IDE attach.
+    Parameters:
+        args: Remaining arguments after `debug flutter`.
+    Return value:
+        Exit code from the dry-run print path or the first failing remote
+        command.
+    Requirements:
+        Caller must provide `--manifest` plus either a fixed `--port`, an
+        explicit `--local-port`, or an IDE-facing `--service-info-file` that
+        allows the tool to choose a fresh local port automatically.
+    Guarantees:
+        The debugged app still reads installed assets from `DOGPAW_APP_DIR`
+        rather than the temporary source tree.
+    Invariants:
+        Dry-run mode does not create, modify, or delete local or remote files.
+    """
+
+    parser = build_debug_flutter_parser()
+    parsed = parser.parse_args(
+        rewrite_local_path_option_values(
+            args,
+            {"--manifest", "--service-info-file"},
+        )
+    )
+    try:
+        context = resolve_flutter_manifest_context(parsed.manifest)
+    except ValueError as exc:
+        parser.error(str(exc))
+        raise AssertionError("unreachable") from exc
+
+    target = resolve_target(parsed.target)
+    remote_source_root = PurePosixPath(parsed.remote_source_root)
+    remote_app_root = PurePosixPath(parsed.remote_app_root)
+    remote_flutter_root = PurePosixPath(parsed.remote_flutter_root)
+    service_info_file = (
+        resolve_local_cli_path(parsed.service_info_file)
+        if parsed.service_info_file is not None
+        else None
+    )
+    if parsed.port is not None and parsed.local_port is not None:
+        parser.error("--port cannot be combined with --local-port")
+        raise AssertionError("unreachable")
+    if parsed.port is not None and parsed.remote_port is not None:
+        parser.error("--port cannot be combined with --remote-port")
+        raise AssertionError("unreachable")
+    if parsed.port is not None:
+        local_port = parsed.port
+        remote_port = parsed.port
+    else:
+        remote_port = (
+            parsed.remote_port
+            if parsed.remote_port is not None
+            else DEFAULT_REMOTE_FLUTTER_DEBUG_PORT
+        )
+        if parsed.stop:
+            local_port = None
+        elif parsed.local_port is not None:
+            local_port = parsed.local_port
+        elif parsed.dry_run:
+            parser.error("--dry-run without --port requires --local-port")
+            raise AssertionError("unreachable")
+        else:
+            local_port = choose_available_local_tcp_port()
+    try:
+        validate_tcp_port_text(remote_port, "--remote-port")
+    except ValueError as exc:
+        parser.error(str(exc))
+        raise AssertionError("unreachable") from exc
+    if parsed.stop:
+        stop_command = [
+            *SSH_BASE_ARGS,
+            target,
+            build_remote_flutter_stop_command(
+                context=context,
+                remote_source_root=remote_source_root,
+                remote_port=remote_port,
+            ),
+        ]
+        if parsed.dry_run:
+            print(shell_join(stop_command))
+            return 0
+        return int(subprocess.run(stop_command, cwd=INVOCATION_CWD, check=False).returncode)
+    if not parsed.dry_run and local_port is not None:
+        try:
+            ensure_local_tcp_port_available(local_port)
+        except ValueError as exc:
+            parser.error(str(exc))
+            raise AssertionError("unreachable") from exc
+
+    commands = build_flutter_source_sync_commands(
+        context,
+        target,
+        remote_source_root,
+        remote_app_root,
+    )
+    commands.append(
+        [
+            *SSH_BASE_ARGS,
+            target,
+            build_remote_flutter_install_command(
+                context,
+                remote_source_root,
+                remote_app_root,
+                remote_flutter_root,
+                parsed.build_mode,
+            ),
+        ]
+    )
+
+    launch_command = [
+        *SSH_BASE_ARGS,
+        "-o",
+        "ExitOnForwardFailure=yes",
+        "-L",
+        f"{local_port}:127.0.0.1:{remote_port}",
+        target,
+        build_remote_flutter_debug_command(
+            context=context,
+            remote_source_root=remote_source_root,
+            remote_app_root=remote_app_root,
+            remote_flutter_root=remote_flutter_root,
+            bridge_lib=parsed.bridge_lib,
+            instance_name=parsed.instance,
+            remote_port=remote_port,
+            device_id=parsed.device_id,
+            start_paused=parsed.start_paused,
+        ),
+    ]
+
+    if parsed.dry_run:
+        for command in [*commands, launch_command]:
+            print(shell_join(command))
+        if service_info_file is not None:
+            print(
+                f"# vmServiceInfoFile {service_info_file} -> ws://127.0.0.1:{local_port}/ws"
+            )
+        return 0
+
+    for command in commands:
+        result = subprocess.run(command, cwd=INVOCATION_CWD, check=False)
+        if result.returncode != 0:
+            return result.returncode
+    return stream_flutter_debug_launch(
+        launch_command=launch_command,
+        local_port=local_port,
+        service_info_file=service_info_file,
+    )
+
+
+def dispatch_app(args: Sequence[str]) -> int:
+    """Dispatch the `app` workflow area.
+
+    Purpose:
+        Provides the shared command family for idempotent app installation while
+        allowing headless and Flutter flows to diverge internally.
+    Parameters:
+        args: Remaining command-line arguments after `app`.
+    Return value:
+        Exit code from the selected app workflow, or `2` for invalid usage.
+    Requirements:
+        None.
+    Guarantees:
+        `app install headless ...` and `app install flutter ...` are routed to
+        the appropriate implementations.
+    Invariants:
+        Unsupported app subcommands do not silently fall through.
+    """
+
+    if is_help_request(args):
+        print_app_help()
+        return 0
+    if EXPORTED_SDK:
+        print(exported_sdk_v1_message("app", args), file=sys.stderr)
+        return 2
+    if args[0] != "install":
+        print(f"Unsupported app command: {args[0]}", file=sys.stderr)
+        print_app_help()
+        return 2
+    if len(args) == 1:
+        print("Usage: dogpaw app install <headless|flutter> [options]", file=sys.stderr)
+        return 2
+    if args[1] == "headless":
+        return dispatch_app_install_headless(args[2:])
+    if args[1] == "flutter":
+        return dispatch_app_install_flutter(args[2:])
+    print(f"Unsupported app install target: {args[1]}", file=sys.stderr)
+    print("Usage: dogpaw app install <headless|flutter> [options]", file=sys.stderr)
+    return 2
+
+
+def dispatch_debug_cxx(args: Sequence[str]) -> int:
+    """Dispatch `tools/dogpaw debug cxx`.
+
+    Purpose:
+        Bridges install-aware headless app preparation with the existing
+        `deploy_and_run.sh` gdbserver launcher while still supporting direct
+        binary debug flows for non-app targets such as Epiphany and tests.
+    Parameters:
+        args: Remaining arguments after `debug cxx`.
+    Return value:
+        Exit code from the dry-run print path or the first failing install/launch
+        command.
+    Requirements:
+        Caller must provide `--port` and either `--manifest` or `--binary`.
+    Guarantees:
+        Manifest-backed launches install the app first and then debug the
+        installed bundle path. Direct-binary launches keep the existing
+        deploy-and-run behavior behind the new front door.
+    Invariants:
+        Dry-run mode does not create, modify, or delete local or remote files.
+    """
+
+    parser = build_debug_cxx_parser()
+    wrapper_args, binary_args = split_passthrough_args(args)
+    wrapper_args = rewrite_local_path_option_values(
+        wrapper_args,
+        {"--manifest", "--binary", "--build-dir", "--sync", "-s", "--sync-asset"},
+    )
+    parsed = parser.parse_args(wrapper_args)
+
+    if parsed.manifest is None and parsed.binary is None:
+        parser.error("either --manifest or --binary is required")
+    if parsed.manifest is not None and (len(parsed.sync) > 0 or len(parsed.sync_asset) > 0 or parsed.asset_dest is not None):
+        parser.error("--manifest mode does not support --sync, --sync-asset, or --asset-dest; use direct --binary mode for that workflow")
+
+    target = resolve_target(parsed.target)
+    commands: list[list[str]] = []
+
+    if parsed.manifest is not None:
+        manifest_path = resolve_local_cli_path(parsed.manifest)
+        if not manifest_path.is_file():
+            parser.error(f"manifest not found: {manifest_path}")
+        manifest_payload = load_manifest_payload(manifest_path)
+        app_name = require_manifest_string_field(manifest_path, manifest_payload, "name")
+        executable_name = require_manifest_string_field(manifest_path, manifest_payload, "executable")
+        build_dir = resolve_local_cli_path(parsed.build_dir)
+        binary_path = (
+            resolve_local_cli_path(parsed.binary)
+            if parsed.binary is not None
+            else (build_dir / "bin" / executable_name)
+        )
+        if not binary_path.is_file():
+            parser.error(f"binary not found: {binary_path}")
+
+        install_command = [
+            str(DEPLOY_HEADLESS_APPS_TOOL),
+            "--target",
+            target,
+            "--build-dir",
+            str(build_dir),
+            "--hardware-profile",
+            parsed.hardware_profile,
+            "--manifest",
+            str(manifest_path),
+        ]
+        if parsed.dry_run:
+            install_command.append("--dry-run")
+        commands.append(install_command)
+
+        remote_bundle_dir = PurePosixPath(parsed.remote_app_root) / app_name / "bundle"
+        remote_env = append_env_if_missing(parsed.env, f"DOGPAW_APP_DIR={parsed.remote_app_root}")
+        debug_command = [
+            str(DEPLOY_AND_RUN_TOOL),
+            "-t",
+            target,
+            "-p",
+            parsed.port,
+            "--no-deploy",
+            "-d",
+            str(remote_bundle_dir),
+        ]
+        if parsed.workdir is not None:
+            debug_command.extend(["-w", parsed.workdir])
+        if parsed.interactive_stdin:
+            debug_command.append("--interactive-stdin")
+        elif parsed.non_interactive_stdin:
+            debug_command.append("--non-interactive-stdin")
+        for assignment in remote_env:
+            debug_command.extend(["--env", assignment])
+        debug_command.append(str(binary_path))
+        if len(binary_args) > 0:
+            debug_command.append("--")
+            debug_command.extend(binary_args)
+        commands.append(debug_command)
+        return run_commands(commands, parsed.dry_run)
+
+    binary_path = resolve_local_cli_path(parsed.binary)
+    if not binary_path.is_file():
+        parser.error(f"binary not found: {binary_path}")
+
+    debug_command = [
+        str(DEPLOY_AND_RUN_TOOL),
+        "-t",
+        target,
+        "-p",
+        parsed.port,
+    ]
+    if parsed.workdir is not None:
+        debug_command.extend(["-w", parsed.workdir])
+    if parsed.interactive_stdin:
+        debug_command.append("--interactive-stdin")
+    elif parsed.non_interactive_stdin:
+        debug_command.append("--non-interactive-stdin")
+    for sync_path in parsed.sync:
+        debug_command.extend(["-s", sync_path])
+    for assignment in parsed.env:
+        debug_command.extend(["--env", assignment])
+    for asset_path in parsed.sync_asset:
+        debug_command.extend(["--sync-asset", asset_path])
+    if parsed.asset_dest is not None:
+        debug_command.extend(["--asset-dest", parsed.asset_dest])
+    debug_command.append(str(binary_path))
+    if len(binary_args) > 0:
+        debug_command.append("--")
+        debug_command.extend(binary_args)
+    return run_commands([debug_command], parsed.dry_run)
+
+
+def dispatch_debug(args: Sequence[str]) -> int:
+    """Dispatch the `debug` workflow area.
+
+    Purpose:
+        Provides the canonical top-level debug command family while preserving
+        room for separate language- or runtime-specific debug flows later.
+    Parameters:
+        args: Remaining command-line arguments after `debug`.
+    Return value:
+        Exit code from the selected debug workflow, or `2` for invalid usage.
+    Requirements:
+        None.
+    Guarantees:
+        `debug cxx ...` and `debug flutter ...` route to the install-aware
+        remote debug workflows for their respective runtimes.
+    Invariants:
+        Unsupported debug subcommands do not silently fall through.
+    """
+
+    if is_help_request(args):
+        print_debug_help()
+        return 0
+    if EXPORTED_SDK:
+        print(exported_sdk_v1_message("debug", args), file=sys.stderr)
+        return 2
+    if args[0] == "cxx":
+        return dispatch_debug_cxx(args[1:])
+    if args[0] == "flutter":
+        return dispatch_debug_flutter(args[1:])
+    print(f"Unsupported debug command: {args[0]}", file=sys.stderr)
+    print_debug_help()
+    return 2
+
+
+def dispatch_emulator(args: Sequence[str]) -> int:
+    """Dispatch the `emulator` workflow area.
+
+    Purpose:
+        Makes the existing emulator tool discoverable from the canonical top
+        level while preserving its current command contract during Phase 0.
+    Parameters:
+        args: Remaining command-line arguments after `emulator`.
+    Return value:
+        Exit code from the delegated emulator tool.
+    Requirements:
+        `EMULATOR_TOOL` must exist and the current Python interpreter must be
+        able to execute it.
+    Guarantees:
+        All remaining arguments pass through unchanged to the existing emulator
+        CLI. With no extra args, the delegated tool uses its own default `run`
+        behavior.
+    Invariants:
+        This dispatcher does not reimplement emulator argument parsing.
+    """
+
+    if len(args) > 0 and args[0] in ("-h", "--help", "help"):
+        print_emulator_help()
+        return 0
+    delegated_args = list(args)
+    if not EXPORTED_SDK:
+        delegated_args = with_source_emulator_defaults(delegated_args)
+    return run_external([sys.executable, str(EMULATOR_TOOL), *delegated_args])
+
+
+def dispatch(area: str, args: Sequence[str]) -> int:
+    """Dispatch one top-level workflow area.
+
+    Purpose:
+        Keeps `main()` small and makes the command-routing rules explicit and
+        testable as later phases land.
+    Parameters:
+        area: Selected top-level workflow area.
+        args: Remaining arguments for that workflow area.
+    Return value:
+        Exit code from the selected workflow implementation.
+    Requirements:
+        `area` must be one of the parser-declared workflow choices.
+    Guarantees:
+        Implemented areas delegate to their backing tools or built-in workflow
+        logic, while not-yet-implemented areas fail with an actionable error.
+    Invariants:
+        Unsupported workflow areas never silently fall through.
+    """
+
+    if area == "target":
+        return dispatch_target(args)
+    if area == "app":
+        return dispatch_app(args)
+    if area == "debug":
+        return dispatch_debug(args)
+    if area == "emulator":
+        return dispatch_emulator(args)
+    if EXPORTED_SDK and area == "local":
+        print(exported_sdk_v1_message(area, args), file=sys.stderr)
+        return 2
+    print(unimplemented_message(area, args), file=sys.stderr)
+    return 2
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run the Dog Paw workflow dispatcher.
+
+    Purpose:
+        Serves as the single user-facing CLI front door under `tools/` while
+        later phases progressively replace scattered scripts with named
+        workflows.
+    Parameters:
+        argv: Optional argument sequence excluding the program name.
+    Return value:
+        Process exit code.
+    Requirements:
+        Caller must pass arguments compatible with `build_parser()`.
+    Guarantees:
+        With no workflow area, prints help and exits successfully. Implemented
+        areas delegate to current backing tools or built-in workflow logic;
+        placeholder areas return a clear non-zero error.
+    Invariants:
+        Dispatcher startup itself does not mutate repository state.
+    """
+
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.area is None:
+        parser.print_help()
+        return 0
+    if args.area not in WORKFLOW_AREAS:
+        print(f"Unsupported workflow area: {args.area}", file=sys.stderr)
+        parser.print_help(sys.stderr)
+        return 2
+    return dispatch(args.area, args.args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

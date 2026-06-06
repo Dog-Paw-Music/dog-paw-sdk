@@ -1,0 +1,7 @@
+{
+  "name": "picoComms",
+  "displayName": "Blade Communications",
+  "type": "headless",
+  "executable": "PicoComms",
+  "version": "0.1"
+}

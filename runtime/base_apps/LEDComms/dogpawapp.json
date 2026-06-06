@@ -1,0 +1,11 @@
+{
+  "name": "LEDComms",
+  "displayName": "LED Communications",
+  "type": "headless",
+  "visible": "never",
+  "executable": "LEDComms",
+  "args": [
+    "--led-perf-telemetry"
+  ],
+  "version": "1.0"
+}

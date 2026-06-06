@@ -1,0 +1,31 @@
+[Unit]
+Description=Dog Paw Audio: jackd (system)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dppi
+Environment=JACK_NO_AUDIO_RESERVATION=1
+# Lock to Core 3 (isolated from general scheduler via isolcpus=3 in cmdline.txt)
+CPUAffinity=3
+# Realtime capabilities
+LimitRTPRIO=infinity
+LimitMEMLOCK=infinity
+# Run with realtime scheduling (-R) and high priority (-P 85)
+#   Note: jack spawns a watchdog thread at 10 higher priority, and the limit is 99 for that
+# Using alsa backend with CS4272 audio codec on CM5 carrier board
+# Gen is what the USB interface is called (used at NAMM)
+# Sample rate 48000, Period size 128, Periods 2 (Low latency settings)
+ExecStart=/usr/bin/jackd -R -P 85 -d alsa -d hw:cs4271pi5 -r 48000 -p 128 -n 2
+# ExecStart=/usr/bin/jackd -R -P 85 -d alsa -d hw:Gen -r 48000 -p 128 -n 2
+Restart=on-failure
+RestartSec=2
+# Give jackd a chance to shut down cleanly
+TimeoutStopSec=15s
+# journal is default, but explicit doesn't hurt
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

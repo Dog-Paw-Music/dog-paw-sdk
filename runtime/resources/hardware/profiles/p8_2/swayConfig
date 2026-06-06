@@ -1,0 +1,72 @@
+#
+#  ── Outputs (p8 / cm5: DSI primary, HDMI secondary) ─────────────────────
+#
+output DSI-1 {
+    resolution 1280x800
+    # transform 180
+}
+
+output HDMI-A-1 {
+    # resolution 1920x1080
+    # position 1280 0
+}
+
+#
+#  ── Inputs ──────────────────────────────
+#
+input 1046:9271:10-0014_Goodix_Capacitive_TouchScreen map_to_output DSI-1
+
+#
+#  ── Workspaces ──────────────────────────────
+#
+workspace 3 output DSI-1
+workspace 1 output HDMI-A-1
+
+#
+#  ── Window Rules ──────────────────────────────
+#
+
+default_border pixel 0
+default_floating_border pixel 0
+
+seat * hide_cursor 1
+output * background ~/.local/share/dogpaw/resources/images/splashScreen.png fill "#FF0000"
+
+# Doom Game (Workspace 1)
+for_window [app_id="dsda-doom"] {
+    move container to workspace 1
+    border none
+    fullscreen enable
+}
+
+# Might also be called doomgame.sh
+for_window [app_id="doomgame.sh"] {
+    move container to workspace 1
+    border none
+    fullscreen enable
+}
+
+# System Overlay (Floating, Fullscreen)
+for_window [app_id="dog_paw_system_overlay"] {
+    floating enable
+    fullscreen enable
+    sticky enable
+}
+
+# Catch any window starting with dogpaw-app-
+for_window [app_id="^dogpaw-app-.*"] {
+    border none
+}
+
+#
+#  ── Startup ──────────────────────────────
+#
+exec_always {
+    dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY SWAYSOCK XDG_RUNTIME_DIR XDG_CURRENT_DESKTOP=sway
+    systemctl --user import-environment DISPLAY WAYLAND_DISPLAY SWAYSOCK XDG_RUNTIME_DIR XDG_CURRENT_DESKTOP
+}
+
+# Hide the default sway bar
+bar {
+    mode invisible
+}

@@ -1,0 +1,13 @@
+{
+  "name": "__DEFAULT_CURRENT__",
+  "namespaceSelector": {
+    "type": "GLOBAL"
+  },
+  "spec": {
+    "displayName": "Default Theme",
+    "primaryColor": "#3366CC",
+    "secondaryColor": "#999999",
+    "accentColor": "#E68019",
+    "backgroundColor": "#1A1A1A"
+  }
+}

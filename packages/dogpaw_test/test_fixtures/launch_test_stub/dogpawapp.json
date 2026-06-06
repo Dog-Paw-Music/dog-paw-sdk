@@ -1,0 +1,9 @@
+{
+  "name": "launch_test_stub",
+  "displayName": "Launch Test Stub",
+  "type": "headless",
+  "visible": "never",
+  "instancePolicy": "multi_instance",
+  "executable": "launch_test_stub",
+  "version": "0.1"
+}

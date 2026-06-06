@@ -1,0 +1,38 @@
+{
+  "name": "cm5",
+  "description": "Pico firmware configuration for CM5 carrier board",
+
+  "blade": {
+    "defaultLedPin": 12,
+    "spiPins": [18, 19, 20, 21],
+    "spiInstance": 0,
+
+    "muxer0Pins": [11, 13, 5],
+    "muxer1Pins": [1, 4, 0],
+
+    "sensorDataIdx": [4, 9, 10, 11, 14, 5, 12, 1, 2, 15, 6, 3, 0, 13, 8, 7],
+
+    "adcPins": [26, 27],
+    "adcInputMapping": "p8"
+  },
+
+  "shadowBlade": {
+    "defaultLedPin": 12,
+    "spiPins": [26, 27, 28, 29],
+    "spiInstance": 1,
+    "ledPins": [25, 22, 20, 19, 18, 21, 23, 24],
+    "has5VEnable": false,
+    "hasPiOn": false,
+    "5venPin": -1,
+    "piOnPin": -1
+  },
+
+  "frontPanel": {
+    "enabled": true,
+    "ledPin": 25,
+    "i2cSdaPin": 0,
+    "i2cSclPin": 1,
+    "buttonPins": [16, 19, 22, 28, 7, 4],
+    "encoderPins0": [17, 20, 26, 8, 5, 2]
+  }
+}

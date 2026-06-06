@@ -1,0 +1,32 @@
+{
+  "name": "p8_2",
+  "description": "P8.2 carrier board, March '26",
+
+  "picoComms": {
+    "spiBus": 5,
+    "spiDevice": 0
+  },
+
+  "ledComms": {
+    "spiBus": 0,
+    "spiDevice": 3
+  },
+
+  "buttonsAndKnobs": {
+    "i2cDevice": "/dev/i2c-3",
+    "i2cAddress": 66
+  },
+
+  "pedalIO": {
+    "enabled": true,
+    "spiBus": 0,
+    "adcDevice": 0,
+    "dacDevice": 1,
+    "ioExpanderDevice": 2
+  },
+
+  "deviceTreeOverlays": [
+    "cs4272.dts",
+    "spi0-4cs.dts"
+  ]
+}

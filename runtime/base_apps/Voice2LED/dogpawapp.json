@@ -1,0 +1,8 @@
+{
+  "name": "Voice2LED",
+  "displayName": "Voice to LED",
+  "type": "headless",
+  "visible": "never",
+  "executable": "Voice2LED",
+  "version": "1.0"
+}
