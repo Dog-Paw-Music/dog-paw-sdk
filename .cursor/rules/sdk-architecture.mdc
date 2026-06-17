@@ -9,3 +9,4 @@ alwaysApply: true
 - Treat `runtime/` as tooling-owned seed content, not a live runtime root for apps.
 - Apps should resolve binaries, assets, and state from installed layouts created by the Dog Paw install workflows.
 - Prefer updating public source docs and examples directly instead of relying on export-only rewrites.
+- Do not introduce new public references to internal repo shapes such as `rpi/`, `pico/`, `build-native`, or `pirepo`.

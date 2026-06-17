@@ -30,6 +30,7 @@ Future<dp.ScaleData?> showScaleEditorDialog({
   required dp.ScaleData initialValue,
   EditorPreviewController<dp.ScaleData>? previewController,
 }) async {
+  final dp.ScaleData originalValue = initialValue;
   dp.ScaleData currentValue = initialValue;
 
   return showDialog<dp.ScaleData>(
@@ -79,6 +80,7 @@ Future<dp.ScaleData?> showScaleEditorDialog({
                         TextButton(
                           onPressed: () async {
                             if (previewController != null) {
+                              await previewController.preview(originalValue);
                               await previewController.clear();
                             }
                             if (dialogContext.mounted) {

@@ -121,16 +121,42 @@ class Scale extends DataItemType<ScaleData> {
   @override
   Map<String, dynamic> specToJson(ScaleData data) => data.toJson();
 
+  /// Purpose:
+  /// Restore a `Scale` from either the full Epiphany item wrapper or a bare
+  /// inline scale-data payload.
+  ///
+  /// Parameters:
+  /// - `json`: serialized scale object or bare scale spec/resolved map.
+  ///
+  /// Return value:
+  /// - Parsed immutable `Scale`.
+  ///
+  /// Requirements/Preconditions:
+  /// - `json` should contain either item-level fields such as `name` and
+  ///   `namespaceSelector`, or bare scale-data fields such as `rootNote` and
+  ///   `noteCategories`.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Missing `namespaceSelector` falls back to `currentEntity`.
+  /// - Bare scale-data payloads are treated as inline spec data.
+  ///
+  /// Invariants:
+  /// - Parsing is pure and performs no I/O.
   factory Scale.fromJson(Map<String, dynamic> json) {
-    final name = json[JsonFields.NAME] as String? ?? '';
-
-    // Parse namespace selector from JSON
-    NamespaceSelector namespaceSelector = NamespaceSelector.fromJson(
-        json[JsonFields.NAMESPACE_SELECTOR] as Map<String, dynamic>);
+    final String name = json[JsonFields.NAME] as String? ?? '';
+    final dynamic namespaceSelectorJson = json[JsonFields.NAMESPACE_SELECTOR];
+    final NamespaceSelector namespaceSelector =
+        namespaceSelectorJson is Map<String, dynamic>
+            ? NamespaceSelector.fromJson(namespaceSelectorJson)
+            : const NamespaceSelector.currentEntity();
+    final bool hasWrappedData =
+        json.containsKey(JsonFields.SPEC) || json.containsKey(JsonFields.RESOLVED);
 
     ScaleData? spec;
     if (json.containsKey(JsonFields.SPEC)) {
       spec = ScaleData.fromJson(json[JsonFields.SPEC] as Map<String, dynamic>);
+    } else if (!hasWrappedData) {
+      spec = ScaleData.fromJson(json);
     }
 
     ScaleData? resolved;

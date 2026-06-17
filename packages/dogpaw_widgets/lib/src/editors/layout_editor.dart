@@ -281,6 +281,7 @@ class LayoutEditor extends StatelessWidget {
     final dp.ThemeData? nextTheme = await showThemeEditorDialog(
       context: context,
       initialValue: inlineTheme,
+      previewController: _themePreviewController(),
     );
     if (nextTheme != null) {
       _emitValue(
@@ -317,6 +318,7 @@ class LayoutEditor extends StatelessWidget {
     final dp.ScaleData? nextScale = await showScaleEditorDialog(
       context: context,
       initialValue: inlineScale,
+      previewController: _scalePreviewController(),
     );
     if (nextScale != null) {
       _emitValue(
@@ -325,6 +327,184 @@ class LayoutEditor extends StatelessWidget {
         ),
       );
     }
+  }
+
+  /// Purpose:
+  ///   Adapt the layout-level preview controller to the inline theme editor's
+  ///   theme-only preview interface.
+  ///
+  /// Parameters:
+  ///   - None.
+  ///
+  /// Return value:
+  ///   - Preview adapter for the current layout draft, or `null` when no layout
+  ///     preview controller was supplied.
+  ///
+  /// Requirements/Preconditions:
+  ///   - The current draft should already represent the full layout state that
+  ///     should wrap inline theme previews.
+  ///
+  /// Guarantees/Postconditions:
+  ///   - Previewing a theme sends a full layout draft with only the inline theme
+  ///     replaced.
+  ///
+  /// Invariants:
+  ///   - Preview clear delegates to the outer layout preview controller.
+  EditorPreviewController<dp.ThemeData>? _themePreviewController() {
+    final EditorPreviewController<dp.LayoutDraft>? controller = previewController;
+    if (controller == null) {
+      return null;
+    }
+    return _LayoutThemePreviewController(
+      baseDraft: value,
+      layoutPreviewController: controller,
+    );
+  }
+
+  /// Purpose:
+  ///   Adapt the layout-level preview controller to the inline scale editor's
+  ///   scale-only preview interface.
+  ///
+  /// Parameters:
+  ///   - None.
+  ///
+  /// Return value:
+  ///   - Preview adapter for the current layout draft, or `null` when no layout
+  ///     preview controller was supplied.
+  ///
+  /// Requirements/Preconditions:
+  ///   - The current draft should already represent the full layout state that
+  ///     should wrap inline scale previews.
+  ///
+  /// Guarantees/Postconditions:
+  ///   - Previewing a scale sends a full layout draft with only the inline scale
+  ///     replaced.
+  ///
+  /// Invariants:
+  ///   - Preview clear delegates to the outer layout preview controller.
+  EditorPreviewController<dp.ScaleData>? _scalePreviewController() {
+    final EditorPreviewController<dp.LayoutDraft>? controller = previewController;
+    if (controller == null) {
+      return null;
+    }
+    return _LayoutScalePreviewController(
+      baseDraft: value,
+      layoutPreviewController: controller,
+    );
+  }
+
+  /// Purpose:
+  ///   Build one oversized dialog title for the compact theme/scale choice
+  ///   pickers.
+  ///
+  /// Parameters:
+  ///   - `context`: Build context used for theme lookup.
+  ///   - `label`: Title text to render.
+  ///
+  /// Return value:
+  ///   - Styled title widget for the simple dialog.
+  ///
+  /// Requirements/Preconditions:
+  ///   - `label` should be non-empty.
+  ///
+  /// Guarantees/Postconditions:
+  ///   - The label uses a larger heading style than the default simple dialog
+  ///     title.
+  ///
+  /// Invariants:
+  ///   - Building the title does not mutate editor state.
+  Widget _buildChoiceDialogTitle(BuildContext context, String label) {
+    return Text(
+      label,
+      style: Theme.of(
+        context,
+      ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold),
+    );
+  }
+
+  /// Purpose:
+  ///   Present the compact theme/scale choice dialog using two horizontal
+  ///   selection buttons.
+  ///
+  /// Parameters:
+  ///   - `context`: Build context used to present the dialog.
+  ///   - `title`: Dialog title text.
+  ///   - `currentButtonKey`: Stable key for the Current choice button.
+  ///   - `customButtonKey`: Stable key for the Custom choice button.
+  ///   - `rowKey`: Stable key for the horizontal choice row.
+  ///   - `usesCustomChoice`: Whether the current draft already uses the inline
+  ///     custom value.
+  ///
+  /// Return value:
+  ///   - Selected choice id, or `null` when the dialog is dismissed.
+  ///
+  /// Requirements/Preconditions:
+  ///   - `context` must be able to present dialogs.
+  ///
+  /// Guarantees/Postconditions:
+  ///   - The dialog presents two touch-friendly horizontal buttons matching the
+  ///     main mode selector style.
+  ///
+  /// Invariants:
+  ///   - Showing the dialog does not mutate editor state until a choice is
+  ///     returned.
+  Future<String?> _showReferenceChoiceDialog({
+    required BuildContext context,
+    required String title,
+    required Key currentButtonKey,
+    required Key customButtonKey,
+    required Key rowKey,
+    required bool usesCustomChoice,
+  }) {
+    return showDialog<String>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return Dialog(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 520),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 24, 24, 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  _buildChoiceDialogTitle(dialogContext, title),
+                  const SizedBox(height: 24),
+                  Row(
+                    key: rowKey,
+                    children: <Widget>[
+                      Expanded(
+                        child: _buildChoiceButton(
+                          key: currentButtonKey,
+                          label: 'CURRENT',
+                          selected: !usesCustomChoice,
+                          onPressed: () {
+                            Navigator.of(dialogContext).pop('current');
+                          },
+                          compact: true,
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: _buildChoiceButton(
+                          key: customButtonKey,
+                          label: 'CUSTOM',
+                          selected: usesCustomChoice,
+                          onPressed: () {
+                            Navigator.of(dialogContext).pop('custom');
+                          },
+                          compact: true,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   /// Purpose:
@@ -902,29 +1082,13 @@ class LayoutEditor extends StatelessWidget {
   Future<void> _openThemeChoicePicker(BuildContext context) async {
     final bool usesInlineTheme =
         value.themeChoice.mode == dp.LayoutDraftReferenceMode.inline;
-    final String? result = await showDialog<String>(
+    final String? result = await _showReferenceChoiceDialog(
       context: context,
-      builder: (BuildContext dialogContext) {
-        return SimpleDialog(
-          title: const Text('Theme'),
-          children: <Widget>[
-            SimpleDialogOption(
-              key: const Key('layout-theme-option-current'),
-              onPressed: () {
-                Navigator.of(dialogContext).pop('current');
-              },
-              child: const Text('Current'),
-            ),
-            SimpleDialogOption(
-              key: const Key('layout-theme-option-custom'),
-              onPressed: () {
-                Navigator.of(dialogContext).pop('custom');
-              },
-              child: Text(usesInlineTheme ? 'Edit Custom' : 'Custom'),
-            ),
-          ],
-        );
-      },
+      title: 'Theme',
+      currentButtonKey: const Key('layout-theme-option-current'),
+      customButtonKey: const Key('layout-theme-option-custom'),
+      rowKey: const Key('layout-theme-choice-row'),
+      usesCustomChoice: usesInlineTheme,
     );
 
     if (result == 'current') {
@@ -950,6 +1114,7 @@ class LayoutEditor extends StatelessWidget {
     final dp.ThemeData? nextTheme = await showThemeEditorDialog(
       context: context,
       initialValue: initialTheme,
+      previewController: _themePreviewController(),
     );
     if (nextTheme != null) {
       _emitValue(
@@ -981,29 +1146,13 @@ class LayoutEditor extends StatelessWidget {
   Future<void> _openScaleChoicePicker(BuildContext context) async {
     final bool usesInlineScale =
         value.scaleChoice.mode == dp.LayoutDraftReferenceMode.inline;
-    final String? result = await showDialog<String>(
+    final String? result = await _showReferenceChoiceDialog(
       context: context,
-      builder: (BuildContext dialogContext) {
-        return SimpleDialog(
-          title: const Text('Scale'),
-          children: <Widget>[
-            SimpleDialogOption(
-              key: const Key('layout-scale-option-current'),
-              onPressed: () {
-                Navigator.of(dialogContext).pop('current');
-              },
-              child: const Text('Current'),
-            ),
-            SimpleDialogOption(
-              key: const Key('layout-scale-option-custom'),
-              onPressed: () {
-                Navigator.of(dialogContext).pop('custom');
-              },
-              child: Text(usesInlineScale ? 'Edit Custom' : 'Custom'),
-            ),
-          ],
-        );
-      },
+      title: 'Scale',
+      currentButtonKey: const Key('layout-scale-option-current'),
+      customButtonKey: const Key('layout-scale-option-custom'),
+      rowKey: const Key('layout-scale-choice-row'),
+      usesCustomChoice: usesInlineScale,
     );
 
     if (result == 'current') {
@@ -1026,6 +1175,7 @@ class LayoutEditor extends StatelessWidget {
     final dp.ScaleData? nextScale = await showScaleEditorDialog(
       context: context,
       initialValue: initialScale,
+      previewController: _scalePreviewController(),
     );
     if (nextScale != null) {
       _emitValue(
@@ -1814,5 +1964,161 @@ class LayoutEditor extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+/// Adapter that wraps layout preview ownership for inline theme editing flows.
+class _LayoutThemePreviewController implements EditorPreviewController<dp.ThemeData> {
+  final dp.LayoutDraft baseDraft;
+  final EditorPreviewController<dp.LayoutDraft> layoutPreviewController;
+
+  /// Purpose:
+  ///   Bridge theme-only preview updates into full layout-draft preview updates.
+  ///
+  /// Parameters:
+  ///   - `baseDraft`: Layout draft that should wrap each previewed inline theme.
+  ///   - `layoutPreviewController`: Host-owned layout preview controller.
+  ///
+  /// Return value:
+  ///   - A new `_LayoutThemePreviewController`.
+  ///
+  /// Requirements/Preconditions:
+  ///   - `baseDraft` should already represent the non-theme parts of the layout
+  ///     being edited.
+  ///
+  /// Guarantees/Postconditions:
+  ///   - Preview and clear requests forward into `layoutPreviewController`.
+  ///
+  /// Invariants:
+  ///   - This adapter never persists edits on its own.
+  const _LayoutThemePreviewController({
+    required this.baseDraft,
+    required this.layoutPreviewController,
+  });
+
+  /// Purpose:
+  ///   Preview one inline theme change as a full layout draft update.
+  ///
+  /// Parameters:
+  ///   - `value`: Inline theme candidate being previewed.
+  ///
+  /// Return value:
+  ///   - A future that completes when the host preview controller finishes.
+  ///
+  /// Requirements/Preconditions:
+  ///   - `value` should describe a valid inline theme.
+  ///
+  /// Guarantees/Postconditions:
+  ///   - Only the layout draft's inline theme choice changes.
+  ///
+  /// Invariants:
+  ///   - The wrapped layout draft keeps its existing scale, scope, and settings.
+  @override
+  Future<void> preview(dp.ThemeData value) {
+    return layoutPreviewController.preview(
+      baseDraft.copyWith(
+        themeChoice: dp.LayoutThemeChoice.inline(value),
+      ),
+    );
+  }
+
+  /// Purpose:
+  ///   Clear any active theme preview through the host layout preview controller.
+  ///
+  /// Parameters:
+  ///   - None.
+  ///
+  /// Return value:
+  ///   - A future that completes when the host preview controller finishes.
+  ///
+  /// Requirements/Preconditions:
+  ///   - Safe to call even if no preview is currently active.
+  ///
+  /// Guarantees/Postconditions:
+  ///   - The host preview controller receives the clear request.
+  ///
+  /// Invariants:
+  ///   - Clearing preview does not mutate persisted editor state.
+  @override
+  Future<void> clear() {
+    return layoutPreviewController.clear();
+  }
+}
+
+/// Adapter that wraps layout preview ownership for inline scale editing flows.
+class _LayoutScalePreviewController implements EditorPreviewController<dp.ScaleData> {
+  final dp.LayoutDraft baseDraft;
+  final EditorPreviewController<dp.LayoutDraft> layoutPreviewController;
+
+  /// Purpose:
+  ///   Bridge scale-only preview updates into full layout-draft preview updates.
+  ///
+  /// Parameters:
+  ///   - `baseDraft`: Layout draft that should wrap each previewed inline scale.
+  ///   - `layoutPreviewController`: Host-owned layout preview controller.
+  ///
+  /// Return value:
+  ///   - A new `_LayoutScalePreviewController`.
+  ///
+  /// Requirements/Preconditions:
+  ///   - `baseDraft` should already represent the non-scale parts of the layout
+  ///     being edited.
+  ///
+  /// Guarantees/Postconditions:
+  ///   - Preview and clear requests forward into `layoutPreviewController`.
+  ///
+  /// Invariants:
+  ///   - This adapter never persists edits on its own.
+  const _LayoutScalePreviewController({
+    required this.baseDraft,
+    required this.layoutPreviewController,
+  });
+
+  /// Purpose:
+  ///   Preview one inline scale change as a full layout draft update.
+  ///
+  /// Parameters:
+  ///   - `value`: Inline scale candidate being previewed.
+  ///
+  /// Return value:
+  ///   - A future that completes when the host preview controller finishes.
+  ///
+  /// Requirements/Preconditions:
+  ///   - `value` should describe a valid inline scale.
+  ///
+  /// Guarantees/Postconditions:
+  ///   - Only the layout draft's inline scale choice changes.
+  ///
+  /// Invariants:
+  ///   - The wrapped layout draft keeps its existing theme, scope, and settings.
+  @override
+  Future<void> preview(dp.ScaleData value) {
+    return layoutPreviewController.preview(
+      baseDraft.copyWith(
+        scaleChoice: dp.LayoutScaleChoice.inline(value),
+      ),
+    );
+  }
+
+  /// Purpose:
+  ///   Clear any active scale preview through the host layout preview controller.
+  ///
+  /// Parameters:
+  ///   - None.
+  ///
+  /// Return value:
+  ///   - A future that completes when the host preview controller finishes.
+  ///
+  /// Requirements/Preconditions:
+  ///   - Safe to call even if no preview is currently active.
+  ///
+  /// Guarantees/Postconditions:
+  ///   - The host preview controller receives the clear request.
+  ///
+  /// Invariants:
+  ///   - Clearing preview does not mutate persisted editor state.
+  @override
+  Future<void> clear() {
+    return layoutPreviewController.clear();
   }
 }

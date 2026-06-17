@@ -333,6 +333,10 @@ void main() {
     await tester.ensureVisible(find.byKey(const Key('layout-theme-button')));
     await tester.tap(find.byKey(const Key('layout-theme-button')));
     await tester.pumpAndSettle();
+    expect(find.byKey(const Key('layout-theme-choice-row')), findsOneWidget);
+    expect(find.text('Edit Custom'), findsNothing);
+    expect(find.byKey(const Key('layout-theme-option-current')), findsOneWidget);
+    expect(find.byKey(const Key('layout-theme-option-custom')), findsOneWidget);
     await tester.tap(find.byKey(const Key('layout-theme-option-custom')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('theme-role-Root')), findsOneWidget);
@@ -342,9 +346,129 @@ void main() {
     await tester.ensureVisible(find.byKey(const Key('layout-scale-button')));
     await tester.tap(find.byKey(const Key('layout-scale-button')));
     await tester.pumpAndSettle();
+    expect(find.byKey(const Key('layout-scale-choice-row')), findsOneWidget);
+    expect(find.text('Edit Custom'), findsNothing);
+    expect(find.byKey(const Key('layout-scale-option-current')), findsOneWidget);
+    expect(find.byKey(const Key('layout-scale-option-custom')), findsOneWidget);
     await tester.tap(find.byKey(const Key('layout-scale-option-custom')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('scale-root-note-C')), findsOneWidget);
+  });
+
+  testWidgets('inline theme editor forwards live preview updates through the layout preview controller',
+      (WidgetTester tester) async {
+    final _RecordingLayoutPreviewController previewController =
+        _RecordingLayoutPreviewController();
+    dp.LayoutDraft currentDraft = const dp.LayoutDraft(
+      themeChoice: dp.LayoutThemeChoice.inline(
+        dp.ThemeData(
+          displayName: 'Inline Theme',
+          primaryColor: '#ff0000',
+          secondaryColor: '#00ff00',
+          accentColor: '#0000ff',
+          backgroundColor: '#101010',
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Material(
+          child: StatefulBuilder(
+            builder: (
+              BuildContext context,
+              void Function(void Function()) setState,
+            ) {
+              return SizedBox(
+                width: 1200,
+                child: LayoutEditor(
+                  value: currentDraft,
+                  onChanged: (dp.LayoutDraft nextDraft) {
+                    setState(() {
+                      currentDraft = nextDraft;
+                    });
+                  },
+                  previewController: previewController,
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(find.byKey(const Key('layout-theme-button')));
+    await tester.tap(find.byKey(const Key('layout-theme-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('layout-theme-option-custom')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('theme-swatch-#2196f3')));
+    await tester.pumpAndSettle();
+
+    expect(previewController.lastPreviewValue, isNotNull);
+    expect(
+      previewController.lastPreviewValue!.themeChoice.inlineTheme?.primaryColor,
+      equals('#2196f3'),
+    );
+  });
+
+  testWidgets('inline scale editor forwards live preview updates through the layout preview controller',
+      (WidgetTester tester) async {
+    final _RecordingLayoutPreviewController previewController =
+        _RecordingLayoutPreviewController();
+    dp.LayoutDraft currentDraft = const dp.LayoutDraft(
+      scaleChoice: dp.LayoutScaleChoice.inline(
+        dp.ScaleData(
+          displayName: 'Inline Scale',
+          rootNote: 0,
+          noteCategories: <int>[1, -1, 1, -1, 1, 1, -1, 1, -1, 1, -1, 1],
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Material(
+          child: StatefulBuilder(
+            builder: (
+              BuildContext context,
+              void Function(void Function()) setState,
+            ) {
+              return SizedBox(
+                width: 1200,
+                child: LayoutEditor(
+                  value: currentDraft,
+                  onChanged: (dp.LayoutDraft nextDraft) {
+                    setState(() {
+                      currentDraft = nextDraft;
+                    });
+                  },
+                  previewController: previewController,
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(find.byKey(const Key('layout-scale-button')));
+    await tester.tap(find.byKey(const Key('layout-scale-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('layout-scale-option-custom')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('scale-root-note-D')));
+    await tester.pumpAndSettle();
+
+    expect(previewController.lastPreviewValue, isNotNull);
+    expect(
+      previewController.lastPreviewValue!.scaleChoice.inlineScale?.rootNote,
+      equals(2),
+    );
   });
 
   testWidgets('layout dialog opens and clears preview on cancel',

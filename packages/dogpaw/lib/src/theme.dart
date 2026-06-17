@@ -99,16 +99,42 @@ class Theme extends DataItemType<ThemeData> {
   @override
   Map<String, dynamic> specToJson(ThemeData data) => data.toJson();
 
+  /// Purpose:
+  /// Restore a `Theme` from either the full Epiphany item wrapper or a bare
+  /// inline theme-data payload.
+  ///
+  /// Parameters:
+  /// - `json`: serialized theme object or bare theme spec/resolved map.
+  ///
+  /// Return value:
+  /// - Parsed immutable `Theme`.
+  ///
+  /// Requirements/Preconditions:
+  /// - `json` should contain either item-level fields such as `name` and
+  ///   `namespaceSelector`, or bare theme-data fields such as `displayName` and
+  ///   `primaryColor`.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Missing `namespaceSelector` falls back to `currentEntity`.
+  /// - Bare theme-data payloads are treated as inline spec data.
+  ///
+  /// Invariants:
+  /// - Parsing is pure and performs no I/O.
   factory Theme.fromJson(Map<String, dynamic> json) {
-    final name = json[JsonFields.NAME] as String? ?? '';
-
-    // Parse namespace selector from JSON
-    NamespaceSelector namespaceSelector = NamespaceSelector.fromJson(
-        json[JsonFields.NAMESPACE_SELECTOR] as Map<String, dynamic>);
+    final String name = json[JsonFields.NAME] as String? ?? '';
+    final dynamic namespaceSelectorJson = json[JsonFields.NAMESPACE_SELECTOR];
+    final NamespaceSelector namespaceSelector =
+        namespaceSelectorJson is Map<String, dynamic>
+            ? NamespaceSelector.fromJson(namespaceSelectorJson)
+            : const NamespaceSelector.currentEntity();
+    final bool hasWrappedData =
+        json.containsKey(JsonFields.SPEC) || json.containsKey(JsonFields.RESOLVED);
 
     ThemeData? spec;
     if (json.containsKey(JsonFields.SPEC)) {
       spec = ThemeData.fromJson(json[JsonFields.SPEC] as Map<String, dynamic>);
+    } else if (!hasWrappedData) {
+      spec = ThemeData.fromJson(json);
     }
 
     ThemeData? resolved;

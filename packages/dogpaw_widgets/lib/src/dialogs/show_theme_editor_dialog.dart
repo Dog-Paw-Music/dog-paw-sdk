@@ -28,6 +28,7 @@ Future<dp.ThemeData?> showThemeEditorDialog({
   required dp.ThemeData initialValue,
   EditorPreviewController<dp.ThemeData>? previewController,
 }) async {
+  final dp.ThemeData originalValue = initialValue;
   dp.ThemeData currentValue = initialValue;
 
   return showDialog<dp.ThemeData>(
@@ -74,6 +75,7 @@ Future<dp.ThemeData?> showThemeEditorDialog({
                         TextButton(
                           onPressed: () async {
                             if (previewController != null) {
+                              await previewController.preview(originalValue);
                               await previewController.clear();
                             }
                             if (dialogContext.mounted) {

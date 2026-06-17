@@ -255,6 +255,13 @@ void main() {
       (WidgetTester tester) async {
     final _RecordingThemePreviewController previewController =
         _RecordingThemePreviewController();
+    const dp.ThemeData initialTheme = dp.ThemeData(
+      displayName: 'Test Theme',
+      primaryColor: '#ff0000',
+      secondaryColor: '#00ff00',
+      accentColor: '#0000ff',
+      backgroundColor: '#101010',
+    );
 
     await tester.pumpWidget(
       MaterialApp(
@@ -265,13 +272,7 @@ void main() {
                 onPressed: () {
                   showThemeEditorDialog(
                     context: context,
-                    initialValue: const dp.ThemeData(
-                      displayName: 'Test Theme',
-                      primaryColor: '#ff0000',
-                      secondaryColor: '#00ff00',
-                      accentColor: '#0000ff',
-                      backgroundColor: '#101010',
-                    ),
+                    initialValue: initialTheme,
                     previewController: previewController,
                   );
                 },
@@ -290,9 +291,22 @@ void main() {
     expect(find.text('Done'), findsOneWidget);
     expect(find.text('Cancel'), findsOneWidget);
 
+    await tester.tap(find.byKey(const Key('theme-swatch-#2196f3')));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
 
+    expect(previewController.lastPreviewValue, isNotNull);
+    expect(previewController.lastPreviewValue!.primaryColor, equals(initialTheme.primaryColor));
+    expect(
+      previewController.lastPreviewValue!.secondaryColor,
+      equals(initialTheme.secondaryColor),
+    );
+    expect(previewController.lastPreviewValue!.accentColor, equals(initialTheme.accentColor));
+    expect(
+      previewController.lastPreviewValue!.backgroundColor,
+      equals(initialTheme.backgroundColor),
+    );
     expect(previewController.wasCleared, isTrue);
   });
 }

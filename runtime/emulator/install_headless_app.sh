@@ -24,6 +24,7 @@ BINARY=""
 LOCAL_DEV=false
 LOCAL_DATA_ROOT="$REPO_ROOT/tmp/dogpaw-data"
 EXTRA_BINARY_ARGS=()
+KEEP_CACHE_ON_INSTALL=false
 
 usage() {
     sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
@@ -149,6 +150,10 @@ while [[ $# -gt 0 ]]; do
             BINARY="${2:-}"
             shift 2
             ;;
+        --keep-cache-on-install)
+            KEEP_CACHE_ON_INSTALL=true
+            shift
+            ;;
         -h|--help)
             usage
             exit 0
@@ -192,6 +197,7 @@ python3 "$SCRIPT_DIR/install_app.py" \
     --manifest "$MANIFEST" \
     --app-root "$APP_ROOT" \
     --binary "$RESOLVED_BINARY" \
+    $( [[ "$KEEP_CACHE_ON_INSTALL" == true ]] && printf '%s' '--keep-cache-on-install' ) \
     "${EXTRA_BINARY_ARGS[@]}"
 
 if [[ "$LOCAL_DEV" == true ]]; then

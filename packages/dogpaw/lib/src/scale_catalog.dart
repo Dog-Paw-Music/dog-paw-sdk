@@ -461,20 +461,23 @@ abstract final class ScaleCatalog {
   /// - `rootNote`: Absolute chromatic root note.
   ///
   /// Return value:
-  /// - A 12-element category list using `1` for included notes and `-1` for others.
+  /// - A 12-element category list using `3` for the root, `1` for other
+  ///   included notes, and `-1` for others.
   ///
   /// Requirements/Preconditions:
   /// - `intervals` should contain only semitone offsets in `0..11`.
   ///
   /// Guarantees/Postconditions:
-  /// - Every interval listed in `intervals` becomes an included note.
+  /// - The root note receives the distinct root category.
+  /// - Every non-root interval listed in `intervals` becomes an included note.
   ///
   /// Invariants:
   /// - The helper does not mutate shared definition metadata.
   static List<int> _patternToCategories(List<int> intervals, int rootNote) {
     final List<int> categories = List<int>.filled(12, -1);
     for (final int interval in intervals) {
-      categories[_normalizeNoteIndex(rootNote + interval)] = 1;
+      final int absoluteNote = _normalizeNoteIndex(rootNote + interval);
+      categories[absoluteNote] = interval == 0 ? 3 : 1;
     }
     return categories;
   }

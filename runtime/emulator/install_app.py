@@ -403,12 +403,91 @@ def build_source_inputs(
     return install_fingerprint.normalize_source_inputs(inputs)
 
 
+def resolve_cache_root() -> Path:
+    """Resolve the Dog Paw persistent cache root for install-time cleanup.
+
+    Purpose:
+        Mirrors the runtime cache-root contract so install workflows can clear
+        one app's evictable cache without hard-coding one machine-specific path.
+    Parameters:
+        None.
+    Return value:
+        Absolute cache root path.
+    Requirements/Preconditions:
+        One of `DOGPAW_CACHE_DIR`, `XDG_CACHE_HOME`, or `HOME` must be set.
+    Guarantees/Postconditions:
+        Returns the root path only; does not create or delete anything.
+    Invariants:
+        `DOGPAW_CACHE_DIR` takes precedence over XDG defaults.
+    """
+    dogpaw_cache = os.environ.get("DOGPAW_CACHE_DIR", "")
+    if dogpaw_cache != "":
+        return Path(dogpaw_cache).resolve()
+    xdg_cache_home = os.environ.get("XDG_CACHE_HOME", "")
+    if xdg_cache_home != "":
+        return (Path(xdg_cache_home).resolve() / "dogpaw")
+    home = os.environ.get("HOME", "")
+    if home != "":
+        return (Path(home).resolve() / ".cache" / "dogpaw")
+    raise ValueError(
+        "Cannot resolve Dog Paw cache root; set DOGPAW_CACHE_DIR, XDG_CACHE_HOME, or HOME"
+    )
+
+
+def resolve_app_cache_dir(app_name: str) -> Path:
+    """Resolve the evictable cache directory for one installed app.
+
+    Purpose:
+        Centralizes the shared app-cache layout so headless and Flutter installs
+        clear the same cache directory shape that DogPawEntity exposes at runtime.
+    Parameters:
+        app_name: Installed Dog Paw app name from the manifest `name` field.
+    Return value:
+        Absolute cache directory path for that app.
+    Requirements/Preconditions:
+        `app_name` is a non-empty string.
+    Guarantees/Postconditions:
+        Returns the path only; does not touch the filesystem.
+    Invariants:
+        The returned path always lives under `<cacheRoot>/appCache/`.
+    """
+    if app_name == "":
+        raise ValueError("app_name must be non-empty")
+    cache_root = resolve_cache_root()
+    emulator_name = os.environ.get("DOGPAW_EMULATOR_NAME", "")
+    if emulator_name != "":
+        return cache_root / "emulators" / emulator_name / "appCache" / app_name
+    return cache_root / "appCache" / app_name
+
+
+def clear_app_cache(app_name: str) -> None:
+    """Remove one app's evictable cache directory when it exists.
+
+    Purpose:
+        Ensures installs replace any derived artifacts that may no longer match
+        the newly installed app payload.
+    Parameters:
+        app_name: Installed Dog Paw app name whose cache should be cleared.
+    Return value:
+        None.
+    Requirements/Preconditions:
+        `app_name` is a non-empty string.
+    Guarantees/Postconditions:
+        The app cache directory is absent after this returns successfully.
+    Invariants:
+        Only the selected app cache directory is removed.
+    """
+    shutil.rmtree(resolve_app_cache_dir(app_name), ignore_errors=False)
+
+
 def install_app(
     manifest_path: Path,
     app_root: Path,
     binary_path: Path | None,
     bundle_path: Path | None,
     extra_binary_paths: list[Path],
+    *,
+    keep_cache_on_install: bool = False,
 ) -> Path:
     """Install one Dog Paw app into an app registry root.
 
@@ -422,6 +501,8 @@ def install_app(
         bundle_path: Optional complete runtime bundle source.
         extra_binary_paths: Additional helper executable files to copy into the
             installed bundle. Must match `install.extraBinaries`.
+        keep_cache_on_install: When `True`, preserves any existing app cache
+            instead of clearing it before install replacement.
     Return value:
         Path to the final installed app directory.
     Requirements/Preconditions:
@@ -488,6 +569,10 @@ def install_app(
             encoding="utf-8",
         )
 
+        if not keep_cache_on_install:
+            cache_dir = resolve_app_cache_dir(app_name)
+            if cache_dir.exists():
+                clear_app_cache(app_name)
         if final_dir.exists():
             shutil.rmtree(final_dir)
         staging_dir.rename(final_dir)
@@ -578,6 +663,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     payload.add_argument("--binary", type=Path)
     payload.add_argument("--bundle", type=Path)
     parser.add_argument("--extra-binary", action="append", default=[], type=Path)
+    parser.add_argument(
+        "--keep-cache-on-install",
+        action="store_true",
+        help="Preserve the app's existing persistent cache instead of clearing it during install.",
+    )
     return parser.parse_args(argv)
 
 
@@ -607,6 +697,7 @@ def main(argv: list[str]) -> int:
             args.binary,
             args.bundle,
             args.extra_binary,
+            keep_cache_on_install=args.keep_cache_on_install,
         )
     except Exception as error:
         print(f"install_app.py: {error}", file=sys.stderr)

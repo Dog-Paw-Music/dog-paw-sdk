@@ -2,7 +2,7 @@
   "name": "Namer",
   "displayName": "Key Namer",
   "icon": "namer_icon.png",
-  "visible": "always",
+  "visible": "dev",
   "flutterApp": "namer",
   "version": "1.0"
 }

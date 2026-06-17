@@ -2,6 +2,14 @@ import 'package:dogpaw/dogpaw.dart';
 import 'package:dogpaw/src/json_constants.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+int _semitoneOffsetForKey(
+  Map<String, List<Map<String, dynamic>>> intents,
+  String keyId,
+) {
+  final Map<String, dynamic> intent = intents[keyId]!.first;
+  return intent[JsonFields.SEMITONES_FROM_ROOT] as int;
+}
+
 void main() {
   group('generateIntervalGridKeyIntents', () {
     test('produces 64 keys for the default 8x8 grid', () {
@@ -65,6 +73,52 @@ void main() {
       expect(intents.containsKey('4,3'), isTrue);
       expect(intents.containsKey('0,0'), isFalse);
       expect(intents.containsKey('7,7'), isFalse);
+    });
+
+    test('anchors the lowest note to the top row for negative row intervals', () {
+      const LayoutSettings settings = LayoutSettings(
+        layoutMode: 'chromatic',
+        rowInterval: -3,
+        columnInterval: 1,
+      );
+
+      final Map<String, List<Map<String, dynamic>>> intents =
+          generateIntervalGridKeyIntents(settings);
+
+      expect(_semitoneOffsetForKey(intents, '0,7'), equals(0));
+      expect(_semitoneOffsetForKey(intents, '0,0'), equals(21));
+      expect(_semitoneOffsetForKey(intents, '0,6'), equals(3));
+    });
+
+    test('anchors the lowest note to the right column for negative column intervals', () {
+      const LayoutSettings settings = LayoutSettings(
+        layoutMode: 'chromatic',
+        rowInterval: 5,
+        columnInterval: -1,
+      );
+
+      final Map<String, List<Map<String, dynamic>>> intents =
+          generateIntervalGridKeyIntents(settings);
+
+      expect(_semitoneOffsetForKey(intents, '7,0'), equals(0));
+      expect(_semitoneOffsetForKey(intents, '0,0'), equals(7));
+      expect(_semitoneOffsetForKey(intents, '6,0'), equals(1));
+    });
+
+    test('treats legacy direction flags as negative effective intervals', () {
+      const LayoutSettings settings = LayoutSettings(
+        layoutMode: 'chromatic',
+        rowInterval: 3,
+        columnInterval: 1,
+        rowIntervalUp: false,
+      );
+
+      final Map<String, List<Map<String, dynamic>>> intents =
+          generateIntervalGridKeyIntents(settings);
+
+      expect(_semitoneOffsetForKey(intents, '0,7'), equals(0));
+      expect(_semitoneOffsetForKey(intents, '0,6'), equals(3));
+      expect(_semitoneOffsetForKey(intents, '0,0'), equals(21));
     });
   });
 

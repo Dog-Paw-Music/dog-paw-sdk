@@ -19,7 +19,10 @@ fi
 MANIFEST=""
 APP_ROOT="${DOGPAW_APP_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/dogpaw/apps}"
 BUILD_MODE="release"
+HOST_SOURCE_FINGERPRINT=""
+HOST_BUILD_MODE=""
 DRY_RUN=false
+KEEP_CACHE_ON_INSTALL=false
 
 usage() {
     sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'
@@ -41,6 +44,28 @@ if not isinstance(value, str) or not value:
     raise SystemExit(f"Manifest requires non-empty string field: {field_name}")
 print(value)
 PY
+}
+
+# Purpose:
+#   Print a visible build-phase banner before Flutter dependency resolution and
+#   build output so remote logs stay attributable to one app.
+# Parameters:
+#   $1: Dog Paw app name from the source manifest. Must be a non-empty string.
+#   $2: Flutter build mode such as release or debug. Must be a non-empty string.
+# Return value:
+#   None. Writes banner lines to stdout.
+# Requirements/Preconditions:
+#   Caller passes both arguments explicitly.
+# Guarantees/Postconditions:
+#   Emits a stable three-line ASCII banner suitable for dry-run and real builds.
+# Invariants:
+#   Does not mutate files, environment, or build inputs.
+print_flutter_build_header() {
+    local app_name="$1"
+    local build_mode="$2"
+    echo "========================================"
+    echo "==== Building Flutter app: $app_name ($build_mode) ===="
+    echo "========================================"
 }
 
 host_arch() {
@@ -71,8 +96,20 @@ while [[ $# -gt 0 ]]; do
             BUILD_MODE="${2:-}"
             shift 2
             ;;
+        --host-source-fingerprint)
+            HOST_SOURCE_FINGERPRINT="${2:-}"
+            shift 2
+            ;;
+        --host-build-mode)
+            HOST_BUILD_MODE="${2:-}"
+            shift 2
+            ;;
         --dry-run)
             DRY_RUN=true
+            shift
+            ;;
+        --keep-cache-on-install)
+            KEEP_CACHE_ON_INSTALL=true
             shift
             ;;
         -h|--help)
@@ -99,8 +136,17 @@ if [[ ! -x "$INSTALL_TOOL" ]]; then
     echo "Error: install tool not found: $INSTALL_TOOL" >&2
     exit 1
 fi
+if [[ -n "$HOST_SOURCE_FINGERPRINT" && -z "$HOST_BUILD_MODE" ]]; then
+    echo "Error: --host-source-fingerprint requires --host-build-mode" >&2
+    exit 1
+fi
+if [[ -z "$HOST_SOURCE_FINGERPRINT" && -n "$HOST_BUILD_MODE" ]]; then
+    echo "Error: --host-build-mode requires --host-source-fingerprint" >&2
+    exit 1
+fi
 
 MANIFEST_ABS="$(realpath "$MANIFEST")"
+APP_NAME="$(read_manifest_string_field "$MANIFEST_ABS" "name")"
 APP_DIR="$(dirname "$MANIFEST_ABS")"
 FLUTTER_PROJECT_REL="$(read_manifest_string_field "$MANIFEST_ABS" "flutterApp")"
 FLUTTER_PROJECT_DIR="$APP_DIR/$FLUTTER_PROJECT_REL"
@@ -113,11 +159,20 @@ if [[ ! -d "$FLUTTER_PROJECT_DIR" ]]; then
 fi
 
 if [[ "$DRY_RUN" == true ]]; then
+    print_flutter_build_header "$APP_NAME" "$BUILD_MODE"
     echo "cd '$FLUTTER_PROJECT_DIR' && flutter pub get && flutter build linux --$BUILD_MODE"
-    echo "python3 '$INSTALL_TOOL' --manifest '$MANIFEST_ABS' --app-root '$APP_ROOT' --bundle '$BUNDLE_DIR'"
+    INSTALL_COMMAND="python3 '$INSTALL_TOOL' --manifest '$MANIFEST_ABS' --app-root '$APP_ROOT' --bundle '$BUNDLE_DIR'"
+    if [[ -n "$HOST_SOURCE_FINGERPRINT" ]]; then
+        INSTALL_COMMAND+=" --host-source-fingerprint '$HOST_SOURCE_FINGERPRINT' --host-build-mode '$HOST_BUILD_MODE'"
+    fi
+    if [[ "$KEEP_CACHE_ON_INSTALL" == true ]]; then
+        INSTALL_COMMAND+=" --keep-cache-on-install"
+    fi
+    echo "$INSTALL_COMMAND"
     exit 0
 fi
 
+print_flutter_build_header "$APP_NAME" "$BUILD_MODE"
 (
     cd "$FLUTTER_PROJECT_DIR"
     flutter pub get
@@ -129,7 +184,23 @@ if [[ ! -d "$BUNDLE_DIR" ]]; then
     exit 1
 fi
 
-python3 "$INSTALL_TOOL" \
-    --manifest "$MANIFEST_ABS" \
-    --app-root "$APP_ROOT" \
+FLUTTER_SDK_VERSION="$(flutter --version | sed -n '1p')"
+
+INSTALL_ARGS=(
+    "$INSTALL_TOOL"
+    --manifest "$MANIFEST_ABS"
+    --app-root "$APP_ROOT"
     --bundle "$BUNDLE_DIR"
+    --flutter-sdk-version "$FLUTTER_SDK_VERSION"
+)
+if [[ -n "$HOST_SOURCE_FINGERPRINT" ]]; then
+    INSTALL_ARGS+=(
+        --host-source-fingerprint "$HOST_SOURCE_FINGERPRINT"
+        --host-build-mode "$HOST_BUILD_MODE"
+    )
+fi
+if [[ "$KEEP_CACHE_ON_INSTALL" == true ]]; then
+    INSTALL_ARGS+=(--keep-cache-on-install)
+fi
+
+python3 "${INSTALL_ARGS[@]}"

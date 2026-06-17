@@ -113,5 +113,57 @@ void main() {
         equals('accent'),
       );
     });
+
+    test('parses bare resolved theme and scale data in layout refs', () {
+      final LayoutData layoutData = LayoutData.fromJson(
+        <String, dynamic>{
+          JsonFields.DISPLAY_NAME: 'Resolved Layout',
+          JsonFields.KEY_INTENTS: <String, dynamic>{},
+          JsonFields.KEY_COLORS: <String, dynamic>{},
+          JsonFields.THEME_REF: <String, dynamic>{
+            JsonFields.DISPLAY_NAME: 'Resolved Theme',
+            JsonFields.PRIMARY_COLOR: 'rgba(17,17,17,255)',
+            JsonFields.SECONDARY_COLOR: 'rgba(34,34,34,255)',
+            JsonFields.ACCENT_COLOR: 'rgba(51,51,51,255)',
+            JsonFields.BACKGROUND_COLOR: 'rgba(68,68,68,255)',
+          },
+          JsonFields.SCALE_REF: <String, dynamic>{
+            JsonFields.DISPLAY_NAME: 'Resolved Scale',
+            JsonFields.ROOT_NOTE: 0,
+            JsonFields.NOTE_CATEGORIES: <int>[
+              3,
+              -1,
+              1,
+              -1,
+              1,
+              1,
+              -1,
+              1,
+              -1,
+              1,
+              -1,
+              1,
+            ],
+          },
+        },
+      );
+
+      expect(layoutData.themeRef, isNotNull);
+      expect(layoutData.themeRef!.type, equals(ReferenceType.inline));
+      expect(layoutData.themeRef!.inlineData, isNotNull);
+      expect(
+        layoutData.themeRef!.inlineData!.spec!.primaryColor,
+        equals('rgba(17,17,17,255)'),
+      );
+
+      expect(layoutData.scaleRef, isNotNull);
+      expect(layoutData.scaleRef!.type, equals(ReferenceType.inline));
+      expect(layoutData.scaleRef!.inlineData, isNotNull);
+      expect(layoutData.scaleRef!.inlineData!.spec!.rootNote, equals(0));
+      expect(
+        layoutData.scaleRef!.inlineData!.spec!.noteCategories.first,
+        equals(3),
+      );
+    });
   });
 }

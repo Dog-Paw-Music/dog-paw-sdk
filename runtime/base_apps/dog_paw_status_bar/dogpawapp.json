@@ -2,6 +2,7 @@
   "name": "dog_paw_status_bar",
   "displayName": "Status Bar",
   "flutterApp": "dog_paw_status_bar",
+  "installDependencies": ["dog_paw_home_screen", "AudioBridge"],
   "windowManagement": "layer_shell",
   "visible": "never",
   "version": "0.1"

@@ -87,6 +87,28 @@ Future<void> _clearLayoutStack(DogPawEntity entity) async {
   }
 }
 
+/// Purpose:
+/// Build a layout containing one MIDI note intent on one key.
+///
+/// Parameters:
+/// - `name`: persisted layout name.
+/// - `displayName`: human-readable layout label.
+/// - `keyId`: grid key identifier like `0,0`.
+/// - `midiNote`: resolved MIDI note produced for `keyId`.
+/// - `scope`: layout scope string such as `shared` or `targeted`.
+/// - `targetKey`: optional consumer-facing target key for targeted layouts.
+///
+/// Return value:
+/// - A parsed `Layout` ready for create/update requests.
+///
+/// Requirements:
+/// - `name`, `displayName`, and `keyId` should be non-empty.
+///
+/// Guarantees:
+/// - Returned layout has spec data only.
+///
+/// Invariants:
+/// - Building the layout is pure and does not contact Epiphany.
 Layout _makeSingleNoteLayout(
   String name,
   String displayName,
@@ -132,7 +154,8 @@ void main() {
       expect(snapshot.entries, isEmpty);
       expect(snapshot.resolvedLayout, isNotNull);
       expect(snapshot.resolvedLayout!.resolved, isNotNull);
-      expect(snapshot.resolvedLayout!.resolved!.displayName, equals('Empty Layout'));
+      expect(snapshot.resolvedLayout!.resolved!.displayName,
+          equals('Empty Layout'));
 
       entity.disconnect();
     });
@@ -292,7 +315,8 @@ void main() {
       entity.disconnect();
     });
 
-    test('StackSubscriptionPublishesRecomposedSnapshotWhenReferencedLayoutChanges',
+    test(
+        'StackSubscriptionPublishesRecomposedSnapshotWhenReferencedLayoutChanges',
         () async {
       final entity = DogPawEntity(uniqueName('LayoutStackUpdateTester'));
       final connectResult = await entity.connect();
@@ -334,8 +358,8 @@ void main() {
       final updateResult = await entity.updateLayout(updatedLayout);
       expect(updateResult.success, isTrue, reason: updateResult.error);
 
-      final LayoutStackSnapshot snapshot =
-          await notificationCompleter.future.timeout(const Duration(seconds: 5));
+      final LayoutStackSnapshot snapshot = await notificationCompleter.future
+          .timeout(const Duration(seconds: 5));
       expect(snapshot.entries.length, equals(1));
       expect(snapshot.resolvedLayout, isNotNull);
       expect(snapshot.resolvedLayout!.resolved, isNotNull);
@@ -404,7 +428,8 @@ void main() {
           strategy: LayoutViewStrategy.targetedIfAnyOtherwiseShared,
         ),
       );
-      expect(initialViewResult.success, isTrue, reason: initialViewResult.error);
+      expect(initialViewResult.success, isTrue,
+          reason: initialViewResult.error);
       expect(
         initialViewResult.value!.effectiveMidiNoteForKey('0,0'),
         equals(81),
@@ -493,8 +518,8 @@ void main() {
       final updateResult = await entity.updateLayout(updatedLayout);
       expect(updateResult.success, isTrue, reason: updateResult.error);
 
-      final ScopedLayoutView updatedView =
-          await notificationCompleter.future.timeout(const Duration(seconds: 5));
+      final ScopedLayoutView updatedView = await notificationCompleter.future
+          .timeout(const Duration(seconds: 5));
       expect(updatedView.effectiveMidiNoteForKey('1,1'), equals(89));
 
       entity.disconnect();

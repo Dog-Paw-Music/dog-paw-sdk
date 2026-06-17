@@ -44,6 +44,7 @@ export 'src/result.dart';
 
 // Core utilities
 export 'src/app_logger.dart';
+export 'src/home_screen_commands.dart';
 export 'src/launch_metadata.dart';
 export 'src/path_utils.dart';
 

@@ -6,10 +6,13 @@ import 'package:flutter_test/flutter_test.dart';
 
 class _RecordingScalePreviewController
     implements EditorPreviewController<dp.ScaleData> {
+  dp.ScaleData? lastPreviewValue;
   bool wasCleared = false;
 
   @override
-  Future<void> preview(dp.ScaleData value) async {}
+  Future<void> preview(dp.ScaleData value) async {
+    lastPreviewValue = value;
+  }
 
   @override
   Future<void> clear() async {
@@ -511,6 +514,10 @@ void main() {
       (WidgetTester tester) async {
     final _RecordingScalePreviewController previewController =
         _RecordingScalePreviewController();
+    final dp.ScaleData initialScale = dp.ScaleCatalog.scaleDataForName(
+      scaleName: 'Major',
+      rootNote: 0,
+    );
 
     await tester.binding.setSurfaceSize(const Size(1600, 1000));
     addTearDown(() async {
@@ -526,10 +533,7 @@ void main() {
                 onPressed: () {
                   showScaleEditorDialog(
                     context: context,
-                    initialValue: dp.ScaleCatalog.scaleDataForName(
-                      scaleName: 'Major',
-                      rootNote: 0,
-                    ),
+                    initialValue: initialScale,
                     previewController: previewController,
                   );
                 },
@@ -548,9 +552,12 @@ void main() {
     expect(find.text('Done'), findsOneWidget);
     expect(find.text('Cancel'), findsOneWidget);
 
+    await tester.tap(find.byKey(const Key('scale-root-note-D')));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
 
+    expect(previewController.lastPreviewValue, equals(initialScale));
     expect(previewController.wasCleared, isTrue);
   });
 

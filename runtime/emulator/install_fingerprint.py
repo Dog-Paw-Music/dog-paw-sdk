@@ -6,7 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Mapping
 from urllib.parse import urlparse, unquote
 
 
@@ -89,6 +89,52 @@ def fingerprint_source_inputs(paths: Iterable[Path]) -> tuple[list[str], str]:
     hasher.update(b"\0")
     for path in normalized:
         _update_hash_for_path(hasher, path)
+    return [str(path) for path in normalized], f"{FINGERPRINT_VERSION}:{hasher.hexdigest()}"
+
+
+def fingerprint_source_inputs_with_text(
+    paths: Iterable[Path],
+    text_inputs: Mapping[str, str],
+) -> tuple[list[str], str]:
+    """Return a stable fingerprint for path inputs plus explicit text inputs.
+
+    Purpose:
+        Extends source-input hashing for workflows where file contents alone are
+        insufficient, such as Flutter install fingerprints that must also change
+        when the requested build mode changes.
+    Parameters:
+        paths: File or directory inputs hashed with the standard install-source
+            rules.
+        text_inputs: Deterministic string inputs keyed by descriptive names.
+            Keys are hashed in sorted order so callers do not depend on mapping
+            insertion order.
+    Return value:
+        Tuple of normalized source-input path strings and one stable fingerprint
+        string using the current `FINGERPRINT_VERSION`.
+    Requirements:
+        `text_inputs` values must be strings.
+    Guarantees:
+        Path inputs retain the same normalization and hashing semantics as
+        `fingerprint_source_inputs()`.
+    Invariants:
+        Does not mutate input collections or filesystem state.
+    """
+
+    normalized = normalize_source_inputs(paths)
+    hasher = hashlib.sha256()
+    hasher.update(FINGERPRINT_VERSION.encode("utf-8"))
+    hasher.update(b"\0")
+    for path in normalized:
+        _update_hash_for_path(hasher, path)
+    for key in sorted(text_inputs):
+        value = text_inputs[key]
+        if not isinstance(value, str):
+            raise ValueError(f"text input values must be strings: {key}")
+        hasher.update(b"TEXT\0")
+        hasher.update(key.encode("utf-8"))
+        hasher.update(b"\0")
+        hasher.update(value.encode("utf-8"))
+        hasher.update(b"\0")
     return [str(path) for path in normalized], f"{FINGERPRINT_VERSION}:{hasher.hexdigest()}"
 
 

@@ -497,6 +497,34 @@ class DogPawEntity {
         'Cannot resolve Dog Paw data root; set DOGPAW_DATA_DIR, XDG_DATA_HOME, or HOME');
   }
 
+  /// Resolve Dog Paw's persistent cache root.
+  ///
+  /// Purpose: Mirrors the XDG cache-root selection so apps can store evictable
+  /// derived artifacts without mixing them into durable app files.
+  ///
+  /// Parameters: none.
+  /// Return value: persistent cache root path.
+  /// Requirements/Preconditions: one of `DOGPAW_CACHE_DIR`, `XDG_CACHE_HOME`,
+  /// or `HOME` is set.
+  /// Guarantees/Postconditions: no filesystem state is modified.
+  /// Invariants: `DOGPAW_CACHE_DIR` takes precedence over XDG defaults.
+  static String _resolveCacheRoot() {
+    final dogpawCache = _env('DOGPAW_CACHE_DIR');
+    if (dogpawCache != null && dogpawCache.isNotEmpty) {
+      return dogpawCache;
+    }
+    final xdgCacheHome = _env('XDG_CACHE_HOME');
+    if (xdgCacheHome != null && xdgCacheHome.isNotEmpty) {
+      return '$xdgCacheHome/dogpaw';
+    }
+    final home = _env('HOME');
+    if (home != null && home.isNotEmpty) {
+      return '$home/.cache/dogpaw';
+    }
+    throw StateError(
+        'Cannot resolve Dog Paw cache root; set DOGPAW_CACHE_DIR, XDG_CACHE_HOME, or HOME');
+  }
+
   /// Resolve the optional emulator name.
   ///
   /// Purpose: Selects emulator-scoped persistent app-file roots when an emulator
@@ -1834,6 +1862,27 @@ class DogPawEntity {
           '$dataRoot/emulators/$emulatorName/appFiles/$_entityName');
     }
     return _ensureDirectory('$dataRoot/appFiles/$_entityName');
+  }
+
+  /// Get the persistent app cache directory (shared across instances).
+  ///
+  /// Purpose: Returns the writable location for evictable derived artifacts that
+  /// can be rebuilt from installed assets or persistent app files.
+  ///
+  /// Parameters: none.
+  /// Return value: path like `<cacheRoot>/appCache/<entityName>`, or an
+  /// emulator-scoped equivalent.
+  /// Requirements/Preconditions: this entity has a non-empty resolved name.
+  /// Guarantees/Postconditions: the directory exists after this call.
+  /// Invariants: durable app data and evictable app cache remain separate.
+  String getPersistentAppCacheDirectory() {
+    final cacheRoot = _resolveCacheRoot();
+    final emulatorName = _resolveEmulatorName();
+    if (emulatorName != null) {
+      return _ensureDirectory(
+          '$cacheRoot/emulators/$emulatorName/appCache/$_entityName');
+    }
+    return _ensureDirectory('$cacheRoot/appCache/$_entityName');
   }
 
   /// Get the instance-scoped working directory.

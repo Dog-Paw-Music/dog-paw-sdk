@@ -21,6 +21,16 @@ void main() {
       expect(ScaleCatalog.isIncluded(scaleData, 4), isTrue);
       expect(ScaleCatalog.isIncluded(scaleData, 1), isFalse);
     });
+
+    test('ScaleDataForNameMarksTheRootWithTheDistinctRootCategory', () {
+      final ScaleData scaleData = ScaleCatalog.scaleDataForName(
+        scaleName: 'Major',
+        rootNote: 2,
+      );
+
+      expect(scaleData.noteCategories[2], equals(3));
+      expect(scaleData.noteCategories[4], equals(1));
+    });
   });
 
   group('ScaleCatalog root operations', () {
@@ -37,6 +47,20 @@ void main() {
       expect(ScaleCatalog.isIncluded(dMajor, 2), isTrue);
       expect(ScaleCatalog.isIncluded(dMajor, 6), isTrue);
       expect(ScaleCatalog.isIncluded(dMajor, 3), isFalse);
+    });
+
+    test('SetRootNotePreservesTheDistinctRootCategoryAtTheNewRoot', () {
+      final ScaleData cMajor = ScaleCatalog.scaleDataForName(
+        scaleName: 'Major',
+        rootNote: 0,
+      );
+
+      final ScaleData eMajor = ScaleCatalog.setRootNote(cMajor, 4);
+
+      expect(eMajor.rootNote, equals(4));
+      expect(eMajor.noteCategories[4], equals(3));
+      expect(eMajor.noteCategories[0], isNot(equals(3)));
+      expect(ScaleCatalog.detectScaleName(eMajor), equals('Major'));
     });
   });
 

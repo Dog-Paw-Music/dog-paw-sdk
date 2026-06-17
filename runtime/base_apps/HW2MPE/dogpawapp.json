@@ -4,5 +4,6 @@
   "type": "headless",
   "visible": "never",
   "executable": "HW2MPE",
+  "installDependencies": ["Voice2LED"],
   "version": "1.0"
 }

@@ -640,6 +640,8 @@ bool _layoutColorValueMapsEqual(
 /// Guarantees/Postconditions:
 /// - Output contains only keys inside `bounds`.
 /// - Each emitted key contains exactly one note intent.
+/// - The lowest generated note stays anchored to the edge implied by the
+///   effective signed row and column intervals.
 ///
 /// Invariants:
 /// - This helper is pure.
@@ -651,14 +653,19 @@ Map<String, List<Map<String, dynamic>>> generateIntervalGridKeyIntents(
       <String, List<Map<String, dynamic>>>{};
   final int baseOctave = 3 + settings.octaveTranspose;
   final int baseSemitoneOffset = settings.semitoneTranspose;
+  final int effectiveColumnInterval =
+      settings.columnIntervalRight ? settings.columnInterval : -settings.columnInterval;
+  final int effectiveRowInterval =
+      settings.rowIntervalUp ? settings.rowInterval : -settings.rowInterval;
+  final int lowestNoteColumn = effectiveColumnInterval >= 0 ? 0 : 7;
+  final int lowestNoteRow = effectiveRowInterval >= 0 ? 0 : 7;
 
   for (int column = bounds.startColumn; column <= bounds.endColumn; column += 1) {
     for (int row = bounds.startRow; row <= bounds.endRow; row += 1) {
-      final int effectiveColumn =
-          settings.columnIntervalRight ? column : (7 - column);
-      final int effectiveRow = settings.rowIntervalUp ? row : (7 - row);
-      final int offset = effectiveColumn * settings.columnInterval +
-          effectiveRow * settings.rowInterval;
+      final int columnDistanceFromLowestNote = column - lowestNoteColumn;
+      final int rowDistanceFromLowestNote = row - lowestNoteRow;
+      final int offset = columnDistanceFromLowestNote * effectiveColumnInterval +
+          rowDistanceFromLowestNote * effectiveRowInterval;
 
       final Map<String, dynamic> intent = <String, dynamic>{
         JsonFields.INTENT: JsonFields.MIDI_NOTE,
