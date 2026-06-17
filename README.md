@@ -8,6 +8,13 @@ Dog Paw SDK packages the public Flutter and Dart packages, curated teaching exam
 - Start with `examples/hello_dogpaw` before moving on to `examples/rain_pond` and `examples/namer`.
 - Use `tools/dogpaw` as the public command entrypoint.
 
+## Host Support
+
+- The supported desktop host is Linux.
+- Windows 11 developers should use WSL2 + WSLg.
+- The Windows/WSL path is for emulator and app-development workflows.
+- Audio is not yet supported on Windows hosts.
+
 ## First Newcomer Flow
 
 1. Create an emulator with `tools/dogpaw emulator create --name default`.
