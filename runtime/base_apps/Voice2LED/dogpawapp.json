@@ -3,6 +3,7 @@
   "displayName": "Voice to LED",
   "type": "headless",
   "visible": "never",
+  "instancePolicy": "multi_instance",
   "executable": "Voice2LED",
   "version": "1.0"
 }
