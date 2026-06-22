@@ -269,6 +269,7 @@ class NativeMemoryHandle {
       case DataType.toggle: return DPPBDataType.toggle;
       case DataType.momentary: return DPPBDataType.momentary;
       case DataType.enum_: return DPPBDataType.enumVal;
+      case DataType.color: return DPPBDataType.color;
       case DataType.audioStream: return DPPBDataType.audioStream;
       case DataType.keyPress: return DPPBDataType.keyPress;
       case DataType.nearPress: return DPPBDataType.nearPress;
@@ -280,7 +281,7 @@ class NativeMemoryHandle {
       case DataType.voiceMessage: return DPPBDataType.voiceMessage;
       case DataType.voiceOutputValue: return DPPBDataType.voiceOutputValue;
       case DataType.globalOutputValue: return DPPBDataType.globalOutputValue;
-      case DataType.dppParamQueue: return DPPBDataType.dppParamQueue;
+      case DataType.dppEditorMessage: return DPPBDataType.dppEditorMessage;
       case DataType.custom: return DPPBDataType.custom;
       case DataType.scopeBuffer: return DPPBDataType.scopeBuffer;
     }

@@ -23,6 +23,58 @@ class CommandResponseResult {
       'CommandResponseResult(success: $success, result: $result, error: $error)';
 }
 
+/// Snapshot of one endpoint's retained state, if any.
+///
+/// Purpose:
+/// Carries the app-facing answer for "what retained state does this endpoint
+/// currently expose?" across public query helpers and internal retained-state
+/// query command handling.
+///
+/// Parameters:
+/// - [hasState]: whether the endpoint currently has a valid retained state.
+/// - [value]: retained scalar value when [hasState] is true.
+/// - [timestampUs]: microseconds since the Unix epoch when the retained state
+///   most recently became valid.
+///
+/// Return value:
+/// - [toJson] returns the internal command-response payload.
+/// - [fromJson] parses that payload back into a typed snapshot.
+///
+/// Requirements/Preconditions:
+/// - When [hasState] is true, [value] should also be present.
+///
+/// Guarantees/Postconditions:
+/// - [toJson] always includes `hasState`.
+///
+/// Invariants:
+/// - This type describes one current snapshot only. It does not encode state
+///   history.
+class EndpointRetainedStateSnapshot {
+  final bool hasState;
+  final Object? value;
+  final int? timestampUs;
+
+  const EndpointRetainedStateSnapshot({
+    required this.hasState,
+    this.value,
+    this.timestampUs,
+  });
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'hasState': hasState,
+        if (value != null) JsonFields.VALUE: value,
+        if (timestampUs != null) JsonFields.TIMESTAMP: timestampUs,
+      };
+
+  factory EndpointRetainedStateSnapshot.fromJson(Map<String, dynamic> json) {
+    return EndpointRetainedStateSnapshot(
+      hasState: json['hasState'] as bool? ?? false,
+      value: json.containsKey(JsonFields.VALUE) ? json[JsonFields.VALUE] : null,
+      timestampUs: (json[JsonFields.TIMESTAMP] as num?)?.toInt(),
+    );
+  }
+}
+
 /// Callback type for "accepted" notifications on blocking commands.
 /// Called when the command receiver sends an "accepted" response.
 typedef OnAcceptedCallback = void Function(Map<String, dynamic> result);

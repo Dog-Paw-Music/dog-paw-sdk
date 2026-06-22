@@ -6,6 +6,7 @@ import 'dart:math';
 import 'package:dogpaw/dogpaw.dart';
 import 'package:dogpaw/src/ffi/native_bridge.dart';
 import 'package:dogpaw/src/ffi/native_dogpaw_entity.dart';
+import 'package:dogpaw/src/json_constants.dart';
 
 const Duration _connectionCountProbeChurnDuration = Duration(seconds: 6);
 const Duration _connectionCountWorkerDuration = Duration(seconds: 10);
@@ -76,6 +77,46 @@ Future<void> _createEndpointOrThrow(
       '${result.error}',
     );
   }
+}
+
+/// Purpose: Wait until one local endpoint reports at least one realized
+/// connection name, or fail if routing never appears.
+///
+/// Parameters:
+/// - [client]: connected native-backed entity that owns the local endpoint.
+/// - [endpointName]: owned endpoint name to inspect.
+/// - [timeout]: maximum time to wait for the first realized connection.
+///
+/// Return value:
+/// - `Future<String>` containing the first realized connection name.
+///
+/// Requirements/Preconditions:
+/// - [client] must already be connected.
+/// - [endpointName] must already exist on [client].
+///
+/// Guarantees/Postconditions:
+/// - Returns as soon as one realized connection appears.
+/// - Throws `StateError` if no connection appears before [timeout].
+///
+/// Invariants:
+/// - Does not modify endpoint state or payload contents.
+Future<String> _waitForFirstConnectionName(
+  NativeDogPawEntityClient client,
+  String endpointName, {
+  Duration timeout = const Duration(seconds: 3),
+}) async {
+  final DateTime deadline = DateTime.now().add(timeout);
+  while (DateTime.now().isBefore(deadline)) {
+    final List<String> connectionNames =
+        client.listLocalEndpointConnectionNames(endpointName);
+    if (connectionNames.isNotEmpty) {
+      return connectionNames.first;
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 25));
+  }
+  throw StateError(
+    'Timed out waiting for realized connection on $endpointName.',
+  );
 }
 
 /// Purpose: Create one connection request and delete it shortly afterward to
@@ -170,8 +211,7 @@ Future<void> _runConnectionCountWorkerIsolate(
   Map<String, Object?> rawMessage,
 ) async {
   final SendPort sendPort = rawMessage['sendPort']! as SendPort;
-  final String consumerEntityName =
-      rawMessage['consumerEntityName']! as String;
+  final String consumerEntityName = rawMessage['consumerEntityName']! as String;
   final List<String> endpointNames =
       List<String>.from(rawMessage['endpointNames']! as List<dynamic>);
   final NativeDogPawEntityClient consumer =
@@ -207,7 +247,7 @@ Future<void> _runConnectionCountWorkerIsolate(
     }
 
     sendPort.send(<String, Object?>{
-        'state': 'done',
+      'state': 'done',
       'iterations': iterationCount,
     });
   } catch (error, stackTrace) {
@@ -344,6 +384,234 @@ Future<void> _runConnectionCountDeadlockProbe() async {
   }
 }
 
+/// Purpose: Verify that bridge-local debug events preserve handoff order even
+/// when the producing native worker threads continue running afterward.
+///
+/// Parameters: None.
+///
+/// Return value:
+/// - `Future<void>` that completes after the probe observes two ordered debug
+///   events.
+///
+/// Requirements/Preconditions:
+/// - The Epiphany integration-test server must already be running.
+///
+/// Guarantees/Postconditions:
+/// - On success, the probe disconnects and disposes its native client before
+///   returning.
+///
+/// Invariants:
+/// - The expected order is `first`, then `second`.
+Future<void> _runDispatcherOrderProbe() async {
+  final NativeDogPawEntityClient client =
+      NativeDogPawEntityClient('NativeBridgeDispatcherOrderProbe');
+  final Completer<List<String>> labelsCompleter = Completer<List<String>>();
+  final List<String> labels = <String>[];
+
+  try {
+    await _connectAndComplete(client, 'NativeBridgeDispatcherOrderProbe');
+    client.setDebugProbeEventCallback((Map<String, dynamic> event) {
+      final Map<String, dynamic> result = Map<String, dynamic>.from(
+        event[JsonFields.RESULT] as Map? ?? <String, dynamic>{},
+      );
+      final String? label = result[JsonFields.LABEL] as String?;
+      if (label == null) {
+        return;
+      }
+      labels.add(label);
+      if (labels.length == 2 && !labelsCompleter.isCompleted) {
+        labelsCompleter.complete(List<String>.from(labels));
+      }
+    });
+
+    if (!client.runDebugDispatcherOrderProbe()) {
+      throw StateError('Failed to launch dispatcher order probe.');
+    }
+
+    final List<String> observedLabels = await labelsCompleter.future.timeout(
+      const Duration(seconds: 2),
+    );
+    if (observedLabels.length != 2 ||
+        observedLabels[0] != 'first' ||
+        observedLabels[1] != 'second') {
+      throw StateError(
+        'Expected debug probe labels [first, second], got $observedLabels',
+      );
+    }
+  } finally {
+    if (client.isConnected) {
+      client.disconnect();
+    }
+    await client.dispose();
+  }
+}
+
+/// Purpose: Verify that bridge shutdown drains a debug event that was already
+/// handed to the bridge before teardown began.
+///
+/// Parameters: None.
+///
+/// Return value:
+/// - `Future<void>` that completes after one shutdown-drain debug event is
+///   observed.
+///
+/// Requirements/Preconditions:
+/// - The Epiphany integration-test server must already be running.
+///
+/// Guarantees/Postconditions:
+/// - On success, the probe frees the native bridge after confirming delivery.
+///
+/// Invariants:
+/// - The observed debug label must be `drain-before-shutdown`.
+Future<void> _runShutdownDrainProbe() async {
+  final NativeDogPawEntityClient client =
+      NativeDogPawEntityClient('NativeBridgeShutdownDrainProbe');
+  final Completer<String> labelCompleter = Completer<String>();
+
+  try {
+    await _connectAndComplete(client, 'NativeBridgeShutdownDrainProbe');
+    client.setDebugProbeEventCallback((Map<String, dynamic> event) {
+      final Map<String, dynamic> result = Map<String, dynamic>.from(
+        event[JsonFields.RESULT] as Map? ?? <String, dynamic>{},
+      );
+      final String? label = result[JsonFields.LABEL] as String?;
+      if (label != null && !labelCompleter.isCompleted) {
+        labelCompleter.complete(label);
+      }
+    });
+
+    if (!client.runDebugShutdownDrainProbe()) {
+      throw StateError('Failed to launch shutdown drain probe.');
+    }
+
+    final String observedLabel = await labelCompleter.future.timeout(
+      const Duration(seconds: 2),
+    );
+    if (observedLabel != 'drain-before-shutdown') {
+      throw StateError(
+        'Expected shutdown drain label drain-before-shutdown, got '
+        '$observedLabel',
+      );
+    }
+  } finally {
+    await client.dispose();
+  }
+}
+
+/// Purpose: Exercise one native-backed continuous local endpoint before and
+/// after the first producer write so tests can inspect startup logging policy.
+///
+/// Parameters: None.
+///
+/// Return value:
+/// - `Future<void>` that completes after one initial empty poll and one
+///   successful poll after the first write.
+///
+/// Requirements/Preconditions:
+/// - The Epiphany integration-test server must already be running.
+///
+/// Guarantees/Postconditions:
+/// - The probe performs one startup poll before any writer publish completes.
+/// - The probe then writes one scalar payload and confirms a later poll sees
+///   data through the native local-endpoint bridge.
+///
+/// Invariants:
+/// - Uses unique entity and endpoint names per invocation.
+Future<void> _runContinuousStartupPollProbe() async {
+  final String suffix =
+      '${DateTime.now().microsecondsSinceEpoch}_${Random().nextInt(1 << 20)}';
+  final String endpointName = 'native_bridge_continuous_probe_$suffix';
+  final String consumerEntityName = 'ContinuousProbeConsumer_$suffix';
+  final DogPawEntity producer = DogPawEntity('ContinuousProbeProducer_$suffix');
+  final NativeDogPawEntityClient consumer =
+      NativeDogPawEntityClient(consumerEntityName);
+
+  try {
+    final ConnectionResult producerConnect = await producer.connect();
+    if (!producerConnect.success) {
+      throw StateError(
+        'Failed to connect probe producer: ${producerConnect.error}',
+      );
+    }
+    await producerConnect.handle!.complete();
+    await _connectAndComplete(consumer, consumerEntityName);
+
+    final Result<LocalEndpoint> outResult =
+        await producer.createEndpoint(EndpointInfo(
+      name: endpointName,
+      spec: EndpointSpec(
+        direction: EndpointDirection.output,
+        dataType: const DataTypeSpec(DataType.int_),
+        category: EndpointCategory.continuous,
+        connectionPolicy: ConnectionPolicy(
+          autoConnectCriteria: SearchCriteria.andCombination(<SearchCriteria>[
+            SearchCriteria.directionEquals(EndpointDirection.input),
+            SearchCriteria.nameEquals(endpointName),
+          ]),
+        ),
+      ),
+    ));
+    if (!outResult.success || outResult.value == null) {
+      throw StateError(
+        'Failed to create probe continuous output: ${outResult.error}',
+      );
+    }
+
+    await _createEndpointOrThrow(
+      consumer,
+      consumerEntityName,
+      EndpointInfo(
+        name: endpointName,
+        spec: EndpointSpec(
+          direction: EndpointDirection.input,
+          dataType: const DataTypeSpec(DataType.int_),
+          category: EndpointCategory.continuous,
+          connectionPolicy: ConnectionPolicy(
+            autoConnectCriteria: SearchCriteria.andCombination(<SearchCriteria>[
+              SearchCriteria.directionEquals(EndpointDirection.output),
+              SearchCriteria.nameEquals(endpointName),
+            ]),
+          ),
+        ),
+      ),
+    );
+
+    await _waitForFirstConnectionName(consumer, endpointName);
+    final List<LocalEndpointPollPacket> initialPackets =
+        consumer.pollLocalEndpointBytes(endpointName);
+    if (initialPackets.isNotEmpty) {
+      throw StateError(
+        'Expected initial continuous poll to be empty before first write.',
+      );
+    }
+
+    final bool writeResult = outResult.value!.write(42);
+    if (!writeResult) {
+      throw StateError('Failed to write first continuous probe payload.');
+    }
+
+    final DateTime deadline = DateTime.now().add(const Duration(seconds: 3));
+    while (DateTime.now().isBefore(deadline)) {
+      final List<LocalEndpointPollPacket> packets =
+          consumer.pollLocalEndpointBytes(endpointName);
+      if (packets.isNotEmpty) {
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 25));
+    }
+
+    throw StateError(
+      'Timed out waiting for first readable continuous payload.',
+    );
+  } finally {
+    producer.disconnect();
+    if (consumer.isConnected) {
+      consumer.disconnect();
+    }
+    await consumer.dispose();
+  }
+}
+
 /// Runs one deterministic native-bridge logging scenario in a fresh process.
 ///
 /// Purpose:
@@ -353,8 +621,9 @@ Future<void> _runConnectionCountDeadlockProbe() async {
 ///
 /// Parameters:
 /// - [args]: Exactly one scenario name. Supported values are
-///   `missing_port_file_check`, `wait_process_timeout`, and
-///   `connection_count_deadlock_probe`.
+///   `missing_port_file_check`, `wait_process_timeout`,
+///   `connection_count_deadlock_probe`, `dispatcher_order_probe`, and
+///   `shutdown_drain_probe`, and `continuous_startup_poll_probe`.
 ///
 /// Return value:
 /// - None.
@@ -405,6 +674,15 @@ Future<void> main(List<String> args) async {
       return;
     case 'connection_count_deadlock_probe':
       await _runConnectionCountDeadlockProbe();
+      return;
+    case 'dispatcher_order_probe':
+      await _runDispatcherOrderProbe();
+      return;
+    case 'shutdown_drain_probe':
+      await _runShutdownDrainProbe();
+      return;
+    case 'continuous_startup_poll_probe':
+      await _runContinuousStartupPollProbe();
       return;
   }
 

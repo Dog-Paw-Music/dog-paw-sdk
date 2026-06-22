@@ -43,6 +43,35 @@ class ConnectionResult {
         handle = null;
 }
 
+/// Purpose: Bundle the created stateful input and its matched committed-state
+/// output so callers can use both runtime handles without extra lookups.
+///
+/// Parameters:
+/// - [input]: Owned writable stateful input endpoint.
+/// - [matchedOutput]: Owned output endpoint that publishes committed state.
+///
+/// Return value:
+/// - None. This is a simple immutable data holder.
+///
+/// Requirements/Preconditions:
+/// - Both endpoints belong to the same owning `DogPawEntity`.
+///
+/// Guarantees/Postconditions:
+/// - Stores the two runtime handles exactly as provided.
+///
+/// Invariants:
+/// - [input] is the writable input surface and [matchedOutput] is the public
+///   committed-state publication surface.
+class StatefulEndpointPair {
+  final LocalEndpoint input;
+  final LocalEndpoint matchedOutput;
+
+  const StatefulEndpointPair({
+    required this.input,
+    required this.matchedOutput,
+  });
+}
+
 /// Purpose: Native-backed runtime adapter for one owned `LocalEndpoint`.
 ///
 /// Parameters:
@@ -71,6 +100,24 @@ class _NativeLocalEndpointRuntimeDelegate
   @override
   int get inputConnectionCount =>
       _client.listLocalEndpointConnectionNames(_endpointName).length;
+
+  @override
+  EndpointRetainedStateSnapshot getRetainedStateSnapshot() =>
+      _client.queryLocalEndpointRetainedState(_endpointName);
+
+  @override
+  bool adoptRetainedStateSnapshot(
+    EndpointRetainedStateSnapshot snapshot, {
+    bool publishMatchedOutput = true,
+    EndpointSenderInfo? senderInfo,
+  }) {
+    return _client.adoptLocalEndpointRetainedState(
+      _endpointName,
+      snapshot,
+      publishMatchedOutput: publishMatchedOutput,
+      senderInfo: senderInfo,
+    );
+  }
 
   @override
   bool writeBytes(Uint8List bytes, {bool immediate = true}) {
@@ -226,6 +273,9 @@ class ConnectionHandle {
 /// - Dart-side callback and local endpoint tracking
 
 class DogPawEntity {
+  static const String _internalRetainedStateQueryCommand =
+      '__dogpaw_query_endpoint_retained_state';
+  static const String _retainedStateQueryEndpointNameField = 'endpointName';
   //=========================================================================
   // TEST INFRASTRUCTURE OVERRIDES
   //=========================================================================
@@ -278,6 +328,9 @@ class DogPawEntity {
       _presetRequestCallback;
   final Map<String, Function(String connectionName, IndexSpec newIndexSpec)>
       _indexSpecChangeCallbacks = {};
+  final Map<String, EndpointRetainedStateSnapshot Function(LocalEndpoint endpoint)>
+      _endpointRetainedStateQueryCallbacks =
+      <String, EndpointRetainedStateSnapshot Function(LocalEndpoint endpoint)>{};
 
   // Endpoint registry (live local endpoints created by this entity)
   // Maps endpoint name to LocalEndpoint object
@@ -1227,7 +1280,7 @@ class DogPawEntity {
       );
       client.setErrorCallback(_errorCallback);
       client.setDirectMessageCallback(_directMessageCallback);
-      client.setCommandCallback(_commandCallback);
+      client.setCommandCallback(_handleIncomingCommand);
       client.setPresetRequestCallback(_presetRequestCallback);
       _nativeClient = client;
 
@@ -1401,7 +1454,112 @@ class DogPawEntity {
               String commandId)
           callback) {
     _commandCallback = callback;
-    _nativeClient?.setCommandCallback(callback);
+    _nativeClient?.setCommandCallback(_handleIncomingCommand);
+  }
+
+  /// Purpose: Register one manual retained-state query responder for an owned
+  /// endpoint.
+  ///
+  /// Parameters:
+  /// - [endpointName]: owned endpoint name whose retained-state queries should
+  ///   use [callback].
+  /// - [callback]: synchronous responder that receives the live local endpoint
+  ///   wrapper and returns the snapshot to send.
+  ///
+  /// Return value:
+  /// - None.
+  ///
+  /// Requirements/Preconditions:
+  /// - [endpointName] identifies a local endpoint when the callback is expected
+  ///   to run.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Future retained-state queries for [endpointName] use [callback] before
+  ///   the automatic mirrored-state responder.
+  ///
+  /// Invariants:
+  /// - Registration is scoped to this `DogPawEntity` instance only.
+  void registerEndpointRetainedStateQueryCallback(
+    String endpointName,
+    EndpointRetainedStateSnapshot Function(LocalEndpoint endpoint) callback,
+  ) {
+    _endpointRetainedStateQueryCallbacks[endpointName] = callback;
+  }
+
+  /// Purpose: Remove one manual retained-state query responder.
+  ///
+  /// Parameters:
+  /// - [endpointName]: endpoint name previously registered with
+  ///   [registerEndpointRetainedStateQueryCallback].
+  ///
+  /// Return value:
+  /// - None.
+  ///
+  /// Requirements/Preconditions:
+  /// - None.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Future retained-state queries for [endpointName] fall back to the
+  ///   automatic mirrored-state responder.
+  ///
+  /// Invariants:
+  /// - Removing one callback does not affect any other endpoint.
+  void clearEndpointRetainedStateQueryCallback(String endpointName) {
+    _endpointRetainedStateQueryCallbacks.remove(endpointName);
+  }
+
+  /// Purpose: Answer one incoming internal retained-state query or forward the
+  /// command to the user callback when it is not internal.
+  ///
+  /// Parameters:
+  /// - [senderEntity]: entity that sent the command.
+  /// - [command]: command name delivered by the native bridge.
+  /// - [params]: command payload.
+  /// - [commandId]: response correlation id.
+  ///
+  /// Return value:
+  /// - None.
+  ///
+  /// Requirements/Preconditions:
+  /// - None.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Internal retained-state queries receive one command response when
+  ///   possible.
+  /// - Other commands are forwarded unchanged to the user callback, if any.
+  ///
+  /// Invariants:
+  /// - Transport details for retained-state queries stay hidden from callers of
+  ///   the public query API.
+  void _handleIncomingCommand(
+    String senderEntity,
+    String command,
+    Map<String, dynamic> params,
+    String commandId,
+  ) {
+    if (command == _internalRetainedStateQueryCommand) {
+      final String endpointName =
+          params[_retainedStateQueryEndpointNameField] as String? ?? '';
+      final LocalEndpoint? endpoint = _myEndpoints[endpointName];
+      final EndpointRetainedStateSnapshot snapshot;
+      if (endpoint == null) {
+        snapshot = const EndpointRetainedStateSnapshot(hasState: false);
+      } else {
+        final responder = _endpointRetainedStateQueryCallbacks[endpointName];
+        snapshot = responder != null
+            ? responder(endpoint)
+            : _requireNativeClient().queryLocalEndpointRetainedState(endpointName);
+      }
+      sendCommandResponse(
+        senderEntity,
+        commandId,
+        success: true,
+        result: snapshot.toJson(),
+      );
+      return;
+    }
+
+    _commandCallback?.call(senderEntity, command, params, commandId);
   }
 
   /// Set preset request callback
@@ -1599,6 +1757,85 @@ class DogPawEntity {
             }
           }
         }
+      } else if (type == 'stateful_input_action') {
+        final String? localName = message[JsonFields.NAME] as String?;
+        final dynamic connectionData = message[JsonFields.CONNECTION];
+        if (localName == null ||
+            connectionData is! Map<String, dynamic> ||
+            !_myEndpoints.containsKey(localName)) {
+          return;
+        }
+
+        final LocalEndpoint endpoint = _myEndpoints[localName]!;
+        final EndpointSpec? effectiveSpec = endpoint.spec ?? endpoint.resolved;
+        if (effectiveSpec == null) {
+          return;
+        }
+
+        final String connectionName =
+            connectionData[JsonFields.NAME] as String? ?? '';
+        final dynamic targetJson = connectionData[JsonFields.TARGET];
+        final dynamic actionJson = connectionData[JsonFields.ACTION_PAYLOAD];
+        if (connectionName.isEmpty ||
+            targetJson is! Map<String, dynamic> ||
+            actionJson is! Map<String, dynamic>) {
+          return;
+        }
+
+        final EndpointSenderInfo senderInfo = EndpointSenderInfo(
+          connectionName: connectionName,
+          sourceEndpointRef: DataItemRef.fromJson(targetJson),
+        );
+
+        switch (effectiveSpec.dataType.baseType) {
+          case DataType.float:
+            final double? retainedValue =
+                (connectionData[JsonFields.RETAINED_VALUE] as num?)?.toDouble();
+            endpoint.dispatchStatefulFloatActionEvent(
+              action: StatefulFloatAction.fromJson(actionJson),
+              senderInfo: senderInfo,
+              retainedValue: retainedValue,
+            );
+            break;
+          case DataType.int_:
+            final int? retainedValue =
+                connectionData[JsonFields.RETAINED_VALUE] as int?;
+            endpoint.dispatchStatefulIntActionEvent(
+              action: StatefulIntAction.fromJson(actionJson),
+              senderInfo: senderInfo,
+              retainedValue: retainedValue,
+            );
+            break;
+          case DataType.toggle:
+            final bool? retainedValue =
+                connectionData[JsonFields.RETAINED_VALUE] as bool?;
+            endpoint.dispatchStatefulToggleActionEvent(
+              action: StatefulToggleAction.fromJson(actionJson),
+              senderInfo: senderInfo,
+              retainedValue: retainedValue,
+            );
+            break;
+          case DataType.enum_:
+            final int? retainedValue =
+                connectionData[JsonFields.RETAINED_VALUE] as int?;
+            endpoint.dispatchStatefulEnumActionEvent(
+              action: StatefulEnumAction.fromJson(actionJson),
+              senderInfo: senderInfo,
+              retainedValue: retainedValue,
+            );
+            break;
+          case DataType.color:
+            final int? retainedValue =
+                connectionData[JsonFields.RETAINED_VALUE] as int?;
+            endpoint.dispatchStatefulColorActionEvent(
+              action: StatefulColorAction.fromJson(actionJson),
+              senderInfo: senderInfo,
+              retainedValue: retainedValue,
+            );
+            break;
+          default:
+            break;
+        }
       }
     } catch (e) {
       AppLogger.debug('Error handling endpoint notification: $e');
@@ -1702,6 +1939,71 @@ class DogPawEntity {
     } catch (e) {
       return CommandResponseResult.errorResult('Command error: $e');
     }
+  }
+
+  /// Purpose: Query one endpoint's retained-state snapshot through DogPawEntity
+  /// without exposing the internal command transport.
+  ///
+  /// Parameters:
+  /// - [name]: endpoint name to query.
+  /// - [namespaceSelector]: specific owner namespace for the endpoint.
+  /// - [timeout]: maximum time to wait for a remote response.
+  ///
+  /// Return value:
+  /// - `Future<Result<EndpointRetainedStateSnapshot>>` describing the current
+  ///   retained state, if any.
+  ///
+  /// Requirements/Preconditions:
+  /// - [namespaceSelector] must resolve to one specific entity.
+  ///
+  /// Guarantees/Postconditions:
+  /// - On success, callers receive one typed snapshot rather than raw command
+  ///   payload JSON.
+  ///
+  /// Invariants:
+  /// - The query itself does not mutate endpoint metadata or connection state.
+  Future<Result<EndpointRetainedStateSnapshot>> queryEndpointRetainedState(
+    String name, {
+    required NamespaceSelector namespaceSelector,
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    NamespaceSelector resolvedSelector = namespaceSelector;
+    if (namespaceSelector.isCurrentEntity) {
+      resolvedSelector = NamespaceSelector.specificEntity(_entityName);
+    }
+    if (!resolvedSelector.isSpecificEntity || resolvedSelector.sourceEntity == null) {
+      return Result<EndpointRetainedStateSnapshot>.error(
+        'Retained-state query requires a specific entity namespace',
+      );
+    }
+
+    if (resolvedSelector.sourceEntity == _entityName) {
+      final LocalEndpoint? endpoint = _myEndpoints[name];
+      if (endpoint == null) {
+        return Result<EndpointRetainedStateSnapshot>.success(
+          const EndpointRetainedStateSnapshot(hasState: false),
+        );
+      }
+      final responder = _endpointRetainedStateQueryCallbacks[name];
+      final EndpointRetainedStateSnapshot snapshot = responder != null
+          ? responder(endpoint)
+          : _requireNativeClient().queryLocalEndpointRetainedState(name);
+      return Result<EndpointRetainedStateSnapshot>.success(snapshot);
+    }
+
+    final CommandResponseResult commandResult = await sendCommand(
+      resolvedSelector.sourceEntity!,
+      _internalRetainedStateQueryCommand,
+      params: <String, dynamic>{_retainedStateQueryEndpointNameField: name},
+      timeout: timeout,
+      deliveryPolicy: const CommandDeliveryPolicy(waitForReady: false),
+    );
+    if (!commandResult.success) {
+      return Result<EndpointRetainedStateSnapshot>.error(commandResult.error);
+    }
+    return Result<EndpointRetainedStateSnapshot>.success(
+      EndpointRetainedStateSnapshot.fromJson(commandResult.result),
+    );
   }
 
   /// Send a response to a received command.
@@ -2002,6 +2304,118 @@ class DogPawEntity {
   Future<Result<LocalEndpoint>> createEndpoint(EndpointInfo endpoint) async {
     return _runNativeEndpointMutation(
       (NativeDogPawEntityClient client) => client.createEndpoint(endpoint),
+    );
+  }
+
+  /// Purpose: Create one stateful input and its matched committed-state output.
+  ///
+  /// Parameters:
+  /// - [endpoint]: Input endpoint whose `statefulInput.matchedOutput` declares
+  ///   the public output metadata to create alongside it.
+  ///
+  /// Return value:
+  /// - `Future<Result<StatefulEndpointPair>>` with both live owned endpoints on
+  ///   success.
+  ///
+  /// Requirements/Preconditions:
+  /// - [endpoint.spec] describes an input `MESSAGE_QUEUE` endpoint.
+  /// - [endpoint.spec.statefulInput.matchedOutput] exists and has a non-empty
+  ///   name.
+  ///
+  /// Guarantees/Postconditions:
+  /// - On success, both endpoints exist and native auto-reduced input handling
+  ///   publishes normalized committed-state updates through the matched output.
+  /// - On failure after the input was created, this helper attempts to delete
+  ///   the partially created input before returning the error.
+  ///
+  /// Invariants:
+  /// - This helper leaves the existing single-endpoint CRUD APIs unchanged.
+  Future<Result<StatefulEndpointPair>> createStatefulInputWithMatchedOutput(
+    EndpointInfo endpoint,
+  ) async {
+    final EndpointSpec? spec = endpoint.spec;
+    if (spec == null) {
+      return Result<StatefulEndpointPair>.error(
+        'Stateful input helper requires endpoint metadata',
+      );
+    }
+    final EndpointStatefulInputSpec? statefulInput = spec.statefulInput;
+    final MatchedStateOutputSpec? matchedOutputSpec =
+        statefulInput?.matchedOutput;
+
+    if (spec.direction != EndpointDirection.input) {
+      return Result<StatefulEndpointPair>.error(
+        'Stateful input helper requires an input endpoint',
+      );
+    }
+    if (spec.category != EndpointCategory.messageQueue) {
+      return Result<StatefulEndpointPair>.error(
+        'Stateful input helper currently supports only message-queue inputs',
+      );
+    }
+    if (statefulInput == null || matchedOutputSpec == null) {
+      return Result<StatefulEndpointPair>.error(
+        'Stateful input helper requires statefulInput.matchedOutput configuration',
+      );
+    }
+    if (matchedOutputSpec.name.isEmpty) {
+      return Result<StatefulEndpointPair>.error(
+        'Stateful input helper requires a non-empty matched output name',
+      );
+    }
+    if (statefulInput.consumptionMode ==
+        StatefulInputConsumptionMode.callbackOnly) {
+      return Result<StatefulEndpointPair>.error(
+        'Stateful input helper requires retained state so callback-only consumption is not supported',
+      );
+    }
+    switch (spec.dataType.baseType) {
+      case DataType.float:
+      case DataType.int_:
+      case DataType.toggle:
+      case DataType.enum_:
+      case DataType.color:
+        break;
+      default:
+        return Result<StatefulEndpointPair>.error(
+          'Stateful input helper currently supports FLOAT, INT, TOGGLE, ENUM, and COLOR only',
+        );
+    }
+
+    final Result<LocalEndpoint> inputResult = await createEndpoint(endpoint);
+    if (!inputResult.success || inputResult.value == null) {
+      return Result<StatefulEndpointPair>.error(inputResult.error);
+    }
+
+    final Result<LocalEndpoint> matchedOutputResult = await createEndpoint(
+      EndpointInfo(
+        name: matchedOutputSpec.name,
+        spec: EndpointSpec(
+          direction: EndpointDirection.output,
+          dataType: spec.dataType,
+          displayName: matchedOutputSpec.displayName,
+          description: matchedOutputSpec.description,
+          category: spec.category,
+          messageQueuePayloadContract: spec.messageQueuePayloadContract,
+          flags: matchedOutputSpec.flags,
+          groupKey: matchedOutputSpec.groupKey,
+        ),
+      ),
+    );
+    if (!matchedOutputResult.success || matchedOutputResult.value == null) {
+      final Result<bool> rollbackResult = await deleteEndpoint(endpoint.name);
+      String error = matchedOutputResult.error;
+      if (!rollbackResult.success) {
+        error = '$error; rollback failed: ${rollbackResult.error}';
+      }
+      return Result<StatefulEndpointPair>.error(error);
+    }
+
+    return Result<StatefulEndpointPair>.success(
+      StatefulEndpointPair(
+        input: inputResult.value!,
+        matchedOutput: matchedOutputResult.value!,
+      ),
     );
   }
 

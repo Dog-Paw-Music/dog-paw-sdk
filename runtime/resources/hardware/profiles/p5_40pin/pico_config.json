@@ -33,6 +33,7 @@
     "i2cSdaPin": 0,
     "i2cSclPin": 1,
     "buttonPins": [-1, -1, -1, -1, -1, -1],
-    "encoderPins0": [-1, -1, -1, -1, -1, -1]
+    "encoderPins0": [-1, -1, -1, -1, -1, -1],
+    "encoderTransitionsPerDetent": 2
   }
 }

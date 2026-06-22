@@ -196,6 +196,7 @@ class NativeDogPawEntityClient {
       String commandId)? _commandCallback;
   Future<bool> Function(String serverRequestId, Map<String, dynamic> content)?
       _presetRequestCallback;
+  void Function(Map<String, dynamic> event)? _debugProbeEventCallback;
   final Map<int, OnAcceptedCallback> _pendingCommandAcceptedCallbacks =
       <int, OnAcceptedCallback>{};
 
@@ -466,6 +467,31 @@ class NativeDogPawEntityClient {
   ) {
     _ensureNotDisposed();
     _presetRequestCallback = callback;
+  }
+
+  /// Purpose: Store the Dart callback that receives synthetic bridge probe
+  /// events.
+  ///
+  /// Parameters:
+  /// - [callback]: optional callback invoked with the full debug-probe event
+  ///   envelope, or `null` to clear it.
+  ///
+  /// Return value: None.
+  ///
+  /// Requirements/Preconditions:
+  /// - The wrapper has not been disposed.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Future native `debugProbe` envelopes are forwarded to [callback] when
+  ///   set.
+  ///
+  /// Invariants:
+  /// - This test hook is for bridge integration probes only.
+  void setDebugProbeEventCallback(
+    void Function(Map<String, dynamic> event)? callback,
+  ) {
+    _ensureNotDisposed();
+    _debugProbeEventCallback = callback;
   }
 
   /// Purpose: Normalize entity lifecycle filters for native requests and local
@@ -1001,6 +1027,52 @@ class NativeDogPawEntityClient {
       success: success,
       errorMessage: errorMessage,
     );
+  }
+
+  /// Purpose: Launch the native dispatcher-order probe for bridge integration
+  /// tests.
+  ///
+  /// Parameters: None.
+  ///
+  /// Return value:
+  /// - `bool` indicating whether the native probe started successfully.
+  ///
+  /// Requirements/Preconditions:
+  /// - The wrapper has not been disposed.
+  /// - A debug-probe callback should already be registered if the caller needs
+  ///   to observe the emitted events.
+  ///
+  /// Guarantees/Postconditions:
+  /// - On success, the native bridge will emit synthetic `debugProbe` events.
+  ///
+  /// Invariants:
+  /// - This helper is reserved for bridge integration probes.
+  bool runDebugDispatcherOrderProbe() {
+    _ensureNotDisposed();
+    return _bridge.dpeDebugRunDispatcherOrderProbeManaged(_nativeHandle);
+  }
+
+  /// Purpose: Launch the native shutdown-drain probe for bridge integration
+  /// tests.
+  ///
+  /// Parameters: None.
+  ///
+  /// Return value:
+  /// - `bool` indicating whether the native probe started successfully.
+  ///
+  /// Requirements/Preconditions:
+  /// - The wrapper has not been disposed.
+  /// - A debug-probe callback should already be registered if the caller needs
+  ///   to observe the emitted events.
+  ///
+  /// Guarantees/Postconditions:
+  /// - On success, the native bridge runs its shutdown path before returning.
+  ///
+  /// Invariants:
+  /// - This helper is reserved for bridge integration probes.
+  bool runDebugShutdownDrainProbe() {
+    _ensureNotDisposed();
+    return _bridge.dpeDebugRunShutdownDrainProbeManaged(_nativeHandle);
   }
 
   /// Purpose: Save one global preset through the native DogPawEntity bridge.
@@ -3593,6 +3665,110 @@ class NativeDogPawEntityClient {
     }
   }
 
+  /// Purpose: Read the native retained-state snapshot for one owned local
+  /// endpoint.
+  ///
+  /// Parameters:
+  /// - [endpointName]: `String` owned endpoint name in the current entity.
+  ///
+  /// Return value:
+  /// - `EndpointRetainedStateSnapshot` reported by the native local endpoint
+  ///   runtime, or `hasState: false` when the snapshot cannot be read.
+  ///
+  /// Requirements/Preconditions:
+  /// - This wrapper has not been disposed.
+  ///
+  /// Guarantees/Postconditions:
+  /// - The returned snapshot comes directly from the native runtime rather than
+  ///   a Dart-side mirror.
+  ///
+  /// Invariants:
+  /// - This helper does not mutate wrapper state.
+  EndpointRetainedStateSnapshot queryLocalEndpointRetainedState(
+      String endpointName) {
+    _ensureNotDisposed();
+    final int requiredSize = _bridge.dpeLocalEndpointGetRetainedStateJsonManaged(
+      _nativeHandle,
+      endpointName: endpointName,
+      maxSize: 0,
+    );
+    if (requiredSize <= 0) {
+      return const EndpointRetainedStateSnapshot(hasState: false);
+    }
+
+    final Pointer<Utf8> bufferPtr = malloc<Uint8>(requiredSize).cast<Utf8>();
+    try {
+      final int writeResult = _bridge.dpeLocalEndpointGetRetainedStateJsonManaged(
+        _nativeHandle,
+        endpointName: endpointName,
+        outJson: bufferPtr,
+        maxSize: requiredSize,
+      );
+      if (writeResult <= 0) {
+        return const EndpointRetainedStateSnapshot(hasState: false);
+      }
+      final String jsonText = bufferPtr.toDartString();
+      final dynamic decoded = jsonDecode(jsonText);
+      if (decoded is! Map<String, dynamic>) {
+        return const EndpointRetainedStateSnapshot(hasState: false);
+      }
+      return EndpointRetainedStateSnapshot.fromJson(decoded);
+    } catch (_) {
+      return const EndpointRetainedStateSnapshot(hasState: false);
+    } finally {
+      malloc.free(bufferPtr);
+    }
+  }
+
+  /// Purpose: Adopt one retained-state snapshot into the native runtime for one
+  /// owned local endpoint.
+  ///
+  /// Parameters:
+  /// - [endpointName]: `String` owned endpoint name in the current entity.
+  /// - [snapshot]: `EndpointRetainedStateSnapshot` to commit into native
+  ///   retained state.
+  /// - [publishMatchedOutput]: `bool` controlling whether any linked matched
+  ///   output publishes the committed state immediately.
+  /// - [senderInfo]: optional `EndpointSenderInfo` describing the upstream
+  ///   request identity associated with this accepted commit.
+  ///
+  /// Return value:
+  /// - `true` when the native runtime accepted and applied [snapshot],
+  ///   otherwise `false`.
+  ///
+  /// Requirements/Preconditions:
+  /// - This wrapper has not been disposed.
+  ///
+  /// Guarantees/Postconditions:
+  /// - On success, future native retained-state reads for [endpointName]
+  ///   reflect [snapshot].
+  /// - When [publishMatchedOutput] is `true`, linked matched output publication
+  ///   follows the native endpoint path.
+  ///
+  /// Invariants:
+  /// - This helper does not mutate Dart-side metadata caches directly.
+  bool adoptLocalEndpointRetainedState(
+    String endpointName,
+    EndpointRetainedStateSnapshot snapshot, {
+    bool publishMatchedOutput = true,
+    EndpointSenderInfo? senderInfo,
+  }) {
+    _ensureNotDisposed();
+    final String? senderInfoJson = senderInfo == null
+        ? null
+        : jsonEncode(<String, dynamic>{
+            JsonFields.NAME: senderInfo.connectionName,
+            JsonFields.TARGET: senderInfo.sourceEndpointRef.toJson(),
+          });
+    return _bridge.dpeLocalEndpointAdoptRetainedStateJsonManaged(
+      _nativeHandle,
+      endpointName: endpointName,
+      snapshotJson: jsonEncode(snapshot.toJson()),
+      publishMatchedOutput: publishMatchedOutput,
+      senderInfoJson: senderInfoJson,
+    );
+  }
+
   /// Purpose: Poll serialized bytes from the native-owned runtime for one local
   /// endpoint.
   ///
@@ -4436,6 +4612,7 @@ class NativeDogPawEntityClient {
     _directMessageCallback = null;
     _commandCallback = null;
     _presetRequestCallback = null;
+    _debugProbeEventCallback = null;
   }
 
   /// Purpose: Run one native request that returns only success or failure.
@@ -5185,6 +5362,15 @@ class NativeDogPawEntityClient {
 
     if (eventType == 'presetRequest') {
       _handlePresetRequestEvent(decoded);
+      return;
+    }
+
+    if (eventType == 'debugProbe') {
+      final void Function(Map<String, dynamic> event)? callback =
+          _debugProbeEventCallback;
+      if (callback != null) {
+        callback(decoded);
+      }
       return;
     }
 

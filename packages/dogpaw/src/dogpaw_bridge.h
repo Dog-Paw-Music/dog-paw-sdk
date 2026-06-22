@@ -49,6 +49,7 @@ enum {
   DPPB_TYPE_TOGGLE,
   DPPB_TYPE_MOMENTARY,
   DPPB_TYPE_ENUM,
+  DPPB_TYPE_COLOR,
   DPPB_TYPE_AUDIO_STREAM,
   DPPB_TYPE_KEY_PRESS,
   DPPB_TYPE_NEAR_PRESS,
@@ -60,7 +61,7 @@ enum {
   DPPB_TYPE_VOICE_MESSAGE,
   DPPB_TYPE_VOICE_OUTPUT_VALUE,
   DPPB_TYPE_GLOBAL_OUTPUT_VALUE,
-  DPPB_TYPE_DPP_PARAM_QUEUE,
+  DPPB_TYPE_DPP_EDITOR_MESSAGE,
   DPPB_TYPE_CUSTOM,
   DPPB_TYPE_SCOPE_BUFFER
 };
@@ -499,6 +500,42 @@ bool dppb_dpe_complete_preset_request(void* handle,
                                       const char* server_request_id,
                                       bool success,
                                       const char* error_message);
+
+/**
+ * @brief Launch the native dispatcher-order probe used by bridge integration
+ * tests.
+ *
+ * Purpose:
+ * Starts a bridge-local synthetic event scenario that integration tests use to
+ * distinguish direct multi-threaded Dart posting from a single dispatcher
+ * queue.
+ *
+ * @param handle Opaque bridge handle returned by `dppb_dpe_create()`.
+ * @return `true` if the probe worker threads were launched successfully,
+ *   otherwise `false`.
+ *
+ * @pre `handle` is a live bridge handle with an event port already registered.
+ * @post On success, synthetic debug-probe events will be posted back to Dart.
+ * @invariant This helper is intended only for bridge integration tests.
+ */
+bool dppb_dpe_debug_run_dispatcher_order_probe(void* handle);
+
+/**
+ * @brief Run the native shutdown-drain probe used by bridge integration tests.
+ *
+ * Purpose:
+ * Exercises native bridge shutdown while a synthetic event should already
+ * belong to the bridge, letting integration tests verify whether teardown
+ * drains accepted work before returning.
+ *
+ * @param handle Opaque bridge handle returned by `dppb_dpe_create()`.
+ * @return `true` if the probe ran successfully, otherwise `false`.
+ *
+ * @pre `handle` is a live bridge handle with an event port already registered.
+ * @post On success, the bridge shutdown path has completed before return.
+ * @invariant This helper is intended only for bridge integration tests.
+ */
+bool dppb_dpe_debug_run_shutdown_drain_probe(void* handle);
 
 /**
  * @brief Launch an asynchronous native-backed `saveGlobalState()` request.
@@ -1971,6 +2008,73 @@ int32_t dppb_dpe_local_endpoint_poll_connection(
     const char* connection_name,
     void* out_data,
     int32_t max_size);
+
+/**
+ * @brief Read one native-owned local endpoint's retained-state snapshot as
+ * JSON.
+ *
+ * Purpose:
+ * Gives Dart direct access to the native endpoint runtime's retained-state
+ * snapshot without rebuilding that state in the wrapper layer.
+ *
+ * @param handle Opaque bridge handle returned by `dppb_dpe_create()`.
+ * @param endpoint_name Owned endpoint name in the current entity namespace.
+ * @param out_json Writable UTF-8 buffer that receives snapshot JSON, or null to
+ *   query the required size.
+ * @param max_size Capacity of `out_json` in bytes including the terminator.
+ * @return Required byte count including the terminator on success, or `-1` on
+ *   error.
+ *
+ * @pre `handle` is a live bridge handle.
+ * @pre `endpoint_name` points to a valid null-terminated UTF-8 string.
+ * @pre When `out_json` is non-null, it points to at least `max_size` writable
+ * bytes.
+ * @post When `out_json` is non-null and large enough, it contains one
+ * null-terminated UTF-8 JSON object matching `EndpointRetainedStateSnapshot`.
+ * @invariant Endpoint metadata and runtime state are unchanged by this read.
+ */
+int32_t dppb_dpe_local_endpoint_get_retained_state_json(
+    void* handle,
+    const char* endpoint_name,
+    char* out_json,
+    int32_t max_size);
+
+/**
+ * @brief Adopt one retained-state snapshot into a native-owned local stateful
+ * input endpoint.
+ *
+ * Purpose:
+ * Exposes the wrapped C++ `Endpoint::adoptRetainedStateSnapshot()` primitive so
+ * the Dart facade can commit accepted state through the same native runtime
+ * path used by C++ owners.
+ *
+ * @param handle Opaque bridge handle returned by `dppb_dpe_create()`.
+ * @param endpoint_name Owned endpoint name in the current entity namespace.
+ * @param snapshot_json UTF-8 JSON object matching
+ *   `EndpointRetainedStateSnapshot`.
+ * @param publish_matched_output Whether a linked matched output should publish
+ *   the committed state immediately.
+ * @param sender_info_json Optional UTF-8 JSON object describing
+ *   `EndpointSenderInfo`, or null/empty when no sender identity should be
+ *   attached.
+ * @return `true` when the snapshot was adopted successfully, otherwise `false`.
+ *
+ * @pre `handle` is a live bridge handle.
+ * @pre `endpoint_name` and `snapshot_json` point to valid null-terminated UTF-8
+ * strings.
+ * @pre When `sender_info_json` is non-null and non-empty, it encodes an object
+ * with `name` and `target` fields compatible with the native sender contract.
+ * @post On success, the endpoint's retained state matches `snapshot_json`.
+ * @post When `publish_matched_output` is `true`, a linked matched output
+ * publishes the committed state through the normal native path.
+ * @invariant This function does not mutate authored endpoint metadata.
+ */
+bool dppb_dpe_local_endpoint_adopt_retained_state_json(
+    void* handle,
+    const char* endpoint_name,
+    const char* snapshot_json,
+    bool publish_matched_output,
+    const char* sender_info_json);
 
 /**
  * @brief Read the current bytes for one realized native file-backed input

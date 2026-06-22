@@ -284,5 +284,52 @@ void main() {
 
       expect(resolved, bridgePath);
     });
+
+    test(
+        'resolveBridgeLibraryPathForFixture falls back to source checkout build outputs when package prebuilt is absent',
+        () async {
+      final Directory tempRoot = await Directory.systemTemp.createTemp(
+        'dogpaw_test_source_bridge_paths_',
+      );
+      addTearDown(() async {
+        if (await tempRoot.exists()) {
+          await tempRoot.delete(recursive: true);
+        }
+      });
+
+      final String dogpawTestPackageRootPath = path.join(
+        tempRoot.path,
+        'tree',
+        'apps',
+        'packages',
+        'dogpaw_test',
+      );
+      final String dogpawPackageRootPath = path.join(
+        tempRoot.path,
+        'tree',
+        'apps',
+        'packages',
+        'dogpaw',
+      );
+      final String bridgePath = path.join(
+        tempRoot.path,
+        'tree',
+        'build_local',
+        'lib',
+        'libdogpaw_bridge.so',
+      );
+      await Directory(dogpawTestPackageRootPath).create(recursive: true);
+      await Directory(dogpawPackageRootPath).create(recursive: true);
+      await Directory(path.dirname(bridgePath)).create(recursive: true);
+      await File(bridgePath).writeAsString('bridge');
+
+      final String? resolved = resolveBridgeLibraryPathForFixture(
+        environment: const <String, String>{},
+        dogpawTestPackageRootPath: dogpawTestPackageRootPath,
+        dogpawPackageRootPath: dogpawPackageRootPath,
+      );
+
+      expect(resolved, bridgePath);
+    });
   });
 }

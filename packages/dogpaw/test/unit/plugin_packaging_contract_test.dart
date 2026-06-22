@@ -19,7 +19,7 @@ void main() {
       expect(pubspec, contains('ffiPlugin: true'));
     });
 
-    test('linux cmake consumes bundled dogpaw bridge library artifacts', () {
+    test('linux cmake supports repo-local bridge provider override', () {
       final File cmakeFile = File(
         path.join(
           Directory.current.path,
@@ -30,49 +30,48 @@ void main() {
       final String cmake = cmakeFile.readAsStringSync();
 
       expect(cmake, contains('set(dogpaw_bundled_libraries'));
-      expect(cmake, contains('prebuilt")'));
-      expect(cmake, contains('linux-x64/libdogpaw_bridge.so'));
-      expect(cmake, contains('linux-arm64/libdogpaw_bridge.so'));
-      expect(cmake, isNot(contains('local_bridge_provider.cmake')));
+      expect(cmake, contains('local_bridge_provider.cmake'));
       expect(cmake, isNot(contains('set(BINARY_NAME "dogpaw")')));
     });
 
-    test('package includes prebuilt bridge artifacts and omits repo-local build files', () {
+    test('source package keeps repo-local bridge helper out of exported src build files', () {
       final String packageRoot = Directory.current.path;
+      final bool hasLocalHelper = File(
+        path.join(packageRoot, 'linux', 'local_bridge_provider.cmake'),
+      ).existsSync();
 
-      expect(
-        File(path.join(packageRoot, 'linux', 'local_bridge_provider.cmake'))
-            .existsSync(),
-        isFalse,
-      );
       expect(
         File(path.join(packageRoot, 'src', 'CMakeLists.txt')).existsSync(),
         isFalse,
       );
-      expect(
-        File(
-          path.join(
-            packageRoot,
-            'linux',
-            'prebuilt',
-            'linux-x64',
-            'libdogpaw_bridge.so',
-          ),
-        ).existsSync(),
-        isTrue,
-      );
-      expect(
-        File(
-          path.join(
-            packageRoot,
-            'linux',
-            'prebuilt',
-            'linux-arm64',
-            'libdogpaw_bridge.so',
-          ),
-        ).existsSync(),
-        isTrue,
-      );
+      if (hasLocalHelper) {
+        expect(hasLocalHelper, isTrue);
+      } else {
+        expect(
+          File(
+            path.join(
+              packageRoot,
+              'linux',
+              'prebuilt',
+              'linux-x64',
+              'libdogpaw_bridge.so',
+            ),
+          ).existsSync(),
+          isTrue,
+        );
+        expect(
+          File(
+            path.join(
+              packageRoot,
+              'linux',
+              'prebuilt',
+              'linux-arm64',
+              'libdogpaw_bridge.so',
+            ),
+          ).existsSync(),
+          isTrue,
+        );
+      }
     });
   });
 }

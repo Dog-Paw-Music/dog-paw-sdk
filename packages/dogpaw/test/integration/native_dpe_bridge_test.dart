@@ -1177,6 +1177,59 @@ void main() {
     });
 
     test(
+        'serializes debug probe events in bridge-local FIFO order during multi-threaded handoff',
+        () async {
+      final ProcessResult result = await _runNativeBridgeProbe(
+        'dispatcher_order_probe',
+      );
+
+      expect(result.exitCode, 0,
+          reason: 'Native bridge dispatcher-order probe should preserve FIFO '
+              'handoff order.\nstdout:\n${result.stdout}\n\nstderr:\n'
+              '${result.stderr}');
+    });
+
+    test('drains debug probe events that were accepted before shutdown',
+        () async {
+      final ProcessResult result = await _runNativeBridgeProbe(
+        'shutdown_drain_probe',
+      );
+
+      expect(result.exitCode, 0,
+          reason: 'Native bridge shutdown-drain probe should deliver accepted '
+              'events before teardown returns.\nstdout:\n${result.stdout}'
+              '\n\nstderr:\n${result.stderr}');
+    });
+
+    test(
+        'startup continuous polls stay quiet until first payload then log readiness',
+        () async {
+      final ProcessResult result = await _runNativeBridgeProbe(
+        'continuous_startup_poll_probe',
+      );
+      final String logs = '${result.stdout}\n${result.stderr}';
+
+      expect(result.exitCode, 0,
+          reason:
+              'Continuous startup poll probe should exit cleanly.\nstdout:\n'
+              '${result.stdout}\n\nstderr:\n${result.stderr}');
+      expect(
+        logs,
+        isNot(contains('Failed to get read guard for connection')),
+        reason: 'Initial no-frame continuous polls should not emit read-guard '
+            'warnings before the first payload arrives.\nstdout:\n'
+            '${result.stdout}\n\nstderr:\n${result.stderr}',
+      );
+      expect(
+        logs,
+        contains('First readable continuous payload observed'),
+        reason:
+            'The bridge should log when the first continuous payload becomes '
+            'readable.\nstdout:\n${result.stdout}\n\nstderr:\n${result.stderr}',
+      );
+    });
+
+    test(
         'survives concurrent local-endpoint connection queries during routing churn',
         () async {
       final ProcessResult result = await _runNativeBridgeProbe(
@@ -1184,8 +1237,7 @@ void main() {
       );
 
       expect(result.exitCode, 0,
-          reason:
-              'Native bridge deadlock probe should exit cleanly.\nstdout:\n'
+          reason: 'Native bridge deadlock probe should exit cleanly.\nstdout:\n'
               '${result.stdout}\n\nstderr:\n${result.stderr}');
     });
 
@@ -1208,7 +1260,8 @@ void main() {
         spec: const LayoutData(displayName: 'Native CRUD Layout'),
       );
 
-      final Result<bool> createResult = await entity.createLayout(initialLayout);
+      final Result<bool> createResult =
+          await entity.createLayout(initialLayout);
       expect(createResult.success, isTrue,
           reason:
               'Native-backed createLayout should succeed: ${createResult.error}');
@@ -1262,7 +1315,8 @@ void main() {
         isTrue,
       );
 
-      final Result<String> addStackEntryResult = await entity.addLayoutStackEntry(
+      final Result<String> addStackEntryResult =
+          await entity.addLayoutStackEntry(
         DataItemRef(
           name: layoutName,
           namespaceSelector: const NamespaceSelector.global(),
@@ -1295,8 +1349,9 @@ void main() {
           reason:
               'Native-backed removeLayoutStackEntry should succeed: ${removeStackEntryResult.error}');
 
-      final Result<LayoutStackSnapshot> readStackAfterRemoveResult = await entity
-          .readLayoutStack(includeResolved: false, includeSpec: false);
+      final Result<LayoutStackSnapshot> readStackAfterRemoveResult =
+          await entity.readLayoutStack(
+              includeResolved: false, includeSpec: false);
       expect(readStackAfterRemoveResult.success, isTrue,
           reason:
               'Native-backed readLayoutStack after remove should succeed: ${readStackAfterRemoveResult.error}');
@@ -1779,7 +1834,8 @@ void main() {
 
       final Result<bool> subscribeLayoutResult =
           await subscriber.subscribeToLayoutStack(
-        (String notificationType, DataItemRef ref, LayoutStackSnapshot snapshot) {
+        (String notificationType, DataItemRef ref,
+            LayoutStackSnapshot snapshot) {
           final bool containsLayout = snapshot.entries.any(
             (LayoutStackEntry entry) => entry.layoutRef.name == layoutName,
           );

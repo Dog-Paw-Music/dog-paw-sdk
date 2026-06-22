@@ -16,7 +16,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path, PurePosixPath
-from typing import Sequence
+from typing import Any, Sequence
 
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[1]
@@ -203,6 +203,7 @@ def load_repo_only_workspace_helper():
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Could not load repo-only workspace helper: {helper_path}")
     module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -243,9 +244,48 @@ def load_install_support_modules():
         if spec is None or spec.loader is None:
             raise RuntimeError(f"Could not load Dog Paw helper module: {module_path}")
         module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
         spec.loader.exec_module(module)
         loaded_modules.append(module)
     return tuple(loaded_modules)
+
+
+def load_install_manifest_resolver_module():
+    """Load the shared manifest-resolution helper on demand.
+
+    Purpose:
+        Keeps manifest-first install planning available in source checkouts
+        without forcing exported SDK entrypoints to import repo-only helper
+        modules during startup.
+    Parameters:
+        None.
+    Return value:
+        Imported `install_manifest_resolver` helper module.
+    Requirements:
+        `INSTALL_SUPPORT_TOOLS_ROOT` must contain
+        `install_manifest_resolver.py` when a workflow reaches manifest-backed
+        install planning.
+    Guarantees:
+        Raises a clear runtime error when the helper module is unavailable.
+    Invariants:
+        Loads helper code only and does not mutate repository files or CLI
+        state.
+    """
+
+    module_name = "install_manifest_resolver"
+    module_path = INSTALL_SUPPORT_TOOLS_ROOT / f"{module_name}.py"
+    if not module_path.is_file():
+        raise RuntimeError(
+            "Dog Paw manifest-resolution helper is unavailable in this checkout: "
+            f"{module_path}"
+        )
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load Dog Paw helper module: {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def is_help_request(args: Sequence[str]) -> bool:
@@ -1072,8 +1112,9 @@ def print_app_help() -> None:
     print("Usage: dogpaw app <install|install-updated|uninstall> ...")
     print("")
     print("Commands:")
-    print("  install headless   Install or update one or more headless apps on a Pi.")
-    print("  install flutter    Sync one Flutter app source tree to a Pi, build it there, and install it.")
+    print("  install            Install apps and manifest dependencies on a Pi.")
+    print("  install headless   Deprecated alias; use install --manifest.")
+    print("  install flutter    Deprecated alias; use install --manifest.")
     print("  install-updated    Update stale apps and shared deploy globals on a Pi target.")
     print("  uninstall          Remove one installed app record from a Pi target.")
 
@@ -1281,45 +1322,7 @@ class FlutterManifestContext:
     flutter_project_dir: Path
 
 
-@dataclass(frozen=True)
-class HostAppManifest:
-    """Resolved host-side manifest facts used by install-updated planning.
-
-    Purpose:
-        Carries just the manifest information needed to classify app scope,
-        decide Flutter versus headless handling, and expand the CMake target
-        union for `install-updated`.
-    Parameters:
-        name: Manifest `name` field used as the installed app identity.
-        manifest_path: Absolute path to the source-tree `dogpawapp.json`.
-        is_flutter: Whether the manifest declares a Flutter app via
-            `flutterApp`.
-        executable: Headless executable target name, or `None` for Flutter apps.
-        extra_binaries: Additional helper binaries declared in
-            `install.extraBinaries`.
-        build_dependencies: Extra CMake targets declared in
-            `buildDependencies`.
-        install_dependencies: Registry app names declared in
-            `installDependencies`.
-    Return value:
-        Immutable manifest summary for one Dog Paw app.
-    Requirements:
-        The source manifest must already have been validated by the builder that
-        constructs this dataclass.
-    Guarantees:
-        Instances are hashable and safe to reuse across planning steps.
-    Invariants:
-        `manifest_path` always refers to one source-tree manifest, not an
-        installed app copy.
-    """
-
-    name: str
-    manifest_path: Path
-    is_flutter: bool
-    executable: str | None
-    extra_binaries: tuple[str, ...]
-    build_dependencies: tuple[str, ...]
-    install_dependencies: tuple[str, ...]
+HostAppManifest = Any
 
 
 @dataclass(frozen=True)
@@ -1461,15 +1464,20 @@ def resolve_flutter_prebuilt_bridge_path(target_arch: str) -> Path:
     Requirements:
         `target_arch` must be one of the supported package subdirectory names.
     Guarantees:
-        Returns the expected package path even when the artifact is currently
+        In the main source checkout, returns the expected CMake build-output path
+        for the selected architecture even when the artifact is currently
         missing, so callers can treat that as part of fingerprint or validation
-        behavior.
+        behavior. In exported SDK mode, returns the packaged prebuilt path.
     Invariants:
         Does not inspect remote state or mutate local files.
     """
 
     if target_arch not in {"x64", "arm64"}:
         raise ValueError(f"unsupported Flutter bridge target architecture: {target_arch}")
+    if not EXPORTED_SDK:
+        if target_arch == "x64":
+            return DEFAULT_EMULATOR_BUILD_DIR / "lib" / "libdogpaw_bridge.so"
+        return DEFAULT_CXX_BUILD_DIR / "lib" / "libdogpaw_bridge.so"
     return (
         DOGPAW_PACKAGE_PREBUILT_ROOT
         / f"linux-{target_arch}"
@@ -1569,10 +1577,8 @@ def parse_string_array_field(payload: dict, field_name: str) -> tuple[str, ...]:
         Does not mutate the payload.
     """
 
-    value = payload.get(field_name, [])
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise ValueError(f"{field_name} must be an array of strings")
-    return tuple(value)
+    install_manifest_resolver = load_install_manifest_resolver_module()
+    return install_manifest_resolver.parse_string_array_field(payload, field_name)
 
 
 def parse_install_extra_binaries(payload: dict) -> tuple[str, ...]:
@@ -1593,15 +1599,8 @@ def parse_install_extra_binaries(payload: dict) -> tuple[str, ...]:
         Only validates the metadata shape; it does not inspect build outputs.
     """
 
-    install = payload.get("install", {})
-    if install is None:
-        return ()
-    if not isinstance(install, dict):
-        raise ValueError("install field must be an object")
-    value = install.get("extraBinaries", [])
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise ValueError("install.extraBinaries must be an array of strings")
-    return tuple(value)
+    install_manifest_resolver = load_install_manifest_resolver_module()
+    return install_manifest_resolver.parse_install_extra_binaries(payload)
 
 
 def host_manifest_from_path(manifest_path: Path) -> HostAppManifest:
@@ -1623,22 +1622,8 @@ def host_manifest_from_path(manifest_path: Path) -> HostAppManifest:
         Does not copy, stage, or mutate manifest files.
     """
 
-    payload = load_manifest_payload(manifest_path.resolve())
-    name = require_manifest_string_field(manifest_path, payload, "name")
-    flutter_app = payload.get("flutterApp")
-    is_flutter = isinstance(flutter_app, str) and flutter_app != ""
-    executable = None
-    if not is_flutter:
-        executable = require_manifest_string_field(manifest_path, payload, "executable")
-    return HostAppManifest(
-        name=name,
-        manifest_path=manifest_path.resolve(),
-        is_flutter=is_flutter,
-        executable=executable,
-        extra_binaries=parse_install_extra_binaries(payload),
-        build_dependencies=parse_string_array_field(payload, "buildDependencies"),
-        install_dependencies=parse_string_array_field(payload, "installDependencies"),
-    )
+    install_manifest_resolver = load_install_manifest_resolver_module()
+    return install_manifest_resolver.manifest_from_path(manifest_path)
 
 
 def expand_manifests_with_install_dependencies(
@@ -1666,34 +1651,11 @@ def expand_manifests_with_install_dependencies(
         Does not mutate manifests or the host manifest index.
     """
 
-    index = dict(host_manifest_index)
-    for manifest in seed_manifests:
-        index.setdefault(manifest.name, manifest)
-
-    ordered: list[HostAppManifest] = []
-    seen_names: set[str] = set()
-    visiting: set[str] = set()
-
-    def visit(manifest: HostAppManifest) -> None:
-        if manifest.name in seen_names:
-            return
-        if manifest.name in visiting:
-            return
-        visiting.add(manifest.name)
-        for dependency_name in manifest.install_dependencies:
-            dependency = index.get(dependency_name)
-            if dependency is None:
-                raise ValueError(
-                    f"install dependency has no host manifest: {dependency_name}"
-                )
-            visit(dependency)
-        visiting.discard(manifest.name)
-        seen_names.add(manifest.name)
-        ordered.append(manifest)
-
-    for manifest in seed_manifests:
-        visit(manifest)
-    return tuple(ordered)
+    install_manifest_resolver = load_install_manifest_resolver_module()
+    return install_manifest_resolver.expand_manifests_with_install_dependencies(
+        seed_manifests,
+        host_manifest_index,
+    )
 
 
 def collect_install_updated_seed_manifests(
@@ -1891,12 +1853,8 @@ def build_host_manifest_index(manifest_paths: Sequence[Path]) -> dict[str, HostA
         Only reads local manifest files.
     """
 
-    index: dict[str, HostAppManifest] = {}
-    for manifest_path in manifest_paths:
-        manifest = host_manifest_from_path(manifest_path)
-        if manifest.name not in index:
-            index[manifest.name] = manifest
-    return index
+    install_manifest_resolver = load_install_manifest_resolver_module()
+    return install_manifest_resolver.build_manifest_index(manifest_paths)
 
 
 def build_host_manifest_index_from_workspace() -> dict[str, HostAppManifest]:
@@ -2213,26 +2171,8 @@ def build_targets_for_manifests(manifests: Sequence[HostAppManifest]) -> tuple[s
         Does not inspect build directories or remote targets.
     """
 
-    targets: list[str] = []
-    seen: set[str] = set()
-
-    def append_target(name: str) -> None:
-        if name != "" and name not in seen:
-            targets.append(name)
-            seen.add(name)
-
-    has_flutter = any(manifest.is_flutter for manifest in manifests)
-    for manifest in manifests:
-        if manifest.executable is not None:
-            append_target(manifest.executable)
-        for extra_binary in manifest.extra_binaries:
-            append_target(extra_binary)
-        for dependency in manifest.build_dependencies:
-            append_target(dependency)
-    if has_flutter:
-        append_target("dogpaw_bridge")
-    append_target("Epiphany")
-    return tuple(targets)
+    install_manifest_resolver = load_install_manifest_resolver_module()
+    return install_manifest_resolver.build_targets_for_manifests(manifests)
 
 
 def plan_install_updated(
@@ -2954,6 +2894,75 @@ def build_remote_flutter_stop_command(
     )
 
 
+def build_app_install_parser() -> argparse.ArgumentParser:
+    """Build the parser for `tools/dogpaw app install`.
+
+    Purpose:
+        Defines the unified Pi app install command that accepts Dog Paw manifests
+        and lets manifest structure choose the headless or Flutter install path.
+    Parameters:
+        None.
+    Return value:
+        Configured parser for the unified install workflow.
+    Requirements:
+        None.
+    Guarantees:
+        Includes the option union needed by current headless and Flutter install
+        flows.
+    Invariants:
+        Parser construction performs no filesystem, network, or process I/O.
+    """
+
+    parser = argparse.ArgumentParser(
+        prog="dogpaw app install",
+        description="Install Dog Paw apps and their manifest dependencies on a Pi target.",
+    )
+    parser.add_argument(
+        "--manifest",
+        action="append",
+        required=True,
+        help="Path to a Dog Paw app dogpawapp.json. May be repeated.",
+    )
+    parser.add_argument("--target", help="Remote SSH target. Defaults to local_config.sh --target.")
+    parser.add_argument(
+        "--hardware-profile",
+        help="Target hardware profile forwarded to headless installs when required.",
+    )
+    parser.add_argument(
+        "--build-dir",
+        "-b",
+        default=str(DEFAULT_CXX_BUILD_DIR),
+        help="CMake build directory for native/headless app payloads.",
+    )
+    parser.add_argument(
+        "--binary",
+        help="Explicit binary for a single headless app install with no other headless dependencies.",
+    )
+    parser.add_argument(
+        "--remote-source-root",
+        default=str(REMOTE_SOURCE_ROOT),
+        help="Remote temporary Flutter workspace source root used for synced Flutter app builds.",
+    )
+    parser.add_argument(
+        "--remote-app-root",
+        default=str(REMOTE_APP_ROOT),
+        help="Remote Dog Paw installed-app root.",
+    )
+    parser.add_argument(
+        "--remote-flutter-root",
+        default=str(REMOTE_FLUTTER_ROOT),
+        help="Remote Flutter SDK root whose bin directory will be added to PATH.",
+    )
+    parser.add_argument("--build-mode", default="release", help="Flutter Linux build mode.")
+    parser.add_argument(
+        "--keep-cache-on-install",
+        action="store_true",
+        help="Forward cache-preservation behavior to app install helpers.",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="Print commands without executing them.")
+    return parser
+
+
 def build_flutter_install_parser() -> argparse.ArgumentParser:
     """Build the parser for `tools/dogpaw app install flutter`.
 
@@ -3045,6 +3054,182 @@ def dispatch_target(args: Sequence[str]) -> int:
     return run_external([str(BOOTSTRAP_TOOL), *apply_args])
 
 
+def resolved_install_manifests(manifest_args: Sequence[str]) -> tuple[HostAppManifest, ...]:
+    """Resolve user-selected manifests and their install dependencies.
+
+    Purpose:
+        Gives install commands one shared dependency expansion point before they
+        choose Pi or emulator execution details.
+    Parameters:
+        manifest_args: Manifest path strings from the command line.
+    Return value:
+        Dependency-expanded manifests in install order.
+    Requirements:
+        Each path must resolve to a valid Dog Paw app manifest.
+    Guarantees:
+        Dependencies are ordered before dependents and resolved by manifest name.
+    Invariants:
+        Does not build, copy, sync, or install app payloads.
+    """
+
+    host_manifest_index = build_host_manifest_index_from_workspace()
+    seed_paths = [resolve_local_cli_path(manifest_arg) for manifest_arg in manifest_args]
+    seed_manifests = tuple(host_manifest_from_path(manifest_path) for manifest_path in seed_paths)
+    for manifest in seed_manifests:
+        host_manifest_index[manifest.name] = manifest
+    return expand_manifests_with_install_dependencies(seed_manifests, host_manifest_index)
+
+
+def headless_deploy_args_for_install(
+    parsed: argparse.Namespace,
+    headless_manifests: Sequence[HostAppManifest],
+) -> list[str]:
+    """Build delegated headless deploy arguments for resolved manifests.
+
+    Purpose:
+        Converts the unified install parser output into the existing remote
+        headless deployment helper contract.
+    Parameters:
+        parsed: Parsed unified install options.
+        headless_manifests: Headless manifests in install order.
+    Return value:
+        Argument list for `deploy_headless_apps.sh`.
+    Requirements:
+        `headless_manifests` must contain only headless app manifests.
+    Guarantees:
+        Repeats `--manifest` in dependency-before-dependent order.
+    Invariants:
+        Does not execute the deploy helper.
+    """
+
+    deploy_args: list[str] = []
+    if parsed.dry_run:
+        deploy_args.append("--dry-run")
+    if parsed.target is not None:
+        deploy_args.extend(["--target", parsed.target])
+    if parsed.hardware_profile is not None:
+        deploy_args.extend(["--hardware-profile", parsed.hardware_profile])
+    deploy_args.extend(["--build-dir", str(parsed.build_dir)])
+    if parsed.keep_cache_on_install:
+        deploy_args.append("--keep-cache-on-install")
+    if parsed.binary is not None:
+        deploy_args.extend(["--binary", parsed.binary])
+    for manifest in headless_manifests:
+        deploy_args.extend(["--manifest", str(manifest.manifest_path)])
+    return deploy_args
+
+
+def run_flutter_installs_for_manifests(
+    parsed: argparse.Namespace,
+    target: str,
+    flutter_manifests: Sequence[HostAppManifest],
+) -> int:
+    """Run remote Flutter installs for resolved manifests.
+
+    Purpose:
+        Reuses the existing single-Flutter-app installer while letting unified
+        install feed it dependency-expanded manifests.
+    Parameters:
+        parsed: Parsed unified install options.
+        target: Resolved SSH target.
+        flutter_manifests: Flutter manifests in install order.
+    Return value:
+        Zero when every install succeeds, otherwise the first failing exit code.
+    Requirements:
+        `flutter_manifests` must contain only Flutter app manifests.
+    Guarantees:
+        Installs Flutter apps one at a time in the provided order.
+    Invariants:
+        Does not alter `parsed` or manifest metadata.
+    """
+
+    for manifest in flutter_manifests:
+        flutter_args = [
+            "--target",
+            target,
+            "--manifest",
+            str(manifest.manifest_path),
+            "--remote-source-root",
+            str(parsed.remote_source_root),
+            "--remote-app-root",
+            str(parsed.remote_app_root),
+            "--remote-flutter-root",
+            str(parsed.remote_flutter_root),
+            "--build-mode",
+            str(parsed.build_mode),
+        ]
+        if parsed.dry_run:
+            flutter_args.append("--dry-run")
+        if parsed.keep_cache_on_install:
+            flutter_args.append("--keep-cache-on-install")
+        result = dispatch_app_install_flutter(flutter_args)
+        if result != 0:
+            return result
+    return 0
+
+
+def dispatch_app_install(args: Sequence[str]) -> int:
+    """Dispatch `tools/dogpaw app install`.
+
+    Purpose:
+        Installs one or more Dog Paw apps plus transitive install dependencies
+        using manifest structure to choose headless or Flutter execution.
+    Parameters:
+        args: Remaining arguments after `app install`.
+    Return value:
+        Exit code from the dry-run path or first failing build/install command.
+    Requirements:
+        Each `--manifest` must point at a valid Dog Paw app manifest.
+    Guarantees:
+        Dependencies are installed before dependents, and split legacy app kinds
+        are no longer required at the command surface.
+    Invariants:
+        Dry-run mode does not create, modify, or delete local or remote files.
+    """
+
+    parser = build_app_install_parser()
+    parsed = parser.parse_args(
+        rewrite_local_path_option_values(
+            args,
+            {"--manifest", "--build-dir", "-b", "--binary"},
+        )
+    )
+    try:
+        scoped_manifests = resolved_install_manifests(parsed.manifest)
+    except ValueError as exc:
+        parser.error(str(exc))
+        raise AssertionError("unreachable") from exc
+
+    headless_manifests = tuple(manifest for manifest in scoped_manifests if not manifest.is_flutter)
+    flutter_manifests = tuple(manifest for manifest in scoped_manifests if manifest.is_flutter)
+    if parsed.binary is not None and len(headless_manifests) != 1:
+        parser.error("--binary is only supported when the resolved install set has one headless app")
+
+    build_dir = resolve_local_cli_path(parsed.build_dir)
+    build_targets = build_targets_for_manifests(scoped_manifests)
+    if build_targets:
+        build_command = ["cmake", "--build", str(build_dir)]
+        for target_name in build_targets:
+            build_command.extend(["--target", target_name])
+        if run_commands([build_command], parsed.dry_run) != 0:
+            return 1
+
+    if headless_manifests:
+        deploy_result = run_external(
+            [
+                str(DEPLOY_HEADLESS_APPS_TOOL),
+                *headless_deploy_args_for_install(parsed, headless_manifests),
+            ]
+        )
+        if deploy_result != 0:
+            return deploy_result
+
+    if flutter_manifests:
+        target = resolve_target(parsed.target)
+        return run_flutter_installs_for_manifests(parsed, target, flutter_manifests)
+    return 0
+
+
 def dispatch_app_install_headless(args: Sequence[str]) -> int:
     """Dispatch `tools/dogpaw app install headless`.
 
@@ -3065,82 +3250,12 @@ def dispatch_app_install_headless(args: Sequence[str]) -> int:
         When no `--manifest` values are present, arguments pass through unchanged.
     """
 
-    delegated_args = rewrite_local_path_option_values(
-        args,
-        {"--build-dir", "-b", "--manifest"},
+    print(
+        "Warning: 'dogpaw app install headless' is deprecated; use "
+        "'dogpaw app install --manifest PATH' instead.",
+        file=sys.stderr,
     )
-    manifest_paths = extract_manifest_option_values(delegated_args)
-    if not manifest_paths:
-        return run_external([str(DEPLOY_HEADLESS_APPS_TOOL), *delegated_args])
-
-    host_manifest_index = build_host_manifest_index_from_workspace()
-    seed_paths = [Path(manifest_path).resolve() for manifest_path in manifest_paths]
-    for manifest_path in seed_paths:
-        manifest = host_manifest_from_path(manifest_path)
-        host_manifest_index.setdefault(manifest.name, manifest)
-    seed_manifests = tuple(host_manifest_from_path(manifest_path) for manifest_path in seed_paths)
-    try:
-        scoped_manifests = expand_manifests_with_install_dependencies(
-            seed_manifests,
-            host_manifest_index,
-        )
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-
-    headless_manifests = tuple(
-        manifest for manifest in scoped_manifests if not manifest.is_flutter
-    )
-    flutter_manifests = tuple(
-        manifest for manifest in scoped_manifests if manifest.is_flutter
-    )
-    build_dir_text = resolve_option_from_args(
-        delegated_args,
-        {"--build-dir", "-b"},
-        str(DEFAULT_CXX_BUILD_DIR),
-    )
-    build_dir = resolve_local_cli_path(build_dir_text or str(DEFAULT_CXX_BUILD_DIR))
-    build_targets = build_targets_for_manifests(scoped_manifests)
-    dry_run = "--dry-run" in delegated_args
-    keep_cache_on_install = "--keep-cache-on-install" in delegated_args
-    if build_targets:
-        build_command = ["cmake", "--build", str(build_dir)]
-        for target_name in build_targets:
-            build_command.extend(["--target", target_name])
-        if run_commands([build_command], dry_run) != 0:
-            return 1
-
-    if headless_manifests:
-        deploy_args = replace_manifest_option_values(
-            delegated_args,
-            [str(manifest.manifest_path) for manifest in headless_manifests],
-        )
-        deploy_result = run_external([str(DEPLOY_HEADLESS_APPS_TOOL), *deploy_args])
-        if deploy_result != 0:
-            return deploy_result
-
-    target = resolve_option_from_args(delegated_args, {"--target", "-t"}, None)
-    if target is None:
-        target = resolve_target(None)
-    for manifest in flutter_manifests:
-        flutter_command = [
-            str(DOGPAW_TOOL_PATH),
-            "app",
-            "install",
-            "flutter",
-            "--target",
-            target,
-            "--manifest",
-            str(manifest.manifest_path),
-        ]
-        if dry_run:
-            flutter_command.append("--dry-run")
-        if keep_cache_on_install:
-            flutter_command.append("--keep-cache-on-install")
-        flutter_result = run_external(flutter_command)
-        if flutter_result != 0:
-            return flutter_result
-    return 0
+    return dispatch_app_install(args)
 
 
 def dispatch_app_install_flutter(args: Sequence[str]) -> int:
@@ -3853,16 +3968,18 @@ def dispatch_app(args: Sequence[str]) -> int:
         print(f"Unsupported app command: {args[0]}", file=sys.stderr)
         print_app_help()
         return 2
-    if len(args) == 1:
-        print("Usage: dogpaw app install <headless|flutter> [options]", file=sys.stderr)
-        return 2
+    if len(args) == 1 or args[1] not in {"headless", "flutter"}:
+        return dispatch_app_install(args[1:])
     if args[1] == "headless":
         return dispatch_app_install_headless(args[2:])
     if args[1] == "flutter":
-        return dispatch_app_install_flutter(args[2:])
-    print(f"Unsupported app install target: {args[1]}", file=sys.stderr)
-    print("Usage: dogpaw app install <headless|flutter> [options]", file=sys.stderr)
-    return 2
+        print(
+            "Warning: 'dogpaw app install flutter' is deprecated; use "
+            "'dogpaw app install --manifest PATH' instead.",
+            file=sys.stderr,
+        )
+        return dispatch_app_install(args[2:])
+    raise AssertionError("unreachable")
 
 
 def dispatch_debug_cxx(args: Sequence[str]) -> int:

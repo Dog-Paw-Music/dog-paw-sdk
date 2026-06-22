@@ -9,7 +9,12 @@
 #include "LayoutJsonFfiNormalize.hpp"
 #include "dart_api_dl.h"
 #include "logging/AppLogger.hpp"
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstring>
+#include <deque>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -25,7 +30,8 @@ namespace JF = epiphany::JsonFields;
  * Purpose:
  * Owns the real C++ `dogpaw::DogPawEntity`, stores the pending connection-start
  * handle needed for explicit ready completion, tracks the Dart port used for
- * async notifications, and keeps waiter threads alive until request futures
+ * async notifications, serializes all accepted native events through one bridge-
+ * local dispatcher queue, and keeps waiter threads alive until request futures
  * complete.
  *
  * @param entityName The logical entity name this client connects as.
@@ -36,8 +42,9 @@ namespace JF = epiphany::JsonFields;
  * @pre `entityName` must be a valid Dog Paw entity name.
  * @pre `timeoutMs` must be non-negative.
  * @post The wrapped C++ entity exists for the lifetime of this bridge state.
- * @post `shutdown()` disconnects, clears pending ready state, and joins waiter
- *   threads before destruction completes.
+ * @post `shutdown()` disconnects, clears pending ready state, drains accepted
+ *   dispatcher events, and joins waiter and dispatcher threads before
+ *   destruction completes.
  * @invariant Access to mutable state is guarded by `mutex`.
  * @invariant Async waiter threads are joined before the bridge object is destroyed.
  */
@@ -66,7 +73,9 @@ struct NativeDogPawEntityBridge {
             dogpaw::DogPawEntity::PrintVerbosity::NONE,
             dogpaw::DogPawEntity::PrintVerbosity::NONE,
             serverUrl,
-            std::chrono::milliseconds(timeoutMs))) {}
+            std::chrono::milliseconds(timeoutMs))) {
+    dispatcherThread = std::thread([this]() { runEventDispatcher(); });
+  }
 
   /**
    * @brief Destroy the bridge state after orderly shutdown.
@@ -79,7 +88,8 @@ struct NativeDogPawEntityBridge {
    * @return None.
    *
    * @pre None.
-   * @post The entity is disconnected and waiter threads are joined.
+   * @post The entity is disconnected, accepted dispatcher events are drained,
+   *   and waiter/dispatcher threads are joined.
    * @invariant Destruction is idempotent through the `destroying` flag.
    */
   ~NativeDogPawEntityBridge() { shutdown(); }
@@ -95,19 +105,46 @@ struct NativeDogPawEntityBridge {
    * @return None.
    *
    * @pre None.
-   * @post No waiter threads remain joinable and no pending ready handle is left
-   *   unsignaled.
+   * @post No waiter threads remain joinable, no pending ready handle is left
+   *   unsignaled, and accepted dispatcher events have either been posted or
+   *   explicitly dropped by the dispatcher.
    * @invariant After this returns once, subsequent calls are no-ops.
    */
   void shutdown();
 
+  /**
+   * @brief Drain accepted bridge events and forward them to Dart in FIFO order.
+   *
+   * Purpose:
+   * Owns the final `Dart_PostCObject_DL()` boundary so native producers only
+   * need to enqueue accepted work under the bridge mutex.
+   *
+   * @param None.
+   * @return None.
+   *
+   * @pre Constructed bridge state has launched this worker at most once.
+   * @post Events accepted before shutdown are processed in queue order before
+   *   the worker exits.
+   * @invariant The worker never holds `mutex` while calling into Dart.
+   */
+  void runEventDispatcher();
+
   std::mutex mutex;
+  std::condition_variable dispatcherCondition;
   std::unique_ptr<dogpaw::DogPawEntity> entity;
   std::optional<dogpaw::ConnectionStartHandle> pendingConnectionStartHandle;
+  std::deque<std::string> pendingEventQueue;
+  std::map<std::string, bool> continuousPollFirstPayloadSeenByKey;
+  std::map<std::string, bool> continuousPollFailureWarningLoggedByKey;
   std::vector<std::thread> requestThreads;
+  std::thread dispatcherThread;
   Dart_Port_DL eventPort = ILLEGAL_PORT;
   bool destroying = false;
 };
+
+thread_local const NativeDogPawEntityBridge* g_suppressedStatefulInputBridge =
+    nullptr;
+thread_local std::string g_suppressedStatefulInputEndpointName;
 
 /**
  * @brief Convert a nullable C string to a std::string with a fallback value.
@@ -129,38 +166,164 @@ std::string string_or_fallback(const char* value, const std::string& fallback) {
 }
 
 /**
- * @brief Post one JSON event envelope to Dart through the registered port.
+ * @brief Build a stable readiness-tracker key for one local endpoint
+ * connection.
+ *
+ * Purpose:
+ * Lets the native bridge remember whether a particular continuous connection
+ * has already delivered a readable payload without mutating the underlying
+ * endpoint or shared-data implementation.
+ *
+ * @param endpointName Local endpoint name owned by the bridge entity.
+ * @param connectionName Realized connection identifier under that endpoint.
+ * @return Combined key suitable for use in bridge-local maps.
+ *
+ * @pre `endpointName` and `connectionName` are non-empty.
+ * @post Returned key is deterministic for the input pair.
+ * @invariant The helper performs no logging and does not touch bridge state.
+ */
+std::string make_continuous_poll_readiness_key(
+    const std::string& endpointName,
+    const std::string& connectionName) {
+  return endpointName + '\x1f' + connectionName;
+}
+
+/**
+ * @brief Record that one continuous connection has produced its first readable
+ * payload.
+ *
+ * Purpose:
+ * Updates bridge-local readiness state so startup no-data polls stay quiet,
+ * first success can be logged once, and future post-success failures can warn
+ * once per outage.
+ *
+ * @param bridge Mutable bridge state that owns the readiness maps.
+ * @param endpointName Local endpoint name whose connection just succeeded.
+ * @param connectionName Realized connection identifier whose payload became
+ * readable.
+ * @return `true` when this success is the first readable payload observed for
+ * the connection, otherwise `false`.
+ *
+ * @pre `bridge` is non-null.
+ * @post The connection readiness state is marked as seen.
+ * @post Any prior post-success failure warning latch for this connection is
+ * cleared.
+ * @invariant Access to bridge-local maps remains mutex-guarded.
+ */
+bool mark_continuous_poll_success(NativeDogPawEntityBridge* bridge,
+                                  const std::string& endpointName,
+                                  const std::string& connectionName) {
+  const std::string key =
+      make_continuous_poll_readiness_key(endpointName, connectionName);
+  std::lock_guard<std::mutex> lock(bridge->mutex);
+  const bool firstSuccess =
+      !bridge->continuousPollFirstPayloadSeenByKey[key];
+  bridge->continuousPollFirstPayloadSeenByKey[key] = true;
+  bridge->continuousPollFailureWarningLoggedByKey[key] = false;
+  return firstSuccess;
+}
+
+/**
+ * @brief Decide whether a failed continuous read should now emit a warning.
+ *
+ * Purpose:
+ * Suppresses expected startup no-data polls until a connection proves it can
+ * deliver frames, then rate-limits later read failures to one warning per
+ * outage.
+ *
+ * @param bridge Mutable bridge state that owns the readiness maps.
+ * @param endpointName Local endpoint name whose connection just failed to read.
+ * @param connectionName Realized connection identifier whose read failed.
+ * @return `true` when callers should log a warning for this failure, otherwise
+ * `false`.
+ *
+ * @pre `bridge` is non-null.
+ * @post Startup failures before first success remain silent.
+ * @post The first failure after a prior success latches a warning until the
+ * next success resets it.
+ * @invariant Access to bridge-local maps remains mutex-guarded.
+ */
+bool should_log_continuous_poll_failure(NativeDogPawEntityBridge* bridge,
+                                        const std::string& endpointName,
+                                        const std::string& connectionName) {
+  const std::string key =
+      make_continuous_poll_readiness_key(endpointName, connectionName);
+  std::lock_guard<std::mutex> lock(bridge->mutex);
+  const std::map<std::string, bool>::const_iterator seenIt =
+      bridge->continuousPollFirstPayloadSeenByKey.find(key);
+  const bool hasSeenSuccess =
+      seenIt != bridge->continuousPollFirstPayloadSeenByKey.end() &&
+      seenIt->second;
+  if (!hasSeenSuccess) {
+    return false;
+  }
+
+  bool& warningLogged = bridge->continuousPollFailureWarningLoggedByKey[key];
+  if (warningLogged) {
+    return false;
+  }
+  warningLogged = true;
+  return true;
+}
+
+/**
+ * @brief Enqueue one JSON event envelope for the bridge-local Dart dispatcher.
  *
  * Purpose:
  * Implements the native-to-Dart async routing boundary used by the migration.
- * The payload is serialized to a JSON string so Dart can inspect and dispatch
- * it without sharing native object layouts.
+ * Native producers serialize their event once, hand it to the bridge queue, and
+ * let the dedicated dispatcher thread own the final `Dart_PostCObject_DL()`
+ * call.
  *
  * @param bridge Bridge state whose Dart event port should receive the event.
  * @param eventJson JSON envelope to serialize and post.
- * @return true when Dart accepted the message for delivery, otherwise false.
+ * @return true when the bridge accepted the event into its dispatcher queue,
+ *   otherwise false.
  *
  * @pre `Dart_InitializeApiDL()` already succeeded.
  * @pre `eventJson` contains a serializable JSON object.
- * @post On success, one string message is queued for Dart.
- * @invariant This helper does not mutate the bridge state.
+ * @post On success, one serialized event is appended to the bridge-local queue.
+ * @invariant Once this helper returns true, later delivery is the dispatcher
+ *   thread's responsibility rather than the caller's.
  */
 bool post_bridge_event(NativeDogPawEntityBridge* bridge,
                        const nlohmann::json& eventJson) {
-  Dart_Port_DL eventPort = ILLEGAL_PORT;
+  const std::string eventString = eventJson.dump();
   {
     std::lock_guard<std::mutex> lock(bridge->mutex);
     if (bridge->destroying || bridge->eventPort == ILLEGAL_PORT) {
       return false;
     }
-    eventPort = bridge->eventPort;
+    bridge->pendingEventQueue.push_back(eventString);
   }
+  bridge->dispatcherCondition.notify_one();
+  return true;
+}
 
-  std::string eventString = eventJson.dump();
-  Dart_CObject dartMessage;
-  dartMessage.type = Dart_CObject_kString;
-  dartMessage.value.as_string = const_cast<char*>(eventString.c_str());
-  return Dart_PostCObject_DL(eventPort, &dartMessage);
+/**
+ * @brief Check whether one stateful-input observer event should stay native-only
+ * for the current thread.
+ *
+ * Purpose:
+ * Lets the bridge expose native explicit-commit primitives to Dart without
+ * re-routing the synthetic accepted-state observer event back through the
+ * public Dart owner callback.
+ *
+ * @param bridge Bridge instance currently handling the observer event.
+ * @param localEndpointRef Owned local endpoint reference associated with the
+ *   observer event.
+ * @return `true` when the current thread is suppressing Dart forwarding for
+ *   this endpoint, otherwise `false`.
+ *
+ * @pre `bridge` points to a live bridge instance.
+ * @post No bridge or endpoint state is mutated.
+ * @invariant Suppression applies only to the current thread.
+ */
+bool should_suppress_stateful_input_forwarding(
+    const NativeDogPawEntityBridge* bridge,
+    const dogpaw::DataItemRefByName& localEndpointRef) {
+  return g_suppressedStatefulInputBridge == bridge &&
+         g_suppressedStatefulInputEndpointName == localEndpointRef.name;
 }
 
 /**
@@ -422,6 +585,36 @@ nlohmann::json make_preset_request_event(const nlohmann::json& contentJson) {
 }
 
 /**
+ * @brief Build one synthetic debug-probe envelope for bridge integration tests.
+ *
+ * Purpose:
+ * Gives the native bridge probe a small internal-only event shape so Dart tests
+ * can observe transport behavior without depending on unrelated production
+ * message families.
+ *
+ * @param probeName Stable probe scenario name.
+ * @param label Stable event label within that scenario.
+ * @return JSON event envelope ready for posting to Dart.
+ *
+ * @pre `probeName` and `label` are non-empty.
+ * @post Returned JSON contains `eventType` and a `result` payload with
+ *   `probeName` and `label`.
+ * @invariant The returned object is self-contained and does not reference
+ *   native memory.
+ */
+nlohmann::json make_debug_probe_event(const std::string& probeName,
+                                      const std::string& label) {
+  return nlohmann::json{
+      {JF::EVENT_TYPE, "debugProbe"},
+      {JF::RESULT,
+       nlohmann::json{
+           {JF::PROBE_NAME, probeName},
+           {JF::LABEL, label},
+       }},
+  };
+}
+
+/**
  * @brief Parse a JSON namespace-selector string into the C++ typed selector.
  *
  * Purpose:
@@ -666,6 +859,191 @@ std::shared_ptr<dogpaw::Endpoint> resolve_local_endpoint(
   return bridge->entity->getEndpoint(endpointName);
 }
 
+dogpaw::MessageQueuePayloadContract
+resolve_bridge_endpoint_payload_contract(const dogpaw::EndpointSpec& spec) {
+  if (spec.category != dogpaw::EndpointCategory::MESSAGE_QUEUE ||
+      spec.messageQueuePayloadContract !=
+          dogpaw::MessageQueuePayloadContract::ENDPOINT_DATA) {
+    return spec.messageQueuePayloadContract;
+  }
+
+  switch (spec.dataType.baseType) {
+    case dogpaw::DataType::FLOAT:
+      return dogpaw::MessageQueuePayloadContract::STATEFUL_FLOAT_ACTION;
+    case dogpaw::DataType::INT:
+      return dogpaw::MessageQueuePayloadContract::STATEFUL_INT_ACTION;
+    case dogpaw::DataType::TOGGLE:
+      return dogpaw::MessageQueuePayloadContract::STATEFUL_TOGGLE_ACTION;
+    case dogpaw::DataType::ENUM:
+      return dogpaw::MessageQueuePayloadContract::STATEFUL_ENUM_ACTION;
+    case dogpaw::DataType::COLOR:
+      return dogpaw::MessageQueuePayloadContract::STATEFUL_COLOR_ACTION;
+    default:
+      return spec.messageQueuePayloadContract;
+  }
+}
+
+void install_action_endpoint_bridge_observers(
+    NativeDogPawEntityBridge* bridge,
+    const std::shared_ptr<dogpaw::Endpoint>& endpoint) {
+  if (bridge == nullptr || endpoint == nullptr || !endpoint->spec.has_value()) {
+    return;
+  }
+
+  const dogpaw::EndpointSpec& spec = endpoint->spec.value();
+  if (spec.category != dogpaw::EndpointCategory::MESSAGE_QUEUE ||
+      spec.direction != dogpaw::EndpointDirection::INPUT ||
+      resolve_bridge_endpoint_payload_contract(spec) ==
+          dogpaw::MessageQueuePayloadContract::ENDPOINT_DATA) {
+    return;
+  }
+
+  const dogpaw::DataItemRefByName localEndpointRef(
+      endpoint->name,
+      dogpaw::NamespaceSelector::specificEntity(bridge->entity->getEntityName()));
+  const std::weak_ptr<dogpaw::Endpoint> weakEndpoint(endpoint);
+
+  switch (spec.dataType.baseType) {
+    case dogpaw::DataType::FLOAT:
+      endpoint->setStatefulFloatInputObserver(
+          [bridge, localEndpointRef, weakEndpoint](
+              const dogpaw::StatefulFloatAction& action,
+              const dogpaw::EndpointSenderInfo& senderInfo) {
+            if (should_suppress_stateful_input_forwarding(bridge,
+                                                          localEndpointRef)) {
+              return;
+            }
+            nlohmann::json connectionJson = nlohmann::json::object();
+            connectionJson[JF::NAME] = senderInfo.connectionName;
+            connectionJson[JF::TARGET] = senderInfo.sourceEndpointRef.toJson();
+            connectionJson[JF::ACTION_PAYLOAD] = action.toJson();
+            if (const std::shared_ptr<dogpaw::Endpoint> lockedEndpoint =
+                    weakEndpoint.lock()) {
+              const std::optional<float> retainedValue =
+                  lockedEndpoint->getRetainedStatefulFloatValue();
+              if (retainedValue.has_value()) {
+                connectionJson[JF::RETAINED_VALUE] = retainedValue.value();
+              }
+            }
+            post_bridge_event(
+                bridge,
+                make_endpoint_runtime_notification_event(
+                    "stateful_input_action", localEndpointRef, connectionJson));
+          });
+      break;
+    case dogpaw::DataType::INT:
+      endpoint->setStatefulIntInputObserver(
+          [bridge, localEndpointRef, weakEndpoint](
+              const dogpaw::StatefulIntAction& action,
+              const dogpaw::EndpointSenderInfo& senderInfo) {
+            if (should_suppress_stateful_input_forwarding(bridge,
+                                                          localEndpointRef)) {
+              return;
+            }
+            nlohmann::json connectionJson = nlohmann::json::object();
+            connectionJson[JF::NAME] = senderInfo.connectionName;
+            connectionJson[JF::TARGET] = senderInfo.sourceEndpointRef.toJson();
+            connectionJson[JF::ACTION_PAYLOAD] = action.toJson();
+            if (const std::shared_ptr<dogpaw::Endpoint> lockedEndpoint =
+                    weakEndpoint.lock()) {
+              const std::optional<int32_t> retainedValue =
+                  lockedEndpoint->getRetainedStatefulIntValue();
+              if (retainedValue.has_value()) {
+                connectionJson[JF::RETAINED_VALUE] = retainedValue.value();
+              }
+            }
+            post_bridge_event(
+                bridge,
+                make_endpoint_runtime_notification_event(
+                    "stateful_input_action", localEndpointRef, connectionJson));
+          });
+      break;
+    case dogpaw::DataType::TOGGLE:
+      endpoint->setStatefulToggleInputObserver(
+          [bridge, localEndpointRef, weakEndpoint](
+              const dogpaw::StatefulToggleAction& action,
+              const dogpaw::EndpointSenderInfo& senderInfo) {
+            if (should_suppress_stateful_input_forwarding(bridge,
+                                                          localEndpointRef)) {
+              return;
+            }
+            nlohmann::json connectionJson = nlohmann::json::object();
+            connectionJson[JF::NAME] = senderInfo.connectionName;
+            connectionJson[JF::TARGET] = senderInfo.sourceEndpointRef.toJson();
+            connectionJson[JF::ACTION_PAYLOAD] = action.toJson();
+            if (const std::shared_ptr<dogpaw::Endpoint> lockedEndpoint =
+                    weakEndpoint.lock()) {
+              const std::optional<bool> retainedValue =
+                  lockedEndpoint->getRetainedStatefulToggleValue();
+              if (retainedValue.has_value()) {
+                connectionJson[JF::RETAINED_VALUE] = retainedValue.value();
+              }
+            }
+            post_bridge_event(
+                bridge,
+                make_endpoint_runtime_notification_event(
+                    "stateful_input_action", localEndpointRef, connectionJson));
+          });
+      break;
+    case dogpaw::DataType::ENUM:
+      endpoint->setStatefulEnumInputObserver(
+          [bridge, localEndpointRef, weakEndpoint](
+              const dogpaw::StatefulEnumAction& action,
+              const dogpaw::EndpointSenderInfo& senderInfo) {
+            if (should_suppress_stateful_input_forwarding(bridge,
+                                                          localEndpointRef)) {
+              return;
+            }
+            nlohmann::json connectionJson = nlohmann::json::object();
+            connectionJson[JF::NAME] = senderInfo.connectionName;
+            connectionJson[JF::TARGET] = senderInfo.sourceEndpointRef.toJson();
+            connectionJson[JF::ACTION_PAYLOAD] = action.toJson();
+            if (const std::shared_ptr<dogpaw::Endpoint> lockedEndpoint =
+                    weakEndpoint.lock()) {
+              const std::optional<int32_t> retainedValue =
+                  lockedEndpoint->getRetainedStatefulEnumId();
+              if (retainedValue.has_value()) {
+                connectionJson[JF::RETAINED_VALUE] = retainedValue.value();
+              }
+            }
+            post_bridge_event(
+                bridge,
+                make_endpoint_runtime_notification_event(
+                    "stateful_input_action", localEndpointRef, connectionJson));
+          });
+      break;
+    case dogpaw::DataType::COLOR:
+      endpoint->setStatefulColorInputObserver(
+          [bridge, localEndpointRef, weakEndpoint](
+              const dogpaw::StatefulColorAction& action,
+              const dogpaw::EndpointSenderInfo& senderInfo) {
+            if (should_suppress_stateful_input_forwarding(bridge,
+                                                          localEndpointRef)) {
+              return;
+            }
+            nlohmann::json connectionJson = nlohmann::json::object();
+            connectionJson[JF::NAME] = senderInfo.connectionName;
+            connectionJson[JF::TARGET] = senderInfo.sourceEndpointRef.toJson();
+            connectionJson[JF::ACTION_PAYLOAD] = action.toJson();
+            if (const std::shared_ptr<dogpaw::Endpoint> lockedEndpoint =
+                    weakEndpoint.lock()) {
+              const std::optional<uint32_t> retainedValue =
+                  lockedEndpoint->getRetainedStatefulColorValue();
+              if (retainedValue.has_value()) {
+                connectionJson[JF::RETAINED_VALUE] = retainedValue.value();
+              }
+            }
+            post_bridge_event(
+                bridge,
+                make_endpoint_runtime_notification_event(
+                    "stateful_input_action", localEndpointRef, connectionJson));
+          });
+      break;
+    default:
+      break;
+  }
+}
+
 /**
  * @brief Map one Dog Paw base data type to the bridge's integer enum.
  *
@@ -700,6 +1078,8 @@ int bridge_data_type_index(const dogpaw::DataType dataType) {
       return DPPB_TYPE_MOMENTARY;
     case dogpaw::DataType::ENUM:
       return DPPB_TYPE_ENUM;
+    case dogpaw::DataType::COLOR:
+      return DPPB_TYPE_COLOR;
     case dogpaw::DataType::AUDIO_STREAM:
       return DPPB_TYPE_AUDIO_STREAM;
     case dogpaw::DataType::KEY_PRESS:
@@ -722,8 +1102,8 @@ int bridge_data_type_index(const dogpaw::DataType dataType) {
       return DPPB_TYPE_VOICE_OUTPUT_VALUE;
     case dogpaw::DataType::GLOBAL_OUTPUT_VALUE:
       return DPPB_TYPE_GLOBAL_OUTPUT_VALUE;
-    case dogpaw::DataType::DPP_PARAM_QUEUE:
-      return DPPB_TYPE_DPP_PARAM_QUEUE;
+    case dogpaw::DataType::DPP_EDITOR_MESSAGE:
+      return DPPB_TYPE_DPP_EDITOR_MESSAGE;
     case dogpaw::DataType::CUSTOM:
       return DPPB_TYPE_CUSTOM;
     case dogpaw::DataType::SCOPE_BUFFER:
@@ -959,21 +1339,103 @@ std::unique_ptr<dogpaw::FollowRequest> parse_follow_request_json(
  */
 bool store_request_thread(NativeDogPawEntityBridge* bridge,
                           std::thread&& requestThread) {
-  std::lock_guard<std::mutex> lock(bridge->mutex);
-  if (bridge->destroying) {
-    if (requestThread.joinable()) {
-      requestThread.join();
+  bool shouldJoinImmediately = false;
+  {
+    std::lock_guard<std::mutex> lock(bridge->mutex);
+    if (bridge->destroying) {
+      shouldJoinImmediately = true;
+    } else {
+      bridge->requestThreads.push_back(std::move(requestThread));
+      return true;
     }
-    return false;
   }
-  bridge->requestThreads.push_back(std::move(requestThread));
-  return true;
+
+  if (shouldJoinImmediately && requestThread.joinable()) {
+    requestThread.join();
+  }
+  return false;
+}
+
+/**
+ * @brief Simulate a producer thread handing one debug event to the bridge and
+ * then continuing to run briefly.
+ *
+ * Purpose:
+ * The dispatcher refactor is supposed to make the bridge boundary happen at
+ * enqueue time rather than at final `Dart_PostCObject_DL()` time. This helper
+ * now enqueues first, then delays while the producer thread keeps running, so
+ * the test harness can verify that the bridge-local dispatcher owns delivery
+ * ordering and shutdown draining after the handoff boundary.
+ *
+ * @param bridge Native bridge state receiving the debug event.
+ * @param probeName Stable probe scenario name.
+ * @param label Stable event label within that scenario.
+ * @param handoffStarted Optional flag to set immediately before the handoff
+ *   timing sequence begins.
+ * @param delayMs Milliseconds to wait after the handoff boundary.
+ * @return None.
+ *
+ * @pre `bridge` is non-null.
+ * @pre `probeName` and `label` are non-empty.
+ * @post At most one debug event has been offered to the bridge.
+ * @invariant This helper is reserved for bridge integration probes.
+ */
+void handoff_debug_probe_event_and_pause(NativeDogPawEntityBridge* bridge,
+                                         const std::string& probeName,
+                                         const std::string& label,
+                                         std::atomic<bool>* handoffStarted,
+                                         const int delayMs) {
+  const nlohmann::json eventJson = make_debug_probe_event(probeName, label);
+  if (handoffStarted != nullptr) {
+    handoffStarted->store(true, std::memory_order_release);
+  }
+  post_bridge_event(bridge, eventJson);
+  std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+}
+
+void NativeDogPawEntityBridge::runEventDispatcher() {
+  for (;;) {
+    std::string eventString;
+    Dart_Port_DL currentEventPort = ILLEGAL_PORT;
+    {
+      std::unique_lock<std::mutex> lock(mutex);
+      dispatcherCondition.wait(lock, [this]() {
+        return destroying || !pendingEventQueue.empty();
+      });
+      if (pendingEventQueue.empty()) {
+        if (destroying) {
+          return;
+        }
+        continue;
+      }
+      eventString = std::move(pendingEventQueue.front());
+      pendingEventQueue.pop_front();
+      currentEventPort = eventPort;
+    }
+
+    if (currentEventPort == ILLEGAL_PORT) {
+      AppLogger::warning(
+          "NativeDogPawEntityBridge dispatcher dropped an accepted event "
+          "because the Dart port was unavailable.");
+      continue;
+    }
+
+    Dart_CObject dartMessage;
+    dartMessage.type = Dart_CObject_kString;
+    dartMessage.value.as_string = const_cast<char*>(eventString.c_str());
+    if (!Dart_PostCObject_DL(currentEventPort, &dartMessage)) {
+      AppLogger::warning(
+          "NativeDogPawEntityBridge dispatcher failed to deliver an accepted "
+          "event to Dart.");
+    }
+  }
 }
 
 void NativeDogPawEntityBridge::shutdown() {
   std::vector<std::thread> requestThreadsToJoin;
   std::optional<dogpaw::ConnectionStartHandle> pendingHandleToClose;
   dogpaw::DogPawEntity* entityToDisconnect = nullptr;
+  std::thread dispatcherThreadToJoin;
 
   {
     std::lock_guard<std::mutex> lock(mutex);
@@ -984,8 +1446,10 @@ void NativeDogPawEntityBridge::shutdown() {
     pendingHandleToClose = std::move(pendingConnectionStartHandle);
     pendingConnectionStartHandle.reset();
     requestThreadsToJoin = std::move(requestThreads);
+    dispatcherThreadToJoin = std::move(dispatcherThread);
     entityToDisconnect = entity.get();
   }
+  dispatcherCondition.notify_all();
 
   if (pendingHandleToClose.has_value()) {
     pendingHandleToClose->setReadyMessage(
@@ -1001,6 +1465,10 @@ void NativeDogPawEntityBridge::shutdown() {
     if (requestThread.joinable()) {
       requestThread.join();
     }
+  }
+
+  if (dispatcherThreadToJoin.joinable()) {
+    dispatcherThreadToJoin.join();
   }
 
   std::lock_guard<std::mutex> lock(mutex);
@@ -1032,6 +1500,8 @@ void* dppb_dpe_create(const char* entity_name,
         entity_name,
         string_or_fallback(server_url, "ws://localhost:8080"),
         timeout_ms);
+    bridge->entity->setDeferEndpointRetainedStateQueriesToCommandCallback(
+        true);
     bridge->entity->setErrorCallback(
         [bridge](const std::string& errorMessage) {
           post_bridge_event(bridge, make_error_event(errorMessage));
@@ -1113,6 +1583,11 @@ void* dppb_dpe_create(const char* entity_name,
               bridge,
               make_preset_request_event(content));
           if (!posted) {
+            // Preset requests used to treat the final Dart post itself as the
+            // synchronous success boundary. The dispatcher refactor makes queue
+            // acceptance the bridge handoff boundary instead, so only pre-
+            // handoff rejection is completed here; later delivery failures are
+            // logged by the dispatcher for consistency with other event types.
             AppLogger::warning(
                 "dppb_dpe_create: Failed to forward preset request to Dart; "
                 "completing with error for serverRequestId: " + serverRequestId);
@@ -1608,6 +2083,96 @@ bool dppb_dpe_complete_preset_request(void* handle,
       server_request_id,
       success,
       string_or_fallback(error_message, ""));
+  return true;
+}
+
+/**
+ * @brief Launch the native dispatcher-order probe for bridge integration
+ * tests.
+ *
+ * Purpose:
+ * Starts two native worker threads that offer synthetic debug events to the
+ * bridge in a known logical order so the Dart probe can detect whether the
+ * bridge serializes them through a dispatcher boundary.
+ *
+ * @param handle Opaque bridge handle returned by `dppb_dpe_create()`.
+ * @return `true` when both worker threads were launched successfully,
+ *   otherwise `false`.
+ *
+ * @pre `handle` is a live bridge handle with an event port already registered.
+ * @post On success, the bridge will attempt to deliver two debug-probe events.
+ * @invariant This helper is reserved for bridge integration tests.
+ */
+bool dppb_dpe_debug_run_dispatcher_order_probe(void* handle) {
+  if (handle == nullptr) {
+    return false;
+  }
+
+  NativeDogPawEntityBridge* bridge =
+      static_cast<NativeDogPawEntityBridge*>(handle);
+  std::shared_ptr<std::atomic<bool>> firstHandoffStarted =
+      std::make_shared<std::atomic<bool>>(false);
+  std::thread firstThread([bridge, firstHandoffStarted]() {
+    handoff_debug_probe_event_and_pause(
+        bridge, "dispatcher_order_probe", "first", firstHandoffStarted.get(), 150);
+  });
+  std::thread secondThread([bridge, firstHandoffStarted]() {
+    while (!firstHandoffStarted->load(std::memory_order_acquire)) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    handoff_debug_probe_event_and_pause(
+        bridge, "dispatcher_order_probe", "second", nullptr, 5);
+  });
+
+  if (!store_request_thread(bridge, std::move(firstThread))) {
+    return false;
+  }
+  return store_request_thread(bridge, std::move(secondThread));
+}
+
+/**
+ * @brief Run the native shutdown-drain probe for bridge integration tests.
+ *
+ * Purpose:
+ * Starts one synthetic debug event producer and then drives bridge shutdown so
+ * the Dart probe can verify whether work already handed to the bridge is
+ * drained before teardown returns.
+ *
+ * @param handle Opaque bridge handle returned by `dppb_dpe_create()`.
+ * @return `true` when the probe worker launched and shutdown completed,
+ *   otherwise `false`.
+ *
+ * @pre `handle` is a live bridge handle with an event port already registered.
+ * @post On success, the bridge shutdown path has completed before return.
+ * @invariant This helper is reserved for bridge integration tests.
+ */
+bool dppb_dpe_debug_run_shutdown_drain_probe(void* handle) {
+  if (handle == nullptr) {
+    return false;
+  }
+
+  NativeDogPawEntityBridge* bridge =
+      static_cast<NativeDogPawEntityBridge*>(handle);
+  std::shared_ptr<std::atomic<bool>> handoffStarted =
+      std::make_shared<std::atomic<bool>>(false);
+  std::thread workerThread([bridge, handoffStarted]() {
+    handoff_debug_probe_event_and_pause(
+        bridge,
+        "shutdown_drain_probe",
+        "drain-before-shutdown",
+        handoffStarted.get(),
+        150);
+  });
+  if (!store_request_thread(bridge, std::move(workerThread))) {
+    return false;
+  }
+
+  while (!handoffStarted->load(std::memory_order_acquire)) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+  bridge->shutdown();
   return true;
 }
 
@@ -4176,6 +4741,8 @@ bool dppb_dpe_create_endpoint_async(void* handle,
           if (createResult.success) {
             nlohmann::json resultJson = nlohmann::json::object();
             if (createResult.value != nullptr) {
+              install_action_endpoint_bridge_observers(
+                  bridge, createResult.value);
               resultJson[JF::ENDPOINT] =
                   serialize_endpoint_for_dart(*createResult.value);
             }
@@ -4249,6 +4816,8 @@ bool dppb_dpe_update_endpoint_async(void* handle,
           if (updateResult.success) {
             nlohmann::json resultJson = nlohmann::json::object();
             if (updateResult.value != nullptr) {
+              install_action_endpoint_bridge_observers(
+                  bridge, updateResult.value);
               resultJson[JF::ENDPOINT] =
                   serialize_endpoint_for_dart(*updateResult.value);
             }
@@ -4322,6 +4891,8 @@ bool dppb_dpe_set_endpoint_async(void* handle,
           if (setResult.success) {
             nlohmann::json resultJson = nlohmann::json::object();
             if (setResult.value != nullptr) {
+              install_action_endpoint_bridge_observers(
+                  bridge, setResult.value);
               resultJson[JF::ENDPOINT] =
                   serialize_endpoint_for_dart(*setResult.value);
             }
@@ -4409,6 +4980,8 @@ bool dppb_dpe_read_endpoint_async(void* handle,
           if (readResult.success) {
             nlohmann::json resultJson = nlohmann::json::object();
             if (readResult.value != nullptr) {
+              install_action_endpoint_bridge_observers(
+                  bridge, readResult.value);
               resultJson[JF::ENDPOINT] =
                   serialize_endpoint_for_dart(*readResult.value);
             }
@@ -4912,7 +5485,29 @@ int32_t dppb_dpe_local_endpoint_poll_connection(void* handle,
                 std::min(static_cast<size_t>(max_size), size);
             std::memcpy(out_data, source, copySize);
             bytesRead = static_cast<int32_t>(copySize);
-          });
+          },
+          false);
+      if (success && bytesRead > 0) {
+        if (mark_continuous_poll_success(bridge, std::string(endpoint_name),
+                                         connectionName)) {
+          AppLogger::info(
+              "NativeDogPawEntityBridge: First readable continuous payload "
+              "observed for local endpoint '" +
+              std::string(endpoint_name) + "' connection '" + connectionName +
+              "'");
+        }
+        return bytesRead;
+      }
+      if (!success &&
+          should_log_continuous_poll_failure(bridge,
+                                             std::string(endpoint_name),
+                                             connectionName)) {
+        AppLogger::warning(
+            "NativeDogPawEntityBridge: Continuous local endpoint '" +
+            std::string(endpoint_name) + "' lost readable shared-data frames "
+            "after prior success on connection '" +
+            connectionName + "'");
+      }
       return success ? bytesRead : 0;
     }
   } catch (...) {
@@ -4920,6 +5515,101 @@ int32_t dppb_dpe_local_endpoint_poll_connection(void* handle,
   }
 
   return -1;
+}
+
+int32_t dppb_dpe_local_endpoint_get_retained_state_json(
+    void* handle,
+    const char* endpoint_name,
+    char* out_json,
+    const int32_t max_size) {
+  if (handle == nullptr || endpoint_name == nullptr) {
+    return -1;
+  }
+
+  NativeDogPawEntityBridge* bridge =
+      static_cast<NativeDogPawEntityBridge*>(handle);
+  const std::shared_ptr<dogpaw::Endpoint> endpoint =
+      resolve_local_endpoint(bridge, std::string(endpoint_name));
+  if (endpoint == nullptr) {
+    return -1;
+  }
+
+  try {
+    const std::string snapshotJson =
+        endpoint->getRetainedStateSnapshot().toJson().dump();
+    const int32_t requiredSize =
+        static_cast<int32_t>(snapshotJson.size() + 1);
+    if (out_json == nullptr || max_size <= 0) {
+      return requiredSize;
+    }
+    if (max_size < requiredSize) {
+      return requiredSize;
+    }
+    std::memcpy(out_json, snapshotJson.c_str(),
+                static_cast<size_t>(requiredSize));
+    return requiredSize;
+  } catch (...) {
+    return -1;
+  }
+}
+
+bool dppb_dpe_local_endpoint_adopt_retained_state_json(
+    void* handle,
+    const char* endpoint_name,
+    const char* snapshot_json,
+    const bool publish_matched_output,
+    const char* sender_info_json) {
+  if (handle == nullptr || endpoint_name == nullptr || snapshot_json == nullptr) {
+    return false;
+  }
+
+  NativeDogPawEntityBridge* bridge =
+      static_cast<NativeDogPawEntityBridge*>(handle);
+  const std::shared_ptr<dogpaw::Endpoint> endpoint =
+      resolve_local_endpoint(bridge, std::string(endpoint_name));
+  if (endpoint == nullptr) {
+    return false;
+  }
+
+  try {
+    const nlohmann::json parsedSnapshotJson = parse_json_object(snapshot_json);
+    std::unique_ptr<dogpaw::EndpointRetainedStateSnapshot> snapshot =
+        dogpaw::EndpointRetainedStateSnapshot::fromJson(parsedSnapshotJson);
+    if (snapshot == nullptr) {
+      return false;
+    }
+
+    std::optional<dogpaw::EndpointSenderInfo> senderInfo = std::nullopt;
+    if (sender_info_json != nullptr && sender_info_json[0] != '\0') {
+      const nlohmann::json parsedSenderInfoJson =
+          parse_json_object(sender_info_json);
+      if (!parsedSenderInfoJson.contains(JF::NAME) ||
+          !parsedSenderInfoJson[JF::NAME].is_string() ||
+          !parsedSenderInfoJson.contains(JF::TARGET) ||
+          !parsedSenderInfoJson[JF::TARGET].is_object()) {
+        return false;
+      }
+      std::unique_ptr<dogpaw::DataItemRefByName> sourceEndpointRef =
+          dogpaw::DataItemRefByName::fromJson(parsedSenderInfoJson[JF::TARGET]);
+      if (sourceEndpointRef == nullptr) {
+        return false;
+      }
+      senderInfo = dogpaw::EndpointSenderInfo{
+          parsedSenderInfoJson[JF::NAME].get<std::string>(), *sourceEndpointRef};
+    }
+
+    g_suppressedStatefulInputBridge = bridge;
+    g_suppressedStatefulInputEndpointName = std::string(endpoint_name);
+    const bool adopted = endpoint->adoptRetainedStateSnapshot(
+        *snapshot, publish_matched_output, senderInfo);
+    g_suppressedStatefulInputEndpointName.clear();
+    g_suppressedStatefulInputBridge = nullptr;
+    return adopted;
+  } catch (...) {
+    g_suppressedStatefulInputEndpointName.clear();
+    g_suppressedStatefulInputBridge = nullptr;
+    return false;
+  }
 }
 
 int32_t dppb_dpe_local_endpoint_read_file_backed(void* handle,

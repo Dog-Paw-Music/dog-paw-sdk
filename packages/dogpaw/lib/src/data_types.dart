@@ -29,6 +29,9 @@ enum DataType {
   /// Enumerated value selection
   enum_,
 
+  /// Packed 32-bit color value
+  color,
+
   /// Real-time audio data
   audioStream,
 
@@ -62,8 +65,8 @@ enum DataType {
   /// One current scalar value for one global output lane
   globalOutputValue,
 
-  /// DPP parameter queue message: uint16 param index + reserved + double value
-  dppParamQueue,
+  /// DPP editor message: tagged param/note payload for low-rate editor control
+  dppEditorMessage,
 
   /// User-defined custom type, for use with file backed endpoints (cannot be used wtih queue or continuous endpoints)
   custom,

@@ -23,6 +23,8 @@ class JsonFields {
   static const String ENTITY_LIFECYCLE_DISCONNECTED = "entity_disconnected";
   static const String SOURCE_ENTITY = "sourceEntity";
   static const String NOTIFICATION_TYPE = "type";
+  static const String PROBE_NAME = "probeName";
+  static const String LABEL = "label";
   static const String TYPE = "type";
   static const String NAMESPACE_SELECTOR = "namespaceSelector";
 
@@ -37,6 +39,7 @@ class JsonFields {
   static const String APP_NAME = "name";
   static const String RUNTIME_APP_NAME = "appName";
   static const String DISPLAY_NAME = "displayName";
+  static const String ID = "id";
   static const String ICON = "icon";
   static const String VISIBLE = "visible";
   static const String FLUTTER_APP = "flutterApp";
@@ -168,6 +171,8 @@ class JsonFields {
   static const String FLAGS = "flags";
   static const String GROUP_KEY = "groupKey";
   static const String SHIM_TARGET_REF = "shimTargetRef";
+  static const String MESSAGE_QUEUE_PAYLOAD_CONTRACT =
+      "messageQueuePayloadContract";
   static const String FILE_PATH = "filePath";
 
   // Connection management
@@ -195,11 +200,44 @@ class JsonFields {
   static const String CONSTRAINTS = "constraints";
   static const String UNITS = "units";
   static const String DEFAULT_VALUE = "defaultValue";
-  static const String ENUM_VALUES = "enumValues";
+  static const String ENUM_OPTIONS = "enumOptions";
   static const String CUSTOM_SCHEMA = "customSchema";
   static const String BASE_TYPE = "baseType";
   static const String INDEX_TYPE = "indexType";
   static const String INDEX_SPEC = "indexSpec";
+  static const String INITIAL_VALUE = "initialValue";
+  static const String ACTION = "action";
+  static const String ACTION_PAYLOAD = "actionPayload";
+  static const String MATCHED_OUTPUT = "matchedOutput";
+  static const String STATEFUL_INPUT = "statefulInput";
+  static const String RETAINED_VALUE = "retainedValue";
+  static const String SENDER_INFO = "senderInfo";
+  static const String SOURCE_ENDPOINT_REF = "sourceEndpointRef";
+  static const String STATEFUL_BEHAVIOR = "behavior";
+  static const String STATEFUL_CONSUMPTION_MODE = "consumptionMode";
+  static const String MESSAGE_QUEUE_PAYLOAD_ENDPOINT_DATA = "endpoint_data";
+  static const String MESSAGE_QUEUE_PAYLOAD_STATEFUL_FLOAT_ACTION =
+      "stateful_float_action";
+  static const String MESSAGE_QUEUE_PAYLOAD_STATEFUL_INT_ACTION =
+      "stateful_int_action";
+  static const String MESSAGE_QUEUE_PAYLOAD_STATEFUL_TOGGLE_ACTION =
+      "stateful_toggle_action";
+  static const String MESSAGE_QUEUE_PAYLOAD_STATEFUL_ENUM_ACTION =
+      "stateful_enum_action";
+  static const String MESSAGE_QUEUE_PAYLOAD_STATEFUL_COLOR_ACTION =
+      "stateful_color_action";
+  static const String STATEFUL_BEHAVIOR_AUTO_REDUCED = "auto_reduced";
+  static const String STATEFUL_BEHAVIOR_OWNER_MANAGED = "owner_managed";
+  static const String STATEFUL_CONSUMPTION_CALLBACK_ONLY = "callback_only";
+  static const String STATEFUL_CONSUMPTION_RETAINED_STATE_ONLY =
+      "retained_state_only";
+  static const String STATEFUL_CONSUMPTION_CALLBACK_AND_RETAINED_STATE =
+      "callback_and_retained_state";
+  static const String STATEFUL_ACTION_SET_VALUE = "set_value";
+  static const String STATEFUL_ACTION_ADD = "add";
+  static const String STATEFUL_ACTION_TOGGLE = "toggle";
+  static const String STATEFUL_ACTION_SET_ID = "set_id";
+  static const String STATEFUL_ACTION_STEP = "step";
 
   // Mapping and conversion
   static const String MAPPING_TYPE = "mappingType";
@@ -261,6 +299,7 @@ class JsonFields {
   static const String DATA_TYPE_TOGGLE = "toggle";
   static const String DATA_TYPE_MOMENTARY = "momentary";
   static const String DATA_TYPE_ENUM = "enum";
+  static const String DATA_TYPE_COLOR = "color";
   static const String DATA_TYPE_AUDIO_STREAM = "audio_stream";
   static const String DATA_TYPE_KEY_PRESS = "key_press";
   static const String DATA_TYPE_NEAR_PRESS = "near_press";
@@ -272,7 +311,7 @@ class JsonFields {
   static const String DATA_TYPE_VOICE_MESSAGE = "voice_message";
   static const String DATA_TYPE_VOICE_OUTPUT_VALUE = "voice_output_value";
   static const String DATA_TYPE_GLOBAL_OUTPUT_VALUE = "global_output_value";
-  static const String DATA_TYPE_DPP_PARAM_QUEUE = "dpp_param_queue";
+  static const String DATA_TYPE_DPP_EDITOR_MESSAGE = "dpp_editor_message";
   static const String DATA_TYPE_CUSTOM = "custom";
   static const String DATA_TYPE_SCOPE_BUFFER = "scope_buffer";
 

@@ -106,14 +106,43 @@ void main() {
       );
     });
 
-    test('detects product builds by suppressing fast info stdout', () async {
+    test('mirrors product-build info output to stdout', () async {
+      final ProcessResult result = await runAppLoggerProbe(
+        'immediate',
+        dartDefines: const <String>['-Ddart.vm.product=true'],
+      );
+
+      expect(result.exitCode, 0, reason: '${result.stderr}');
+      expect(
+        result.stdout,
+        contains('INFO: [Probe] immediate-message'),
+      );
+      expect(result.stderr, isEmpty);
+    });
+
+    test('mirrors product-build fast info output to stdout', () async {
       final ProcessResult result = await runAppLoggerProbe(
         'mode_sensitive_info_fast',
         dartDefines: const <String>['-Ddart.vm.product=true'],
       );
 
       expect(result.exitCode, 0, reason: '${result.stderr}');
-      expect(result.stdout, isEmpty);
+      expect(
+        result.stdout,
+        contains('INFO: [Probe] mode-sensitive-message'),
+      );
+      expect(result.stderr, isEmpty);
+    });
+
+    test('mirrors product-build error output to stdout', () async {
+      final ProcessResult result = await runAppLoggerProbe(
+        'error',
+        dartDefines: const <String>['-Ddart.vm.product=true'],
+      );
+
+      expect(result.exitCode, 0, reason: '${result.stderr}');
+      expect(result.stdout, contains('ERROR: error-message'));
+      expect(result.stdout, contains('Error details: detail-message'));
       expect(result.stderr, isEmpty);
     });
   });

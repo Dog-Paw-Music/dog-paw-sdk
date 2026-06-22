@@ -40,10 +40,7 @@
     {
       "type": "launch_app",
       "app": "dog_paw_status_bar",
-      "required": true,
-      "env": {
-        "WAYLAND_DEBUG": "1"
-      }
+      "required": true
     },
     {
       "type": "launch_app",

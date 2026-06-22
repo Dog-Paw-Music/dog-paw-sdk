@@ -136,8 +136,8 @@ def helper_module_set_exists(candidate_dir: Path) -> bool:
         either the exported runtime directory or a nearby source checkout without
         naming repo-specific path prefixes in public code.
     Parameters:
-        candidate_dir: Directory that may contain `install_app.py` and
-            `install_fingerprint.py`.
+        candidate_dir: Directory that may contain `install_app.py`,
+            `install_fingerprint.py`, and `install_manifest_resolver.py`.
     Return value:
         `True` when both helper modules exist in `candidate_dir`.
     Requirements:
@@ -151,6 +151,7 @@ def helper_module_set_exists(candidate_dir: Path) -> bool:
     return (
         (candidate_dir / "install_app.py").is_file()
         and (candidate_dir / "install_fingerprint.py").is_file()
+        and (candidate_dir / "install_manifest_resolver.py").is_file()
     )
 
 
@@ -165,8 +166,8 @@ def resolve_helper_modules_dir(script_dir: Path, workspace_root: Path) -> Path:
         script_dir: Directory containing `dogpaw_emulator.py`.
         workspace_root: Logical workspace root for this emulator invocation.
     Return value:
-        Directory expected to contain `install_app.py` and
-        `install_fingerprint.py`.
+        Directory expected to contain `install_app.py`, `install_fingerprint.py`,
+        and `install_manifest_resolver.py`.
     Requirements:
         `script_dir` and `workspace_root` should be absolute paths.
     Guarantees:
@@ -285,6 +286,7 @@ RPI_TOOLS_DIR = RUNTIME_LAYOUT.rpi_tools_dir
 SOURCE_LAYOUT_ROOT = resolve_source_layout_root(RUNTIME_LAYOUT)
 install_app = load_helper_module("install_app", RPI_TOOLS_DIR)
 install_fingerprint = load_helper_module("install_fingerprint", RPI_TOOLS_DIR)
+install_manifest_resolver = load_helper_module("install_manifest_resolver", RPI_TOOLS_DIR)
 
 DEFAULT_STARTUP_PLAN = RUNTIME_LAYOUT.script_path.parent / "startup" / "emulator_stack.json"
 RPI_RESOURCE_ROOT = RUNTIME_LAYOUT.resource_root
@@ -2665,27 +2667,90 @@ def install_headless_for_emulator(config: EmulatorConfig, args: argparse.Namespa
         return 1
     try:
         manifest_path = resolve_cli_manifest_path(args.manifest)
-        binary_path = resolve_headless_install_binary_path(
+        installed_dir = install_headless_manifest_for_emulator(
+            config,
             manifest_path,
-            args.build_dir,
+            resolved_emulator_build_dir(args.build_dir),
             args.binary,
-        )
-        extra_binary_paths = resolve_headless_extra_binary_paths(
-            manifest_path,
-            args.build_dir,
-        )
-        installed_dir = install_app.install_app(
-            manifest_path,
-            config.app_dir,
-            binary_path,
-            None,
-            extra_binary_paths,
         )
     except (FileNotFoundError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     print(installed_dir)
     return 0
+
+
+def resolved_emulator_build_dir(build_dir: str) -> str:
+    """Resolve the build directory text for local emulator app installs.
+
+    Purpose:
+        Gives unified emulator install a deterministic native build directory
+        when the user does not provide `--build-dir`.
+    Parameters:
+        build_dir: Raw CLI build directory value, possibly empty.
+    Return value:
+        Build directory path string.
+    Requirements:
+        None.
+    Guarantees:
+        Empty input resolves to the source checkout's native build directory
+        when available, otherwise the current runtime workspace's native build
+        directory.
+    Invariants:
+        Does not check whether the directory exists or run a build.
+    """
+
+    if build_dir != "":
+        return build_dir
+    default_native_build_dir = "build" + "-native"
+    if SOURCE_LAYOUT_ROOT is not None:
+        return str(SOURCE_LAYOUT_ROOT / default_native_build_dir)
+    return str(WORKSPACE_ROOT / default_native_build_dir)
+
+
+def install_headless_manifest_for_emulator(
+    config: EmulatorConfig,
+    manifest_path: Path,
+    build_dir: str,
+    explicit_binary: str | None,
+) -> Path:
+    """Install one resolved headless manifest into an emulator registry.
+
+    Purpose:
+        Provides the single-headless-app execution primitive used by both legacy
+        and unified emulator install commands.
+    Parameters:
+        config: Target emulator configuration.
+        manifest_path: Source or packaged headless app manifest.
+        build_dir: Native build directory containing the app executable.
+        explicit_binary: Optional direct binary override for this manifest.
+    Return value:
+        Installed app directory path.
+    Requirements:
+        The resolved binary and any helper binaries must exist.
+    Guarantees:
+        Copies the manifest, binary payload, assets, and install metadata through
+        the shared install core.
+    Invariants:
+        Does not install any dependency manifests by itself.
+    """
+
+    binary_path = resolve_headless_install_binary_path(
+        manifest_path,
+        build_dir,
+        explicit_binary,
+    )
+    extra_binary_paths = resolve_headless_extra_binary_paths(
+        manifest_path,
+        build_dir,
+    )
+    return install_app.install_app(
+        manifest_path,
+        config.app_dir,
+        binary_path,
+        None,
+        extra_binary_paths,
+    )
 
 
 def install_flutter_for_emulator(config: EmulatorConfig, args: argparse.Namespace) -> int:
@@ -2762,6 +2827,280 @@ def install_flutter_for_emulator(config: EmulatorConfig, args: argparse.Namespac
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     print(installed_dir)
+    return 0
+
+
+def build_emulator_manifest_index(
+    seed_manifests: Sequence[install_manifest_resolver.DogpawAppManifest],
+) -> dict[str, install_manifest_resolver.DogpawAppManifest]:
+    """Build the manifest lookup index for emulator install dependency resolution.
+
+    Purpose:
+        Lets emulator installs resolve dependencies from packaged base apps,
+        packaged examples, source app trees, and the explicitly requested seed.
+    Parameters:
+        seed_manifests: User-requested manifests that should also be available
+            for dependency lookup.
+    Return value:
+        Mapping from app name to manifest facts.
+    Requirements:
+        Discoverable manifests must be valid Dog Paw app manifests.
+    Guarantees:
+        Packaged/source discovery keeps its existing precedence, while explicit
+        seeds override matching discovered names.
+    Invariants:
+        Reads manifests only; it does not build or install apps.
+    """
+
+    index = install_manifest_resolver.build_manifest_index(
+        list(default_app_manifest_index().values())
+    )
+    for manifest in seed_manifests:
+        index[manifest.name] = manifest
+    return index
+
+
+def resolve_emulator_install_manifests(
+    manifest_path: Path,
+) -> tuple[install_manifest_resolver.DogpawAppManifest, ...]:
+    """Resolve one emulator install manifest and its dependencies.
+
+    Purpose:
+        Provides the emulator's shared dependency expansion step before local app
+        build/install execution.
+    Parameters:
+        manifest_path: User-selected manifest path.
+    Return value:
+        Dependency-expanded manifests in install order.
+    Requirements:
+        `manifest_path` and every dependency manifest must be valid.
+    Guarantees:
+        Dependencies appear before the selected manifest.
+    Invariants:
+        Does not build, copy, or install app payloads.
+    """
+
+    seed_manifest = install_manifest_resolver.manifest_from_path(manifest_path)
+    manifest_index = build_emulator_manifest_index((seed_manifest,))
+    return install_manifest_resolver.expand_manifests_with_install_dependencies(
+        (seed_manifest,),
+        manifest_index,
+    )
+
+
+def print_headless_install_dry_run(manifest_path: Path, app_root: Path, build_dir: str) -> None:
+    """Print the local headless install steps for dry-run mode.
+
+    Purpose:
+        Makes unified emulator install dry-runs show how resolved headless
+        dependencies would be copied into the app registry.
+    Parameters:
+        manifest_path: Manifest that would be installed.
+        app_root: Emulator app registry root.
+        build_dir: Native build directory used for executable lookup.
+    Return value:
+        None.
+    Requirements:
+        `manifest_path` must describe a valid headless app.
+    Guarantees:
+        Prints readable commands without checking binary existence.
+    Invariants:
+        Does not create files, build targets, or install apps.
+    """
+
+    manifest = install_manifest_resolver.manifest_from_path(manifest_path)
+    executable = manifest.executable or ""
+    install_tool_path = Path(install_app.__file__).resolve()
+    print(
+        "python3 "
+        f"'{install_tool_path}' --manifest '{manifest_path}' --app-root '{app_root}' "
+        f"--binary '{Path(build_dir) / 'bin' / executable}'"
+    )
+
+
+def print_emulator_build_dry_run(build_dir: str, targets: Sequence[str]) -> None:
+    """Print the native CMake build command for emulator install dry-runs.
+
+    Purpose:
+        Shows the target union that unified emulator install would build before
+        copying resolved app payloads.
+    Parameters:
+        build_dir: Native CMake build directory.
+        targets: CMake targets in requested order.
+    Return value:
+        None.
+    Requirements:
+        `targets` may be empty.
+    Guarantees:
+        Prints nothing when no targets are requested.
+    Invariants:
+        Does not run CMake or inspect the build directory.
+    """
+
+    if not targets:
+        return
+    command = ["cmake", "--build", build_dir]
+    for target in targets:
+        command.extend(["--target", target])
+    print(shlex.join(command))
+
+
+def build_emulator_install_targets(build_dir: str, targets: Sequence[str]) -> int:
+    """Build native targets needed by a real emulator install.
+
+    Purpose:
+        Ensures headless dependencies and shared runtime artifacts exist before
+        local install copying begins.
+    Parameters:
+        build_dir: Native CMake build directory.
+        targets: CMake targets to build.
+    Return value:
+        Zero on success, otherwise the CMake process exit code.
+    Requirements:
+        `build_dir` must name a configured CMake build directory for real runs.
+    Guarantees:
+        Runs at most one CMake build command.
+    Invariants:
+        Does not install app registry entries.
+    """
+
+    if not targets:
+        return 0
+    command = ["cmake", "--build", build_dir]
+    for target in targets:
+        command.extend(["--target", target])
+    completed = subprocess.run(command, cwd=str(SOURCE_LAYOUT_ROOT or WORKSPACE_ROOT), check=False)
+    return int(completed.returncode)
+
+
+def install_resolved_manifest_for_emulator(
+    config: EmulatorConfig,
+    manifest: install_manifest_resolver.DogpawAppManifest,
+    args: argparse.Namespace,
+    build_dir: str,
+    explicit_binary: str | None,
+) -> Path:
+    """Install one resolved manifest into the emulator app registry.
+
+    Purpose:
+        Chooses the correct local install primitive after shared dependency
+        resolution has already selected the manifest order.
+    Parameters:
+        config: Target emulator configuration.
+        manifest: Resolved manifest facts for one app.
+        args: Parsed emulator CLI options.
+        build_dir: Native build directory used for headless payloads.
+        explicit_binary: Optional binary override for a single headless app.
+    Return value:
+        Installed app directory path.
+    Requirements:
+        Flutter apps must be buildable locally; headless binaries must exist.
+    Guarantees:
+        Installs exactly one app.
+    Invariants:
+        Does not resolve or install dependencies by itself.
+    """
+
+    if manifest.is_flutter:
+        flutter_project_dir = resolve_flutter_project_dir(manifest.manifest_path)
+        pub_get_result = subprocess.run(
+            ["flutter", "pub", "get"],
+            cwd=str(flutter_project_dir),
+            check=False,
+        )
+        if pub_get_result.returncode != 0:
+            raise RuntimeError(f"flutter pub get failed for {manifest.name}")
+        build_result = subprocess.run(
+            flutter_build_command(flutter_project_dir, args.build_mode),
+            cwd=str(flutter_project_dir),
+            check=False,
+        )
+        if build_result.returncode != 0:
+            raise RuntimeError(f"flutter build failed for {manifest.name}")
+        bundle_dir = resolve_flutter_bundle_dir(manifest.manifest_path, args.build_mode)
+        if not bundle_dir.is_dir():
+            raise ValueError(f"expected Flutter bundle not found: {bundle_dir}")
+        return install_app.install_app(
+            manifest.manifest_path,
+            config.app_dir,
+            None,
+            bundle_dir,
+            [],
+        )
+    return install_headless_manifest_for_emulator(
+        config,
+        manifest.manifest_path,
+        build_dir,
+        explicit_binary,
+    )
+
+
+def install_manifest_set_for_emulator(config: EmulatorConfig, args: argparse.Namespace) -> int:
+    """Install a manifest and its dependencies into one emulator.
+
+    Purpose:
+        Implements the unified `dogpaw emulator install` command using shared
+        dependency resolution and local app install primitives.
+    Parameters:
+        config: Target emulator configuration.
+        args: Parsed emulator CLI options.
+    Return value:
+        Zero on success, otherwise non-zero failure status.
+    Requirements:
+        The emulator must exist and `args.manifest` must be provided.
+    Guarantees:
+        Installs dependencies before dependents. Dry-run prints the build/install
+        plan without modifying the filesystem.
+    Invariants:
+        Does not install into any emulator other than `config.emulator_name`.
+    """
+
+    if not require_existing_emulator(config):
+        return 1
+    if not args.manifest:
+        print("Error: --manifest is required", file=sys.stderr)
+        return 1
+    try:
+        manifest_path = resolve_cli_manifest_path(args.manifest)
+        scoped_manifests = resolve_emulator_install_manifests(manifest_path)
+    except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    build_dir = resolved_emulator_build_dir(args.build_dir)
+    headless_manifests = tuple(manifest for manifest in scoped_manifests if not manifest.is_flutter)
+    if args.binary is not None and len(headless_manifests) != 1:
+        print(
+            "Error: --binary is only supported when the resolved install set has one headless app",
+            file=sys.stderr,
+        )
+        return 1
+    build_targets = install_manifest_resolver.build_targets_for_manifests(scoped_manifests)
+    if args.dry_run:
+        print_emulator_build_dry_run(build_dir, build_targets)
+        for manifest in scoped_manifests:
+            if manifest.is_flutter:
+                print_flutter_install_dry_run(manifest.manifest_path, config.app_dir, args.build_mode)
+            else:
+                print_headless_install_dry_run(manifest.manifest_path, config.app_dir, build_dir)
+        return 0
+
+    build_result = build_emulator_install_targets(build_dir, build_targets)
+    if build_result != 0:
+        return build_result
+    try:
+        for manifest in scoped_manifests:
+            installed_dir = install_resolved_manifest_for_emulator(
+                config,
+                manifest,
+                args,
+                build_dir,
+                args.binary if len(headless_manifests) == 1 and not manifest.is_flutter else None,
+            )
+            print(installed_dir)
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -6272,6 +6611,7 @@ def build_parser() -> argparse.ArgumentParser:
             "info",
             "logs",
             "delete",
+            "install",
             "install-headless",
             "install-flutter",
             "smoke",
@@ -6494,10 +6834,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Deleted Dog Paw emulator '{config.emulator_name}'")
         return 0
 
+    if args.command == "install":
+        return install_manifest_set_for_emulator(config, args)
+
     if args.command == "install-headless":
+        print(
+            "Warning: 'dogpaw emulator install-headless' is deprecated; use "
+            "'dogpaw emulator install --manifest PATH' instead.",
+            file=sys.stderr,
+        )
         return install_headless_for_emulator(config, args)
 
     if args.command == "install-flutter":
+        print(
+            "Warning: 'dogpaw emulator install-flutter' is deprecated; use "
+            "'dogpaw emulator install --manifest PATH' instead.",
+            file=sys.stderr,
+        )
         return install_flutter_for_emulator(config, args)
 
     if args.command == "smoke":

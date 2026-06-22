@@ -17,20 +17,21 @@ class DPPBDataType {
   static const int toggle = 6;
   static const int momentary = 7;
   static const int enumVal = 8;
-  static const int audioStream = 9;
-  static const int keyPress = 10;
-  static const int nearPress = 11;
-  static const int rawSensors = 12;
-  static const int noteControl = 13;
-  static const int midiMessage = 14;
-  static const int ledMessage = 15;
-  static const int keyPosition = 16;
-  static const int voiceMessage = 17;
-  static const int voiceOutputValue = 18;
-  static const int globalOutputValue = 19;
-  static const int dppParamQueue = 20;
-  static const int custom = 21;
-  static const int scopeBuffer = 22;
+  static const int color = 9;
+  static const int audioStream = 10;
+  static const int keyPress = 11;
+  static const int nearPress = 12;
+  static const int rawSensors = 13;
+  static const int noteControl = 14;
+  static const int midiMessage = 15;
+  static const int ledMessage = 16;
+  static const int keyPosition = 17;
+  static const int voiceMessage = 18;
+  static const int voiceOutputValue = 19;
+  static const int globalOutputValue = 20;
+  static const int dppEditorMessage = 21;
+  static const int custom = 22;
+  static const int scopeBuffer = 23;
 }
 
 class DPPBIndexType {
@@ -823,6 +824,34 @@ typedef DppbDpeLocalEndpointPollConnectionDart = int Function(
   int maxSize,
 );
 
+typedef DppbDpeLocalEndpointGetRetainedStateJsonC = Int32 Function(
+  Pointer<Void> handle,
+  Pointer<Utf8> endpointName,
+  Pointer<Utf8> outJson,
+  Int32 maxSize,
+);
+typedef DppbDpeLocalEndpointGetRetainedStateJsonDart = int Function(
+  Pointer<Void> handle,
+  Pointer<Utf8> endpointName,
+  Pointer<Utf8> outJson,
+  int maxSize,
+);
+
+typedef DppbDpeLocalEndpointAdoptRetainedStateJsonC = Bool Function(
+  Pointer<Void> handle,
+  Pointer<Utf8> endpointName,
+  Pointer<Utf8> snapshotJson,
+  Bool publishMatchedOutput,
+  Pointer<Utf8> senderInfoJson,
+);
+typedef DppbDpeLocalEndpointAdoptRetainedStateJsonDart = bool Function(
+  Pointer<Void> handle,
+  Pointer<Utf8> endpointName,
+  Pointer<Utf8> snapshotJson,
+  bool publishMatchedOutput,
+  Pointer<Utf8> senderInfoJson,
+);
+
 typedef DppbDpeLocalEndpointReadFileBackedC = Int32 Function(
   Pointer<Void> handle,
   Pointer<Utf8> endpointName,
@@ -1299,6 +1328,20 @@ typedef DppbDpeCompletePresetRequestDart = bool Function(
   Pointer<Utf8> errorMessage,
 );
 
+typedef DppbDpeDebugRunDispatcherOrderProbeC = Bool Function(
+  Pointer<Void> handle,
+);
+typedef DppbDpeDebugRunDispatcherOrderProbeDart = bool Function(
+  Pointer<Void> handle,
+);
+
+typedef DppbDpeDebugRunShutdownDrainProbeC = Bool Function(
+  Pointer<Void> handle,
+);
+typedef DppbDpeDebugRunShutdownDrainProbeDart = bool Function(
+  Pointer<Void> handle,
+);
+
 typedef DppbDpeSaveGlobalStateAsyncC = Bool Function(
   Pointer<Void> handle,
   Int64 requestId,
@@ -1651,6 +1694,10 @@ class DogPawBridge {
   late DppbDpeLocalEndpointGetConnectionShapeDart
       dpeLocalEndpointGetConnectionShape;
   late DppbDpeLocalEndpointPollConnectionDart dpeLocalEndpointPollConnection;
+  late DppbDpeLocalEndpointGetRetainedStateJsonDart
+      dpeLocalEndpointGetRetainedStateJson;
+  late DppbDpeLocalEndpointAdoptRetainedStateJsonDart
+      dpeLocalEndpointAdoptRetainedStateJson;
   late DppbDpeLocalEndpointReadFileBackedDart dpeLocalEndpointReadFileBacked;
   late DppbDpeLocalEndpointPollFileBackedDart dpeLocalEndpointPollFileBacked;
   late DppbDpeCreateConnectionRequestAsyncDart dpeCreateConnectionRequestAsync;
@@ -1686,6 +1733,8 @@ class DogPawBridge {
   late DppbDpeSendCommandResponseDart dpeSendCommandResponse;
   late DppbDpeSendCommandAcceptedDart dpeSendCommandAccepted;
   late DppbDpeCompletePresetRequestDart dpeCompletePresetRequest;
+  late DppbDpeDebugRunDispatcherOrderProbeDart dpeDebugRunDispatcherOrderProbe;
+  late DppbDpeDebugRunShutdownDrainProbeDart dpeDebugRunShutdownDrainProbe;
   late DppbDpeSaveGlobalStateAsyncDart dpeSaveGlobalStateAsync;
   late DppbDpeLoadGlobalStateAsyncDart dpeLoadGlobalStateAsync;
   late DppbDpeLogAsyncDart dpeLogAsync;
@@ -1932,6 +1981,14 @@ class DogPawBridge {
             DppbDpeLocalEndpointPollConnectionC,
             DppbDpeLocalEndpointPollConnectionDart>(
         'dppb_dpe_local_endpoint_poll_connection');
+    dpeLocalEndpointGetRetainedStateJson = _lib.lookupFunction<
+            DppbDpeLocalEndpointGetRetainedStateJsonC,
+            DppbDpeLocalEndpointGetRetainedStateJsonDart>(
+        'dppb_dpe_local_endpoint_get_retained_state_json');
+    dpeLocalEndpointAdoptRetainedStateJson = _lib.lookupFunction<
+            DppbDpeLocalEndpointAdoptRetainedStateJsonC,
+            DppbDpeLocalEndpointAdoptRetainedStateJsonDart>(
+        'dppb_dpe_local_endpoint_adopt_retained_state_json');
     dpeLocalEndpointReadFileBacked = _lib.lookupFunction<
             DppbDpeLocalEndpointReadFileBackedC,
             DppbDpeLocalEndpointReadFileBackedDart>(
@@ -2048,6 +2105,16 @@ class DogPawBridge {
     dpeCompletePresetRequest = _lib.lookupFunction<
         DppbDpeCompletePresetRequestC,
         DppbDpeCompletePresetRequestDart>('dppb_dpe_complete_preset_request');
+    dpeDebugRunDispatcherOrderProbe = _lib.lookupFunction<
+        DppbDpeDebugRunDispatcherOrderProbeC,
+        DppbDpeDebugRunDispatcherOrderProbeDart>(
+      'dppb_dpe_debug_run_dispatcher_order_probe',
+    );
+    dpeDebugRunShutdownDrainProbe = _lib.lookupFunction<
+        DppbDpeDebugRunShutdownDrainProbeC,
+        DppbDpeDebugRunShutdownDrainProbeDart>(
+      'dppb_dpe_debug_run_shutdown_drain_probe',
+    );
     dpeSaveGlobalStateAsync = _lib.lookupFunction<DppbDpeSaveGlobalStateAsyncC,
         DppbDpeSaveGlobalStateAsyncDart>('dppb_dpe_save_global_state_async');
     dpeLoadGlobalStateAsync = _lib.lookupFunction<DppbDpeLoadGlobalStateAsyncC,
@@ -2066,8 +2133,7 @@ class DogPawBridge {
         _lib.lookupFunction<DppbDpeListAppsAsyncC, DppbDpeListAppsAsyncDart>(
             'dppb_dpe_list_apps_async');
     dpeListRunningEntitiesAsync = _lib.lookupFunction<
-        DppbDpeListRunningEntitiesAsyncC,
-        DppbDpeListRunningEntitiesAsyncDart>(
+        DppbDpeListRunningEntitiesAsyncC, DppbDpeListRunningEntitiesAsyncDart>(
       'dppb_dpe_list_running_entities_async',
     );
     dpeLaunchAppAsync =
@@ -2702,6 +2768,57 @@ class DogPawBridge {
       malloc.free(serverRequestIdPtr);
       malloc.free(errorPtr);
     }
+  }
+
+  /// Run the native dispatcher ordering probe for the bridge test harness.
+  ///
+  /// Purpose:
+  /// Starts a small native-only scenario that emits synthetic bridge events from
+  /// multiple worker threads so integration tests can verify whether the bridge
+  /// serializes them through a single dispatcher boundary.
+  ///
+  /// Parameters:
+  /// - [handle]: `Pointer<Void>` live native bridge handle.
+  ///
+  /// Return value:
+  /// - `bool` indicating whether the native probe launched successfully.
+  ///
+  /// Requirements/Preconditions:
+  /// - [handle] is a live bridge handle with an event port already registered.
+  ///
+  /// Guarantees/Postconditions:
+  /// - On success, the probe will eventually post synthetic debug events to the
+  ///   bridge event stream.
+  ///
+  /// Invariants:
+  /// - This helper is intended only for bridge integration tests.
+  bool dpeDebugRunDispatcherOrderProbeManaged(Pointer<Void> handle) {
+    return dpeDebugRunDispatcherOrderProbe(handle);
+  }
+
+  /// Run the native shutdown-drain probe for the bridge test harness.
+  ///
+  /// Purpose:
+  /// Exercises the bridge shutdown path with a synthetic event that should
+  /// already belong to the bridge when teardown starts, allowing tests to
+  /// confirm whether shutdown drains accepted work before returning.
+  ///
+  /// Parameters:
+  /// - [handle]: `Pointer<Void>` live native bridge handle.
+  ///
+  /// Return value:
+  /// - `bool` indicating whether the native probe launched successfully.
+  ///
+  /// Requirements/Preconditions:
+  /// - [handle] is a live bridge handle with an event port already registered.
+  ///
+  /// Guarantees/Postconditions:
+  /// - On success, the bridge shutdown path runs before this helper returns.
+  ///
+  /// Invariants:
+  /// - This helper is intended only for bridge integration tests.
+  bool dpeDebugRunShutdownDrainProbeManaged(Pointer<Void> handle) {
+    return dpeDebugRunShutdownDrainProbe(handle);
   }
 
   /// Launch an asynchronous native `saveGlobalState()` request.
@@ -5847,6 +5964,61 @@ class DogPawBridge {
     } finally {
       malloc.free(endpointNamePtr);
       malloc.free(connectionNamePtr);
+    }
+  }
+
+  /// Read one local endpoint's retained-state snapshot JSON from native code.
+  ///
+  /// Returns the required UTF-8 byte count including the terminator, or `-1` on
+  /// error. When [outJson] is non-null and [maxSize] is large enough, the JSON
+  /// text is written to the provided buffer.
+  int dpeLocalEndpointGetRetainedStateJsonManaged(
+    Pointer<Void> handle, {
+    required String endpointName,
+    Pointer<Utf8>? outJson,
+    required int maxSize,
+  }) {
+    final Pointer<Utf8> endpointNamePtr = endpointName.toNativeUtf8();
+    try {
+      return dpeLocalEndpointGetRetainedStateJson(
+        handle,
+        endpointNamePtr,
+        outJson ?? nullptr.cast<Utf8>(),
+        maxSize,
+      );
+    } finally {
+      malloc.free(endpointNamePtr);
+    }
+  }
+
+  /// Adopt one retained-state snapshot into a native local endpoint.
+  ///
+  /// Returns true when the native endpoint accepted the snapshot and applied any
+  /// requested matched-output publication.
+  bool dpeLocalEndpointAdoptRetainedStateJsonManaged(
+    Pointer<Void> handle, {
+    required String endpointName,
+    required String snapshotJson,
+    required bool publishMatchedOutput,
+    String? senderInfoJson,
+  }) {
+    final Pointer<Utf8> endpointNamePtr = endpointName.toNativeUtf8();
+    final Pointer<Utf8> snapshotJsonPtr = snapshotJson.toNativeUtf8();
+    final Pointer<Utf8>? senderInfoJsonPtr = senderInfoJson?.toNativeUtf8();
+    try {
+      return dpeLocalEndpointAdoptRetainedStateJson(
+        handle,
+        endpointNamePtr,
+        snapshotJsonPtr,
+        publishMatchedOutput,
+        senderInfoJsonPtr ?? nullptr.cast<Utf8>(),
+      );
+    } finally {
+      malloc.free(endpointNamePtr);
+      malloc.free(snapshotJsonPtr);
+      if (senderInfoJsonPtr != null) {
+        malloc.free(senderInfoJsonPtr);
+      }
     }
   }
 
