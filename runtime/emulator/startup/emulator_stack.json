@@ -15,8 +15,7 @@
       "app": "buttonsAndKnobs",
       "required": true,
       "args": [
-        "--simulator",
-        "--no-simulator-ui"
+        "--simulate"
       ]
     },
     {

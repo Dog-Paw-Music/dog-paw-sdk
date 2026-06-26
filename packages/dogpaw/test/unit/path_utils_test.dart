@@ -154,18 +154,18 @@ void main() {
         final String bundleDirectory = path.join(
           tempRoot.path,
           'runtimeApps',
-          'demo_layout',
+          'demo_mode',
         );
 
         await Directory(path.join(bundleDirectory, 'data'))
             .create(recursive: true);
         await Directory(path.join(bundleDirectory, 'lib'))
             .create(recursive: true);
-        await File(path.join(bundleDirectory, 'demo_layout')).writeAsString('');
+        await File(path.join(bundleDirectory, 'demo_mode')).writeAsString('');
 
         final String resolvedRoot = getFlutterPackageRoot(
           scriptUri: Uri.parse('data:,release'),
-          resolvedExecutablePath: path.join(bundleDirectory, 'demo_layout'),
+          resolvedExecutablePath: path.join(bundleDirectory, 'demo_mode'),
           currentWorkingDirectory: tempRoot.path,
         );
 
@@ -188,8 +188,8 @@ void main() {
           tempRoot.path,
           'rpi',
           'uiApps',
-          'demoLayout',
-          'demo_layout',
+          'demoMode',
+          'demo_mode',
         );
         final String bundleDirectory = path.join(
           packageRoot,
@@ -205,9 +205,9 @@ void main() {
           'dogpaw',
           'default',
         );
-        final String executablePath = path.join(bundleDirectory, 'demo_layout');
+        final String executablePath = path.join(bundleDirectory, 'demo_mode');
         final String symlinkPath =
-            path.join(runtimeDirectory, 'dogpaw-app-demo_layout');
+            path.join(runtimeDirectory, 'dogpaw-app-demo_mode');
 
         await Directory(path.join(bundleDirectory, 'data'))
             .create(recursive: true);
@@ -215,7 +215,7 @@ void main() {
             .create(recursive: true);
         await Directory(runtimeDirectory).create(recursive: true);
         await File(path.join(packageRoot, 'pubspec.yaml'))
-            .writeAsString('name: demo_layout');
+            .writeAsString('name: demo_mode');
         await File(executablePath).writeAsString('');
         await Link(symlinkPath).create(executablePath);
 

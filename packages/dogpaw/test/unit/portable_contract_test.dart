@@ -3,11 +3,10 @@ import 'dart:io';
 import 'package:path/path.dart' as path;
 import 'package:test/test.dart';
 
-const String _internalDartTestInfrastructureDependency =
-    'dart_test_infrastructure:';
+const String _internalDogpawTestDependency = 'dogpaw_test_internal:';
 const String _publicDogpawTestDependency = 'dogpaw_test:';
-const String _internalDartTestInfrastructureImport =
-    'package:dart_test_' 'infrastructure/dart_test_infrastructure.dart';
+const String _internalDogpawTestImport =
+    'package:dogpaw_test_internal/dogpaw_test_internal.dart';
 const String _internalBuildDirMarker = 'build' '-native';
 
 void main() {
@@ -23,7 +22,7 @@ void main() {
           .readAsStringSync();
 
       expect(pubspec, contains(_publicDogpawTestDependency));
-      expect(pubspec, isNot(contains(_internalDartTestInfrastructureDependency)));
+      expect(pubspec, isNot(contains(_internalDogpawTestDependency)));
     });
 
     test('package owns local TestEntities helper under test support', () {
@@ -60,7 +59,7 @@ void main() {
       }
     });
 
-    test('test tree does not import the internal dart test package', () {
+    test('test tree does not import the internal repo-only test package', () {
       final Directory testRoot = Directory(path.join(packageRoot, 'test'));
       final List<File> dartFiles = testRoot
           .listSync(recursive: true)
@@ -72,7 +71,7 @@ void main() {
         final String source = dartFile.readAsStringSync();
         expect(
           source,
-          isNot(contains(_internalDartTestInfrastructureImport)),
+          isNot(contains(_internalDogpawTestImport)),
           reason: 'internal import found in ${path.relative(dartFile.path, from: packageRoot)}',
         );
       }

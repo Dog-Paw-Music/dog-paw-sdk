@@ -1114,7 +1114,6 @@ def print_app_help() -> None:
     print("Commands:")
     print("  install            Install apps and manifest dependencies on a Pi.")
     print("  install headless   Deprecated alias; use install --manifest.")
-    print("  install flutter    Deprecated alias; use install --manifest.")
     print("  install-updated    Update stale apps and shared deploy globals on a Pi target.")
     print("  uninstall          Remove one installed app record from a Pi target.")
 
@@ -2605,6 +2604,11 @@ def build_debug_flutter_parser() -> argparse.ArgumentParser:
         help="Flutter Linux build mode used to refresh the installed app layout before launch.",
     )
     parser.add_argument(
+        "--keep-cache-on-install",
+        action="store_true",
+        help="Preserve the app's existing persistent cache instead of clearing it during install.",
+    )
+    parser.add_argument(
         "--start-paused",
         action="store_true",
         help="Start paused and wait for the debugger to continue execution.",
@@ -2963,58 +2967,76 @@ def build_app_install_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def build_flutter_install_parser() -> argparse.ArgumentParser:
-    """Build the parser for `tools/dogpaw app install flutter`.
+def run_remote_flutter_install(
+    *,
+    context: FlutterManifestContext,
+    target: str,
+    remote_source_root: PurePosixPath,
+    remote_app_root: PurePosixPath,
+    remote_flutter_root: PurePosixPath,
+    build_mode: str,
+    keep_cache_on_install: bool,
+    dry_run: bool,
+) -> int:
+    """Sync, build, and install one Flutter app on a Pi target.
 
     Purpose:
-        Defines the host-side remote Flutter install contract while keeping the
-        top-level dispatcher small and testable.
+        Implements the host-side remote Flutter install flow used by the
+        unified `dogpaw app install --manifest ...` command.
     Parameters:
-        None.
+        context: Resolved Flutter manifest context describing the app tree and
+            manifest-backed install metadata.
+        target: Resolved remote SSH target in `user@host` form.
+        remote_source_root: Remote temporary Flutter workspace source root used
+            for synced builds.
+        remote_app_root: Remote Dog Paw installed-app root.
+        remote_flutter_root: Remote Flutter SDK root whose `bin/` directory is
+            added to `PATH` for remote build steps.
+        build_mode: Flutter Linux build mode to pass through to the install
+            helper.
+        keep_cache_on_install: Whether to preserve the app cache instead of
+            clearing it during install.
+        dry_run: When true, print commands instead of executing them.
     Return value:
-        Configured parser for the Flutter remote install flow.
+        Exit code from the dry-run print path or the first failing sync/build
+        command.
     Requirements:
-        None.
+        `context` must describe a valid Flutter app manifest, `target` must be
+        non-empty, and `build_mode` must be valid for `flutter build linux`.
     Guarantees:
-        Required arguments and repository-root defaults are encoded in one
-        parser instance.
+        The sync set includes only shared `packages/`, the specific app tree,
+        and the install scripts needed for the remote build.
     Invariants:
-        Parser construction performs no filesystem or network I/O.
+        Dry-run mode does not create, modify, or delete local or remote files.
     """
 
-    parser = argparse.ArgumentParser(
-        prog="dogpaw app install flutter",
-        description="Sync one Flutter app to a Pi, build it there, and install it into the Dog Paw app registry.",
+    host_source_fingerprint = compute_flutter_host_source_fingerprint(
+        context,
+        build_mode,
+        target_arch="arm64",
     )
-    parser.add_argument("--manifest", required=True, help="Path to the Flutter app dogpawapp.json.")
-    parser.add_argument("--target", help="Remote SSH target. Defaults to local_config.sh --target.")
-    parser.add_argument(
-        "--remote-source-root",
-        default=str(REMOTE_SOURCE_ROOT),
-        help="Remote temporary Flutter workspace source root used for synced Flutter app builds.",
+    commands = build_flutter_source_sync_commands(
+        context,
+        target,
+        remote_source_root,
+        remote_app_root,
     )
-    parser.add_argument(
-        "--remote-app-root",
-        default=str(REMOTE_APP_ROOT),
-        help="Remote Dog Paw installed-app root.",
+    commands.append(
+        [
+            *SSH_BASE_ARGS,
+            target,
+            build_remote_flutter_install_command(
+                context,
+                remote_source_root,
+                remote_app_root,
+                remote_flutter_root,
+                build_mode,
+                host_source_fingerprint,
+                keep_cache_on_install,
+            ),
+        ]
     )
-    parser.add_argument(
-        "--remote-flutter-root",
-        default=str(REMOTE_FLUTTER_ROOT),
-        help="Remote Flutter SDK root whose bin directory will be added to PATH.",
-    )
-    parser.add_argument(
-        "--build-mode",
-        default="release",
-        help="Flutter Linux build mode.",
-    )
-    parser.add_argument(
-        "--keep-cache-on-install",
-        action="store_true",
-        help="Preserve the app's existing persistent cache instead of clearing it during install.",
-    )
-    parser.add_argument("--dry-run", action="store_true", help="Print sync/build commands without executing them.")
-    return parser
+    return run_commands(commands, dry_run)
 
 
 def dispatch_target(args: Sequence[str]) -> int:
@@ -3143,26 +3165,21 @@ def run_flutter_installs_for_manifests(
         Does not alter `parsed` or manifest metadata.
     """
 
+    remote_source_root = PurePosixPath(parsed.remote_source_root)
+    remote_app_root = PurePosixPath(parsed.remote_app_root)
+    remote_flutter_root = PurePosixPath(parsed.remote_flutter_root)
     for manifest in flutter_manifests:
-        flutter_args = [
-            "--target",
-            target,
-            "--manifest",
-            str(manifest.manifest_path),
-            "--remote-source-root",
-            str(parsed.remote_source_root),
-            "--remote-app-root",
-            str(parsed.remote_app_root),
-            "--remote-flutter-root",
-            str(parsed.remote_flutter_root),
-            "--build-mode",
-            str(parsed.build_mode),
-        ]
-        if parsed.dry_run:
-            flutter_args.append("--dry-run")
-        if parsed.keep_cache_on_install:
-            flutter_args.append("--keep-cache-on-install")
-        result = dispatch_app_install_flutter(flutter_args)
+        context = resolve_flutter_manifest_context(manifest.manifest_path)
+        result = run_remote_flutter_install(
+            context=context,
+            target=target,
+            remote_source_root=remote_source_root,
+            remote_app_root=remote_app_root,
+            remote_flutter_root=remote_flutter_root,
+            build_mode=str(parsed.build_mode),
+            keep_cache_on_install=parsed.keep_cache_on_install,
+            dry_run=parsed.dry_run,
+        )
         if result != 0:
             return result
     return 0
@@ -3256,68 +3273,6 @@ def dispatch_app_install_headless(args: Sequence[str]) -> int:
         file=sys.stderr,
     )
     return dispatch_app_install(args)
-
-
-def dispatch_app_install_flutter(args: Sequence[str]) -> int:
-    """Dispatch `tools/dogpaw app install flutter`.
-
-    Purpose:
-        Implements a host-side remote Flutter install flow by syncing the
-        selected app plus shared Flutter workspace packages/tools to the target
-        Pi, then invoking the existing remote build-and-install script there.
-    Parameters:
-        args: Remaining arguments after `app install flutter`.
-    Return value:
-        Exit code from the dry-run print path or the first failing sync/build
-        command.
-    Requirements:
-        Manifest path must exist and live under `FLUTTER_WORKSPACE_ROOT`.
-    Guarantees:
-        The sync set includes only shared `packages/`, the specific app tree,
-        and the install scripts needed for the remote build.
-    Invariants:
-        Dry-run mode does not create, modify, or delete local or remote files.
-    """
-
-    parser = build_flutter_install_parser()
-    parsed = parser.parse_args(list(args))
-    try:
-        context = resolve_flutter_manifest_context(parsed.manifest)
-    except ValueError as exc:
-        parser.error(str(exc))
-        raise AssertionError("unreachable") from exc
-
-    target = resolve_target(parsed.target)
-    remote_source_root = PurePosixPath(parsed.remote_source_root)
-    remote_app_root = PurePosixPath(parsed.remote_app_root)
-    remote_flutter_root = PurePosixPath(parsed.remote_flutter_root)
-    host_source_fingerprint = compute_flutter_host_source_fingerprint(
-        context,
-        parsed.build_mode,
-        target_arch="arm64",
-    )
-    commands = build_flutter_source_sync_commands(
-        context,
-        target,
-        remote_source_root,
-        remote_app_root,
-    )
-    commands.append(
-        [
-            *SSH_BASE_ARGS,
-            target,
-            build_remote_flutter_install_command(
-                context,
-                remote_source_root,
-                remote_app_root,
-                remote_flutter_root,
-                parsed.build_mode,
-                host_source_fingerprint,
-                parsed.keep_cache_on_install,
-            ),
-        ]
-    )
-    return run_commands(commands, parsed.dry_run)
 
 
 def dispatch_debug_flutter(args: Sequence[str]) -> int:
@@ -3438,6 +3393,7 @@ def dispatch_debug_flutter(args: Sequence[str]) -> int:
                 remote_flutter_root,
                 parsed.build_mode,
                 host_source_fingerprint,
+                parsed.keep_cache_on_install,
             ),
         ]
     )
@@ -3853,7 +3809,6 @@ def dispatch_app_install_updated(args: Sequence[str]) -> int:
             str(DOGPAW_TOOL_PATH),
             "app",
             "install",
-            "flutter",
             "--target",
             target,
             "--manifest",
@@ -3968,17 +3923,10 @@ def dispatch_app(args: Sequence[str]) -> int:
         print(f"Unsupported app command: {args[0]}", file=sys.stderr)
         print_app_help()
         return 2
-    if len(args) == 1 or args[1] not in {"headless", "flutter"}:
+    if len(args) == 1 or args[1] != "headless":
         return dispatch_app_install(args[1:])
     if args[1] == "headless":
         return dispatch_app_install_headless(args[2:])
-    if args[1] == "flutter":
-        print(
-            "Warning: 'dogpaw app install flutter' is deprecated; use "
-            "'dogpaw app install --manifest PATH' instead.",
-            file=sys.stderr,
-        )
-        return dispatch_app_install(args[2:])
     raise AssertionError("unreachable")
 
 

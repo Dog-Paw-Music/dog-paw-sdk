@@ -11,7 +11,7 @@ void main() {
         environment: const <String, String>{
           'DOGPAW_BRIDGE_LIB': '/tmp/custom/libdogpaw_bridge.so',
         },
-        resolvedExecutablePath: '/tmp/runtime/demo_layout',
+        resolvedExecutablePath: '/tmp/runtime/demo_mode',
       );
 
       expect(resolved, '/tmp/custom/libdogpaw_bridge.so');
@@ -23,8 +23,8 @@ void main() {
       );
 
       try {
-        final String bundleDirectory = path.join(tempRoot.path, 'demo_layout');
-        final String executablePath = path.join(bundleDirectory, 'demo_layout');
+        final String bundleDirectory = path.join(tempRoot.path, 'demo_mode');
+        final String executablePath = path.join(bundleDirectory, 'demo_mode');
         final String bridgePath =
             path.join(bundleDirectory, 'lib', 'libdogpaw_bridge.so');
         await Directory(path.dirname(bridgePath)).create(recursive: true);
@@ -37,6 +37,39 @@ void main() {
         );
 
         expect(resolved, bridgePath);
+      } finally {
+        if (await tempRoot.exists()) {
+          await tempRoot.delete(recursive: true);
+        }
+      }
+    });
+
+    test(
+        'resolveBridgeLibraryPath throws clear error when no override or bundle bridge exists',
+        () async {
+      final Directory tempRoot = await Directory.systemTemp.createTemp(
+        'dogpaw_bridge_missing_path_',
+      );
+
+      try {
+        final String bundleDirectory = path.join(tempRoot.path, 'demo_mode');
+        final String executablePath = path.join(bundleDirectory, 'demo_mode');
+        await Directory(bundleDirectory).create(recursive: true);
+        await File(executablePath).create(recursive: true);
+
+        expect(
+          () => resolveBridgeLibraryPath(
+            environment: const <String, String>{},
+            resolvedExecutablePath: executablePath,
+          ),
+          throwsA(
+            isA<StateError>().having(
+              (StateError error) => error.message,
+              'message',
+              contains('Could not resolve Dog Paw native bridge library'),
+            ),
+          ),
+        );
       } finally {
         if (await tempRoot.exists()) {
           await tempRoot.delete(recursive: true);

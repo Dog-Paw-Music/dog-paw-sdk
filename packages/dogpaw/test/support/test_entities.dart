@@ -6,7 +6,7 @@ import 'package:dogpaw/dogpaw.dart';
 /// Provides the `dogpaw` package's own test suite with a small reusable bundle
 /// of connected entities so integration tests can exercise same-app and
 /// cross-entity behavior without depending on the repo-only
-/// `dart_test_infrastructure` package.
+/// `dogpaw_test_internal` package.
 ///
 /// Parameters:
 /// - None for the type itself. Use [create] to construct an instance.

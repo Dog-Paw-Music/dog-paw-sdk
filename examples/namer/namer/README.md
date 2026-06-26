@@ -73,14 +73,24 @@ flutter build linux --debug
 
 ## Testing
 
-This example currently does not include an app-local `test/` directory.
-Portable SDK validation currently centers on the shared `dogpaw` and
-`dogpaw_test` package suites rather than a `namer`-specific exported test
-package.
+Namer now keeps its tests with the owning app package.
+
+- `test/public/` contains the export-facing unit tests that ship through the
+  exported apps repo as a conventional `test/` directory.
 
 ### Current Test Coverage
 
-- Portable SDK coverage is currently centered in the shared package suites.
+- App-local command:
+
+```bash
+flutter test --concurrency=1
+```
+
+- Public-only suite:
+
+```bash
+flutter test test/public --concurrency=1
+```
 
 ## Data Flow
 

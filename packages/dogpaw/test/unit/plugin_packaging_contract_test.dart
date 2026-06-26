@@ -34,6 +34,38 @@ void main() {
       expect(cmake, isNot(contains('set(BINARY_NAME "dogpaw")')));
     });
 
+    test('repo-local bridge provider stages a concrete bundle library file', () {
+      final File localProviderFile = File(
+        path.join(
+          Directory.current.path,
+          'linux',
+          'local_bridge_provider.cmake',
+        ),
+      );
+      if (!localProviderFile.existsSync()) {
+        return;
+      }
+
+      final String localProvider = localProviderFile.readAsStringSync();
+
+      expect(localProvider, contains('REALPATH'));
+      expect(localProvider, contains('copy_if_different'));
+      expect(localProvider, contains('dogpaw_local_bridge_bundle'));
+      expect(localProvider, contains('libdogpaw_bridge.so'));
+      expect(
+        localProvider,
+        contains(
+          'add_custom_target(dogpaw_local_bridge_bundle ALL',
+        ),
+      );
+      expect(
+        localProvider,
+        contains(
+          r'COMMAND "${CMAKE_COMMAND}" -P "${DOGPAW_LOCAL_BRIDGE_STAGE_SCRIPT}"',
+        ),
+      );
+    });
+
     test('source package keeps repo-local bridge helper out of exported src build files', () {
       final String packageRoot = Directory.current.path;
       final bool hasLocalHelper = File(
