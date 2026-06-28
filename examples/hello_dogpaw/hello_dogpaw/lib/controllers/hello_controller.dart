@@ -59,7 +59,7 @@ class HelloColorSwatch {
 }
 
 /// Purpose:
-///     Build the hello example's auto-connected key-message endpoint metadata.
+///     Build the hello example's endpoint-owned-rule-backed key-message endpoint metadata.
 /// Parameters:
 ///     None.
 /// Return value:
@@ -68,7 +68,7 @@ class HelloColorSwatch {
 /// Requirements:
 ///     None.
 /// Guarantees:
-///     The returned endpoint follows the same auto-connect search pattern used by
+///     The returned endpoint follows the same endpoint-owned connection rule search pattern used by
 ///     other key-driven apps.
 /// Invariants:
 ///     This helper is pure and does not contact the runtime.
@@ -86,14 +86,14 @@ dp.EndpointInfo buildHelloKeyInputEndpointInfo() {
     direction: dp.EndpointDirection.input,
     dataType: const dp.DataTypeSpec(dp.DataType.keyPress),
     category: dp.EndpointCategory.messageQueue,
-    connectionPolicy: dp.ConnectionPolicy(autoConnectCriteria: criteria),
+    connectionPolicy: dp.ConnectionPolicy(endpointConnectionRule: criteria),
   );
 
   return dp.EndpointInfo(name: 'key_input', spec: spec);
 }
 
 /// Purpose:
-///     Build the hello example's auto-connected LED output endpoint metadata.
+///     Build the hello example's endpoint-owned-rule-backed LED output endpoint metadata.
 /// Parameters:
 ///     None.
 /// Return value:
@@ -119,7 +119,7 @@ dp.EndpointInfo buildHelloLedOutputEndpointInfo() {
     direction: dp.EndpointDirection.output,
     dataType: const dp.DataTypeSpec(dp.DataType.ledMessage),
     category: dp.EndpointCategory.messageQueue,
-    connectionPolicy: dp.ConnectionPolicy(autoConnectCriteria: criteria),
+    connectionPolicy: dp.ConnectionPolicy(endpointConnectionRule: criteria),
   );
 
   return dp.EndpointInfo(name: 'led_output', spec: spec);

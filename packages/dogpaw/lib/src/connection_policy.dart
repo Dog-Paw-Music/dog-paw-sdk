@@ -6,14 +6,25 @@ class ConnectionPolicy {
   /// Maximum allowed connections (-1 = unlimited)
   final int maxConnections;
 
-  /// Optional search criteria for automatic connection establishment
-  final SearchCriteria? autoConnectCriteria;
+  /// Optional endpoint-owned connection rule for automatic peer matching.
+  final SearchCriteria? endpointConnectionRule;
+
+  /// Temporary compatibility alias for older auto-connect terminology.
+  @Deprecated('Use endpointConnectionRule instead.')
+  SearchCriteria? get autoConnectCriteria => endpointConnectionRule;
 
   /// Default constructor
   const ConnectionPolicy({
     this.maxConnections = -1,
-    this.autoConnectCriteria,
-  });
+    SearchCriteria? endpointConnectionRule,
+    @Deprecated('Use endpointConnectionRule instead.')
+    SearchCriteria? autoConnectCriteria,
+  }) : assert(
+          endpointConnectionRule == null || autoConnectCriteria == null,
+          'Specify either endpointConnectionRule or autoConnectCriteria, not both.',
+        ),
+        endpointConnectionRule =
+            endpointConnectionRule ?? autoConnectCriteria;
 
   /// Convert to JSON representation
   Map<String, dynamic> toJson() {
@@ -21,8 +32,9 @@ class ConnectionPolicy {
       JsonFields.MAX_CONNECTIONS: maxConnections,
     };
 
-    if (autoConnectCriteria != null) {
-      json[JsonFields.AUTO_CONNECT_CRITERIA] = autoConnectCriteria!.toJson();
+    if (endpointConnectionRule != null) {
+      json[JsonFields.AUTO_CONNECT_CRITERIA] =
+          endpointConnectionRule!.toJson();
     }
 
     return json;
@@ -39,7 +51,7 @@ class ConnectionPolicy {
 
     return ConnectionPolicy(
       maxConnections: json[JsonFields.MAX_CONNECTIONS] ?? -1,
-      autoConnectCriteria: autoConnect,
+      endpointConnectionRule: autoConnect,
     );
   }
 }

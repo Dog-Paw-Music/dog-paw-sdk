@@ -2143,38 +2143,38 @@ int32_t dppb_dpe_local_endpoint_poll_file_backed(
     int32_t max_size);
 
 /**
- * @brief Launch an asynchronous native-backed `createConnectionRequest()`
+ * @brief Launch an asynchronous native-backed `createConnectionRule()`
  * request.
  *
  * Purpose:
- * Forwards JSON to the wrapped C++ `createConnectionRequest()` and posts the
+ * Forwards JSON to the wrapped C++ `createConnectionRule()` and posts the
  * operation result to Dart.
  */
-bool dppb_dpe_create_connection_request_async(void* handle,
-                                              int64_t request_id,
-                                              const char* connection_request_json);
-
-/**
- * @brief Launch an asynchronous native-backed `setConnectionRequest()`
- * request.
- */
-bool dppb_dpe_set_connection_request_async(void* handle,
+bool dppb_dpe_create_connection_rule_async(void* handle,
                                            int64_t request_id,
-                                           const char* connection_request_json);
+                                           const char* connection_rule_json);
 
 /**
- * @brief Launch an asynchronous native-backed `updateConnectionRequest()`
+ * @brief Launch an asynchronous native-backed `setConnectionRule()`
  * request.
  */
-bool dppb_dpe_update_connection_request_async(void* handle,
-                                              int64_t request_id,
-                                              const char* connection_request_json);
+bool dppb_dpe_set_connection_rule_async(void* handle,
+                                        int64_t request_id,
+                                        const char* connection_rule_json);
 
 /**
- * @brief Launch an asynchronous native-backed `readConnectionRequest()`
+ * @brief Launch an asynchronous native-backed `updateConnectionRule()`
  * request.
  */
-bool dppb_dpe_read_connection_request_async(
+bool dppb_dpe_update_connection_rule_async(void* handle,
+                                           int64_t request_id,
+                                           const char* connection_rule_json);
+
+/**
+ * @brief Launch an asynchronous native-backed `readConnectionRule()`
+ * request.
+ */
+bool dppb_dpe_read_connection_rule_async(
     void* handle,
     int64_t request_id,
     const char* name,
@@ -2183,20 +2183,20 @@ bool dppb_dpe_read_connection_request_async(
     bool include_spec);
 
 /**
- * @brief Launch an asynchronous native-backed `deleteConnectionRequest()`
+ * @brief Launch an asynchronous native-backed `deleteConnectionRule()`
  * request.
  */
-bool dppb_dpe_delete_connection_request_async(
+bool dppb_dpe_delete_connection_rule_async(
     void* handle,
     int64_t request_id,
     const char* name,
     const char* namespace_selector_json);
 
 /**
- * @brief Launch an asynchronous native-backed `listConnectionRequests()`
+ * @brief Launch an asynchronous native-backed `listConnectionRules()`
  * request.
  */
-bool dppb_dpe_list_connection_requests_async(
+bool dppb_dpe_list_connection_rules_async(
     void* handle,
     int64_t request_id,
     const char* namespace_selector_json,
@@ -2204,32 +2204,32 @@ bool dppb_dpe_list_connection_requests_async(
     bool include_spec);
 
 /**
- * @brief Launch an asynchronous native-backed `createFollowRequest()`
+ * @brief Launch an asynchronous native-backed `createFollowRule()`
  * request.
  */
-bool dppb_dpe_create_follow_request_async(void* handle,
-                                          int64_t request_id,
-                                          const char* follow_request_json);
-
-/**
- * @brief Launch an asynchronous native-backed `setFollowRequest()` request.
- */
-bool dppb_dpe_set_follow_request_async(void* handle,
+bool dppb_dpe_create_follow_rule_async(void* handle,
                                        int64_t request_id,
-                                       const char* follow_request_json);
+                                       const char* follow_rule_json);
 
 /**
- * @brief Launch an asynchronous native-backed `updateFollowRequest()`
+ * @brief Launch an asynchronous native-backed `setFollowRule()` request.
+ */
+bool dppb_dpe_set_follow_rule_async(void* handle,
+                                    int64_t request_id,
+                                    const char* follow_rule_json);
+
+/**
+ * @brief Launch an asynchronous native-backed `updateFollowRule()`
  * request.
  */
-bool dppb_dpe_update_follow_request_async(void* handle,
-                                          int64_t request_id,
-                                          const char* follow_request_json);
+bool dppb_dpe_update_follow_rule_async(void* handle,
+                                       int64_t request_id,
+                                       const char* follow_rule_json);
 
 /**
- * @brief Launch an asynchronous native-backed `readFollowRequest()` request.
+ * @brief Launch an asynchronous native-backed `readFollowRule()` request.
  */
-bool dppb_dpe_read_follow_request_async(
+bool dppb_dpe_read_follow_rule_async(
     void* handle,
     int64_t request_id,
     const char* name,
@@ -2238,18 +2238,18 @@ bool dppb_dpe_read_follow_request_async(
     bool include_spec);
 
 /**
- * @brief Launch an asynchronous native-backed `deleteFollowRequest()`
+ * @brief Launch an asynchronous native-backed `deleteFollowRule()`
  * request.
  */
-bool dppb_dpe_delete_follow_request_async(void* handle,
-                                          int64_t request_id,
-                                          const char* name,
-                                          const char* namespace_selector_json);
+bool dppb_dpe_delete_follow_rule_async(void* handle,
+                                       int64_t request_id,
+                                       const char* name,
+                                       const char* namespace_selector_json);
 
 /**
- * @brief Launch an asynchronous native-backed `listFollowRequests()` request.
+ * @brief Launch an asynchronous native-backed `listFollowRules()` request.
  */
-bool dppb_dpe_list_follow_requests_async(
+bool dppb_dpe_list_follow_rules_async(
     void* handle,
     int64_t request_id,
     const char* namespace_selector_json,

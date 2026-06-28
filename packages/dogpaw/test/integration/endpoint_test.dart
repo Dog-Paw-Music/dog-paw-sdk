@@ -22,8 +22,8 @@ void main() {
       dataType: DataTypeSpec(DataType.audioStream),
       category: EndpointCategory.audioStream,
       flags: ['system_audio_out_left', 'preferred'],
-      jackClientName: 'Monolith',
-      fullJackPortName: 'Monolith:main_out_l',
+      jackClientName: 'SimpleSynth',
+      fullJackPortName: 'SimpleSynth:main_out_l',
       jackBindingMode: JackBindingMode.adoptExistingPort,
     );
 
@@ -31,18 +31,21 @@ void main() {
 
     expect(
         json[JsonFields.FLAGS], equals(['system_audio_out_left', 'preferred']));
-    expect(json[JsonFields.JACK_CLIENT_NAME], equals('Monolith'));
-    expect(json[JsonFields.FULL_JACK_PORT_NAME], equals('Monolith:main_out_l'));
+    expect(json[JsonFields.JACK_CLIENT_NAME], equals('SimpleSynth'));
+    expect(
+      json[JsonFields.FULL_JACK_PORT_NAME],
+      equals('SimpleSynth:main_out_l'),
+    );
     expect(
       json[JsonFields.JACK_BINDING_MODE],
       equals(JsonFields.JACK_BINDING_MODE_ADOPT_EXISTING_PORT),
     );
   });
 
-  test('FollowRequest serializes follower ref and leader criteria', () {
-    final request = FollowRequest(
+  test('FollowRule serializes follower ref and leader criteria', () {
+    final request = FollowRule(
       name: 'follow_scope_left',
-      spec: FollowRequestData(
+      spec: FollowRuleData(
         followerRef: DataItemRef.byName(
           name: 'scope_left',
           namespaceSelector:
@@ -180,7 +183,7 @@ void main() {
     );
   });
 
-  group('FollowRequest API', () {
+  group('FollowRule API', () {
     late DogPawEntity sourceOwner;
     late DogPawEntity leaderOwner;
     late DogPawEntity followerOwner;
@@ -206,13 +209,13 @@ void main() {
       sourceOwner.disconnect();
     });
 
-    test('CreateAndListFollowRequest', () async {
+    test('CreateAndListFollowRule', () async {
       final leaderFlag =
           'dart_follow_flag_${DateTime.now().microsecondsSinceEpoch}';
       const sourceName = 'dart_follow_source';
       const leaderName = 'dart_follow_leader';
       const followerName = 'dart_follow_follower';
-      const requestName = 'dart_follow_request';
+      const requestName = 'dart_follow_rule';
 
       expect(
         (await sourceOwner.createEndpoint(EndpointInfo(
@@ -254,9 +257,9 @@ void main() {
         isTrue,
       );
 
-      final followRequest = FollowRequest(
+      final followRule = FollowRule(
         name: requestName,
-        spec: FollowRequestData(
+        spec: FollowRuleData(
           followerRef: DataItemRef.byName(
             name: followerName,
             namespaceSelector:
@@ -267,18 +270,17 @@ void main() {
       );
 
       final createResult =
-          await followerOwner.createFollowRequest(followRequest);
+          await followerOwner.createFollowRule(followRule);
       expect(createResult.success, isTrue,
-          reason: 'Failed to create follow request: ${createResult.error}');
+          reason: 'Failed to create follow rule: ${createResult.error}');
 
-      final listResult =
-          await followerOwner.listFollowRequests(includeSpec: true);
+      final listResult = await followerOwner.listFollowRules(includeSpec: true);
       expect(listResult.success, isTrue,
-          reason: 'Failed to list follow requests: ${listResult.error}');
+          reason: 'Failed to list follow rules: ${listResult.error}');
       expect(listResult.value!.any((request) => request.name == requestName),
           isTrue);
 
-      await followerOwner.deleteFollowRequest(requestName);
+      await followerOwner.deleteFollowRule(requestName);
       await sourceOwner.deleteEndpoint(sourceName);
       await leaderOwner.deleteEndpoint(leaderName);
       await followerOwner.deleteEndpoint(followerName);
@@ -399,7 +401,7 @@ void main() {
     test('INTDataFlowProducerToConsumer', () async {
       final epName = 'int_flow_${DateTime.now().microsecondsSinceEpoch}';
 
-      // Producer creates OUTPUT INT endpoint with auto-connect
+      // Producer creates OUTPUT INT endpoint with endpoint-owned connection rule
       final outResult = await producer.createEndpoint(EndpointInfo(
         name: epName,
         spec: EndpointSpec(
@@ -407,7 +409,7 @@ void main() {
           dataType: const DataTypeSpec(DataType.int_),
           category: EndpointCategory.messageQueue,
           connectionPolicy: ConnectionPolicy(
-            autoConnectCriteria: SearchCriteria.andCombination([
+            endpointConnectionRule: SearchCriteria.andCombination([
               SearchCriteria.directionEquals(EndpointDirection.input),
               SearchCriteria.nameEquals(epName),
             ]),
@@ -417,7 +419,7 @@ void main() {
       expect(outResult.success, isTrue,
           reason: 'Failed to create output: ${outResult.error}');
 
-      // Consumer creates INPUT INT endpoint with auto-connect
+      // Consumer creates INPUT INT endpoint with endpoint-owned connection rule
       final inResult = await consumer.createEndpoint(EndpointInfo(
         name: epName,
         spec: EndpointSpec(
@@ -425,7 +427,7 @@ void main() {
           dataType: const DataTypeSpec(DataType.int_),
           category: EndpointCategory.messageQueue,
           connectionPolicy: ConnectionPolicy(
-            autoConnectCriteria: SearchCriteria.andCombination([
+            endpointConnectionRule: SearchCriteria.andCombination([
               SearchCriteria.directionEquals(EndpointDirection.output),
               SearchCriteria.nameEquals(epName),
             ]),
@@ -435,7 +437,7 @@ void main() {
       expect(inResult.success, isTrue,
           reason: 'Failed to create input: ${inResult.error}');
 
-      // Wait for auto-connect
+      // Wait for endpoint-owned connection rule
       await Future.delayed(const Duration(milliseconds: 1000));
 
       // Write a value from producer
@@ -477,7 +479,7 @@ void main() {
           dataType: const DataTypeSpec(DataType.int_),
           category: EndpointCategory.messageQueue,
           connectionPolicy: ConnectionPolicy(
-            autoConnectCriteria: SearchCriteria.andCombination([
+            endpointConnectionRule: SearchCriteria.andCombination([
               SearchCriteria.directionEquals(EndpointDirection.input),
               SearchCriteria.nameEquals(epName),
             ]),
@@ -493,7 +495,7 @@ void main() {
           dataType: const DataTypeSpec(DataType.int_),
           category: EndpointCategory.messageQueue,
           connectionPolicy: ConnectionPolicy(
-            autoConnectCriteria: SearchCriteria.andCombination([
+            endpointConnectionRule: SearchCriteria.andCombination([
               SearchCriteria.directionEquals(EndpointDirection.output),
               SearchCriteria.nameEquals(epName),
             ]),
@@ -634,10 +636,10 @@ void main() {
         }
       });
 
-      final createRequestResult = await producer.createConnectionRequest(
-        ConnectionRequest(
+      final createRequestResult = await producer.createConnectionRule(
+        ConnectionRule(
           name: requestName,
-          spec: ConnectionRequestData(
+          spec: ConnectionRuleData(
             sourceRef: DataItemRef.byName(
               name: epName,
               namespaceSelector:
@@ -653,7 +655,7 @@ void main() {
       );
       expect(createRequestResult.success, isTrue,
           reason:
-              'Failed to create connection request: ${createRequestResult.error}');
+              'Failed to create connection rule: ${createRequestResult.error}');
 
       final addedEvent = await addedCompleter.future.timeout(
         const Duration(seconds: 3),
@@ -666,10 +668,10 @@ void main() {
       );
 
       final deleteRequestResult =
-          await producer.deleteConnectionRequest(requestName);
+          await producer.deleteConnectionRule(requestName);
       expect(deleteRequestResult.success, isTrue,
           reason:
-              'Failed to delete connection request: ${deleteRequestResult.error}');
+              'Failed to delete connection rule: ${deleteRequestResult.error}');
 
       final removedEvent = await removedCompleter.future.timeout(
         const Duration(seconds: 3),
@@ -680,6 +682,87 @@ void main() {
         removedEvent.peerEndpointRef.namespaceSelector,
         equals(NamespaceSelector.specificEntity(producer.entityName)),
       );
+    });
+
+    test('ConnectionRulesUseCanonicalCreateReadListAndDeleteApi', () async {
+      final String suffix = DateTime.now().microsecondsSinceEpoch.toString();
+      final String outputName = 'rule_output_$suffix';
+      final String inputName = 'rule_input_$suffix';
+      final String ruleName = 'rule_item_$suffix';
+
+      final Result<LocalEndpoint> outputResult =
+          await producer.createEndpoint(EndpointInfo(
+        name: outputName,
+        spec: const EndpointSpec(
+          direction: EndpointDirection.output,
+          dataType: DataTypeSpec(DataType.int_),
+          category: EndpointCategory.messageQueue,
+        ),
+      ));
+      expect(outputResult.success, isTrue,
+          reason: 'Failed to create output endpoint: ${outputResult.error}');
+
+      final Result<LocalEndpoint> inputResult =
+          await consumer.createEndpoint(EndpointInfo(
+        name: inputName,
+        spec: const EndpointSpec(
+          direction: EndpointDirection.input,
+          dataType: DataTypeSpec(DataType.int_),
+          category: EndpointCategory.messageQueue,
+        ),
+      ));
+      expect(inputResult.success, isTrue,
+          reason: 'Failed to create input endpoint: ${inputResult.error}');
+
+      final Result<bool> createRuleResult = await producer.createConnectionRule(
+        ConnectionRule(
+          name: ruleName,
+          spec: ConnectionRuleData(
+            sourceRef: DataItemRef.byName(
+              name: outputName,
+              namespaceSelector:
+                  NamespaceSelector.specificEntity(producer.entityName),
+            ),
+            destinationRef: DataItemRef.byName(
+              name: inputName,
+              namespaceSelector:
+                  NamespaceSelector.specificEntity(consumer.entityName),
+            ),
+          ),
+        ),
+      );
+      expect(createRuleResult.success, isTrue,
+          reason: 'Failed to create connection rule: ${createRuleResult.error}');
+
+      final Result<ConnectionRule?> readRuleResult =
+          await producer.readConnectionRule(
+        ruleName,
+        namespaceSelector: const NamespaceSelector.currentEntity(),
+        includeSpec: true,
+      );
+      expect(readRuleResult.success, isTrue,
+          reason: 'Failed to read connection rule: ${readRuleResult.error}');
+      expect(readRuleResult.value, isNotNull);
+      expect(readRuleResult.value!.spec!.sourceRef.name, equals(outputName));
+      expect(
+        readRuleResult.value!.spec!.destinationRef.name,
+        equals(inputName),
+      );
+
+      final Result<List<ConnectionRule>> listRuleResult =
+          await producer.listConnectionRules(includeSpec: true);
+      expect(listRuleResult.success, isTrue,
+          reason: 'Failed to list connection rules: ${listRuleResult.error}');
+      expect(
+        listRuleResult.value!
+            .any((ConnectionRule rule) => rule.name == ruleName),
+        isTrue,
+      );
+
+      final Result<bool> deleteRuleResult =
+          await producer.deleteConnectionRule(ruleName);
+      expect(deleteRuleResult.success, isTrue,
+          reason: 'Failed to delete connection rule: ${deleteRuleResult.error}');
     });
 
     test('MessageQueueFanInPollWithSenderInfoReportsSourceEndpointRef',
@@ -738,10 +821,10 @@ void main() {
       expect(inputResult.success, isTrue,
           reason: 'Failed to create input endpoint: ${inputResult.error}');
 
-      final createRequestAResult = await sourceA.createConnectionRequest(
-        ConnectionRequest(
+      final createRequestAResult = await sourceA.createConnectionRule(
+        ConnectionRule(
           name: requestAName,
-          spec: ConnectionRequestData(
+          spec: ConnectionRuleData(
             sourceRef: DataItemRef.byName(
               name: sourceAName,
               namespaceSelector:
@@ -757,12 +840,12 @@ void main() {
       );
       expect(createRequestAResult.success, isTrue,
           reason:
-              'Failed to create connection request A: ${createRequestAResult.error}');
+              'Failed to create connection rule A: ${createRequestAResult.error}');
 
-      final createRequestBResult = await sourceB.createConnectionRequest(
-        ConnectionRequest(
+      final createRequestBResult = await sourceB.createConnectionRule(
+        ConnectionRule(
           name: requestBName,
-          spec: ConnectionRequestData(
+          spec: ConnectionRuleData(
             sourceRef: DataItemRef.byName(
               name: sourceBName,
               namespaceSelector:
@@ -778,7 +861,7 @@ void main() {
       );
       expect(createRequestBResult.success, isTrue,
           reason:
-              'Failed to create connection request B: ${createRequestBResult.error}');
+              'Failed to create connection rule B: ${createRequestBResult.error}');
 
       await Future.delayed(const Duration(milliseconds: 1000));
 
@@ -857,6 +940,378 @@ void main() {
         equals(NamespaceSelector.specificEntity(sourceB.entityName)),
       );
     });
+
+    test('ConnectionRuleRemainsDormantUntilDestinationEndpointExists',
+        () async {
+      final String suffix = DateTime.now().microsecondsSinceEpoch.toString();
+      final String outputName = 'dart_dormant_output_$suffix';
+      final String inputName = 'dart_dormant_input_$suffix';
+      final String requestName = 'dart_dormant_request_$suffix';
+
+      final Result<LocalEndpoint> outputResult = await producer.createEndpoint(
+        EndpointInfo(
+          name: outputName,
+          spec: const EndpointSpec(
+            direction: EndpointDirection.output,
+            dataType: DataTypeSpec(DataType.int_),
+            category: EndpointCategory.messageQueue,
+          ),
+        ),
+      );
+      expect(outputResult.success, isTrue,
+          reason: 'Failed to create dormant source endpoint: ${outputResult.error}');
+
+      Future<int> countMatchingConnections() async {
+        final Result<List<Connection>> listResult = await producer.listConnections(
+          includeResolved: true,
+          includeSpec: true,
+        );
+        expect(listResult.success, isTrue,
+            reason: 'Failed to list connections: ${listResult.error}');
+        if (!listResult.success) {
+          return 0;
+        }
+
+        int matches = 0;
+        for (final Connection connection in listResult.value!) {
+          final ConnectionData? data = connection.resolved ?? connection.spec;
+          if (data == null) {
+            continue;
+          }
+          if (data.sourceRef.name == outputName &&
+              data.destinationRef.name == inputName) {
+            matches += 1;
+          }
+        }
+        return matches;
+      }
+
+      final Result<bool> createRequestResult = await producer.createConnectionRule(
+        ConnectionRule(
+          name: requestName,
+          spec: ConnectionRuleData(
+            sourceRef: DataItemRef.byName(
+              name: outputName,
+              namespaceSelector:
+                  NamespaceSelector.specificEntity(producer.entityName),
+            ),
+            destinationRef: DataItemRef.byName(
+              name: inputName,
+              namespaceSelector:
+                  NamespaceSelector.specificEntity(consumer.entityName),
+            ),
+          ),
+        ),
+      );
+      expect(createRequestResult.success, isTrue,
+          reason:
+              'Standalone connection rules should be allowed to remain dormant: ${createRequestResult.error}');
+
+      await Future.delayed(const Duration(milliseconds: 200));
+      expect(await countMatchingConnections(), equals(0));
+
+      final Result<LocalEndpoint> inputResult = await consumer.createEndpoint(
+        EndpointInfo(
+          name: inputName,
+          spec: const EndpointSpec(
+            direction: EndpointDirection.input,
+            dataType: DataTypeSpec(DataType.int_),
+            category: EndpointCategory.messageQueue,
+          ),
+        ),
+      );
+      expect(inputResult.success, isTrue,
+          reason: 'Failed to create dormant destination endpoint: ${inputResult.error}');
+
+      await Future.delayed(const Duration(milliseconds: 500));
+      expect(await countMatchingConnections(), equals(1));
+    });
+
+    test('ConnectionRuleWithDestinationCriteriaRealizesAfterMatchAppears',
+        () async {
+      final String suffix = DateTime.now().microsecondsSinceEpoch.toString();
+      final String outputName = 'dart_criteria_rule_output_$suffix';
+      final String inputName = 'dart_criteria_rule_input_$suffix';
+      final String ruleName = 'dart_criteria_rule_item_$suffix';
+
+      final Result<LocalEndpoint> outputResult = await producer.createEndpoint(
+        EndpointInfo(
+          name: outputName,
+          spec: const EndpointSpec(
+            direction: EndpointDirection.output,
+            dataType: DataTypeSpec(DataType.int_),
+            category: EndpointCategory.messageQueue,
+          ),
+        ),
+      );
+      expect(outputResult.success, isTrue,
+          reason: 'Failed to create criteria source endpoint: ${outputResult.error}');
+
+      Future<int> countMatchingConnections() async {
+        final Result<List<Connection>> listResult = await producer.listConnections(
+          includeResolved: true,
+          includeSpec: true,
+        );
+        expect(listResult.success, isTrue,
+            reason: 'Failed to list connections: ${listResult.error}');
+        if (!listResult.success) {
+          return 0;
+        }
+
+        int matches = 0;
+        for (final Connection connection in listResult.value!) {
+          final ConnectionData? data = connection.resolved ?? connection.spec;
+          if (data == null) {
+            continue;
+          }
+          if (data.sourceRef.name == outputName &&
+              data.destinationRef.name == inputName) {
+            matches += 1;
+          }
+        }
+        return matches;
+      }
+
+      final Result<bool> createRuleResult = await producer.createConnectionRule(
+        ConnectionRule(
+          name: ruleName,
+          spec: ConnectionRuleData(
+            sourceSelector: ConnectionRuleSelector.endpointRef(
+              DataItemRef.byName(
+                name: outputName,
+                namespaceSelector:
+                    NamespaceSelector.specificEntity(producer.entityName),
+              ),
+            ),
+            destinationSelector: ConnectionRuleSelector.matchCriteria(
+              SearchCriteria.andCombination(<SearchCriteria>[
+                SearchCriteria.directionEquals(EndpointDirection.input),
+                SearchCriteria.nameEquals(inputName),
+                SearchCriteria.sourceEntityEquals(consumer.entityName),
+              ]),
+            ),
+          ),
+        ),
+      );
+      expect(createRuleResult.success, isTrue,
+          reason:
+              'Failed to create criteria-backed connection rule: ${createRuleResult.error}');
+
+      await Future.delayed(const Duration(milliseconds: 200));
+      expect(await countMatchingConnections(), equals(0));
+
+      final Result<LocalEndpoint> inputResult = await consumer.createEndpoint(
+        EndpointInfo(
+          name: inputName,
+          spec: const EndpointSpec(
+            direction: EndpointDirection.input,
+            dataType: DataTypeSpec(DataType.int_),
+            category: EndpointCategory.messageQueue,
+          ),
+        ),
+      );
+      expect(inputResult.success, isTrue,
+          reason:
+              'Failed to create criteria destination endpoint: ${inputResult.error}');
+
+      await Future.delayed(const Duration(milliseconds: 500));
+      expect(await countMatchingConnections(), equals(1));
+    });
+
+    test('ConnectionRulePersistsAcrossDestinationDeletionAndRecreation',
+        () async {
+      final String suffix = DateTime.now().microsecondsSinceEpoch.toString();
+      final String outputName = 'dart_persistent_output_$suffix';
+      final String inputName = 'dart_persistent_input_$suffix';
+      final String requestName = 'dart_persistent_request_$suffix';
+
+      expect(
+        (await producer.createEndpoint(EndpointInfo(
+          name: outputName,
+          spec: const EndpointSpec(
+            direction: EndpointDirection.output,
+            dataType: DataTypeSpec(DataType.int_),
+            category: EndpointCategory.messageQueue,
+          ),
+        )))
+            .success,
+        isTrue,
+      );
+      expect(
+        (await consumer.createEndpoint(EndpointInfo(
+          name: inputName,
+          spec: const EndpointSpec(
+            direction: EndpointDirection.input,
+            dataType: DataTypeSpec(DataType.int_),
+            category: EndpointCategory.messageQueue,
+          ),
+        )))
+            .success,
+        isTrue,
+      );
+
+      Future<int> countMatchingConnections() async {
+        final Result<List<Connection>> listResult = await producer.listConnections(
+          includeResolved: true,
+          includeSpec: true,
+        );
+        expect(listResult.success, isTrue,
+            reason: 'Failed to list connections: ${listResult.error}');
+        if (!listResult.success) {
+          return 0;
+        }
+
+        int matches = 0;
+        for (final Connection connection in listResult.value!) {
+          final ConnectionData? data = connection.resolved ?? connection.spec;
+          if (data == null) {
+            continue;
+          }
+          if (data.sourceRef.name == outputName &&
+              data.destinationRef.name == inputName) {
+            matches += 1;
+          }
+        }
+        return matches;
+      }
+
+      expect(
+        (await producer.createConnectionRule(
+          ConnectionRule(
+            name: requestName,
+            spec: ConnectionRuleData(
+              sourceRef: DataItemRef.byName(
+                name: outputName,
+                namespaceSelector:
+                    NamespaceSelector.specificEntity(producer.entityName),
+              ),
+              destinationRef: DataItemRef.byName(
+                name: inputName,
+                namespaceSelector:
+                    NamespaceSelector.specificEntity(consumer.entityName),
+              ),
+            ),
+          ),
+        ))
+            .success,
+        isTrue,
+      );
+
+      await Future.delayed(const Duration(milliseconds: 500));
+      expect(await countMatchingConnections(), equals(1));
+
+      expect((await consumer.deleteEndpoint(inputName)).success, isTrue);
+      await Future.delayed(const Duration(milliseconds: 500));
+      expect(await countMatchingConnections(), equals(0));
+
+      expect(
+        (await consumer.createEndpoint(EndpointInfo(
+          name: inputName,
+          spec: const EndpointSpec(
+            direction: EndpointDirection.input,
+            dataType: DataTypeSpec(DataType.int_),
+            category: EndpointCategory.messageQueue,
+          ),
+        )))
+            .success,
+        isTrue,
+      );
+      await Future.delayed(const Duration(milliseconds: 500));
+      expect(await countMatchingConnections(), equals(1));
+    });
+
+    test('EndpointConnectionRuleCleanupFollowsOwningEndpointLifecycle', () async {
+      final String suffix = DateTime.now().microsecondsSinceEpoch.toString();
+      final String outputName = 'dart_endpoint_rule_output_$suffix';
+      final String inputName = 'dart_endpoint_rule_input_$suffix';
+
+      final Result<LocalEndpoint> outputResult = await producer.createEndpoint(
+        EndpointInfo(
+          name: outputName,
+          spec: EndpointSpec(
+            direction: EndpointDirection.output,
+            dataType: const DataTypeSpec(DataType.int_),
+            category: EndpointCategory.messageQueue,
+            connectionPolicy: ConnectionPolicy(
+              endpointConnectionRule: SearchCriteria.andCombination([
+                SearchCriteria.directionEquals(EndpointDirection.input),
+                SearchCriteria.nameEquals(inputName),
+              ]),
+            ),
+          ),
+        ),
+      );
+      expect(outputResult.success, isTrue,
+          reason: 'Failed to create endpoint-owned rule source: ${outputResult.error}');
+
+      final Result<LocalEndpoint> inputResult = await consumer.createEndpoint(
+        EndpointInfo(
+          name: inputName,
+          spec: const EndpointSpec(
+            direction: EndpointDirection.input,
+            dataType: DataTypeSpec(DataType.int_),
+            category: EndpointCategory.messageQueue,
+          ),
+        ),
+      );
+      expect(inputResult.success, isTrue,
+          reason:
+              'Failed to create endpoint-owned rule destination: ${inputResult.error}');
+
+      Future<int> countMatchingConnections() async {
+        final Result<List<Connection>> listResult = await producer.listConnections(
+          includeResolved: true,
+          includeSpec: true,
+        );
+        expect(listResult.success, isTrue,
+            reason: 'Failed to list connections: ${listResult.error}');
+        if (!listResult.success) {
+          return 0;
+        }
+
+        int matches = 0;
+        for (final Connection connection in listResult.value!) {
+          final ConnectionData? data = connection.resolved ?? connection.spec;
+          if (data == null) {
+            continue;
+          }
+          if (data.sourceRef.name == outputName &&
+              data.destinationRef.name == inputName) {
+            matches += 1;
+          }
+        }
+        return matches;
+      }
+
+      await Future.delayed(const Duration(milliseconds: 500));
+      expect(await countMatchingConnections(), equals(1));
+
+      expect((await producer.deleteEndpoint(outputName)).success, isTrue);
+      await Future.delayed(const Duration(milliseconds: 500));
+      expect(await countMatchingConnections(), equals(0));
+
+      final Result<LocalEndpoint> recreatedOutput = await producer.createEndpoint(
+        EndpointInfo(
+          name: outputName,
+          spec: EndpointSpec(
+            direction: EndpointDirection.output,
+            dataType: const DataTypeSpec(DataType.int_),
+            category: EndpointCategory.messageQueue,
+            connectionPolicy: ConnectionPolicy(
+              endpointConnectionRule: SearchCriteria.andCombination([
+                SearchCriteria.directionEquals(EndpointDirection.input),
+                SearchCriteria.nameEquals(inputName),
+              ]),
+            ),
+          ),
+        ),
+      );
+      expect(recreatedOutput.success, isTrue,
+          reason: 'Failed to recreate endpoint-owned rule source: ${recreatedOutput.error}');
+
+      await Future.delayed(const Duration(milliseconds: 500));
+      expect(await countMatchingConnections(), equals(1));
+    });
   });
 
   group('Endpoint TOGGLE Data Type', () {
@@ -896,7 +1351,7 @@ void main() {
           dataType: const DataTypeSpec(DataType.toggle),
           category: EndpointCategory.messageQueue,
           connectionPolicy: ConnectionPolicy(
-            autoConnectCriteria: SearchCriteria.andCombination([
+            endpointConnectionRule: SearchCriteria.andCombination([
               SearchCriteria.directionEquals(EndpointDirection.input),
               SearchCriteria.nameEquals(epName),
             ]),
@@ -912,7 +1367,7 @@ void main() {
           dataType: const DataTypeSpec(DataType.toggle),
           category: EndpointCategory.messageQueue,
           connectionPolicy: ConnectionPolicy(
-            autoConnectCriteria: SearchCriteria.andCombination([
+            endpointConnectionRule: SearchCriteria.andCombination([
               SearchCriteria.directionEquals(EndpointDirection.output),
               SearchCriteria.nameEquals(epName),
             ]),
@@ -1027,10 +1482,10 @@ void main() {
               'Failed to create stateful float input: ${inputResult.error}');
 
       final Result<bool> createRequestResult =
-          await source.createConnectionRequest(
-        ConnectionRequest(
+          await source.createConnectionRule(
+        ConnectionRule(
           name: requestName,
-          spec: ConnectionRequestData(
+          spec: ConnectionRuleData(
             sourceRef: DataItemRef.byName(
               name: sourceName,
               namespaceSelector:
@@ -1163,10 +1618,10 @@ void main() {
           reason: 'Failed to create stateful int input: ${inputResult.error}');
 
       final Result<bool> createRequestResult =
-          await source.createConnectionRequest(
-        ConnectionRequest(
+          await source.createConnectionRule(
+        ConnectionRule(
           name: requestName,
-          spec: ConnectionRequestData(
+          spec: ConnectionRuleData(
             sourceRef: DataItemRef.byName(
               name: sourceName,
               namespaceSelector:
@@ -1278,10 +1733,10 @@ void main() {
               'Failed to create stateful toggle input: ${inputResult.error}');
 
       final Result<bool> createRequestResult =
-          await source.createConnectionRequest(
-        ConnectionRequest(
+          await source.createConnectionRule(
+        ConnectionRule(
           name: requestName,
-          spec: ConnectionRequestData(
+          spec: ConnectionRuleData(
             sourceRef: DataItemRef.byName(
               name: sourceName,
               namespaceSelector:
@@ -1419,10 +1874,10 @@ void main() {
       );
 
       final Result<bool> createSourceToInputRequest =
-          await source.createConnectionRequest(
-        ConnectionRequest(
+          await source.createConnectionRule(
+        ConnectionRule(
           name: sourceToInputRequestName,
-          spec: ConnectionRequestData(
+          spec: ConnectionRuleData(
             sourceRef: DataItemRef.byName(
               name: sourceName,
               namespaceSelector:
@@ -1441,10 +1896,10 @@ void main() {
               'Failed to connect source to input: ${createSourceToInputRequest.error}');
 
       final Result<bool> createOutputToSubscriberRequest =
-          await inputOwner.createConnectionRequest(
-        ConnectionRequest(
+          await inputOwner.createConnectionRule(
+        ConnectionRule(
           name: outputToSubscriberRequestName,
-          spec: ConnectionRequestData(
+          spec: ConnectionRuleData(
             sourceRef: DataItemRef.byName(
               name: matchedOutputName,
               namespaceSelector:
@@ -1600,10 +2055,10 @@ void main() {
       );
 
       expect(
-        (await source.createConnectionRequest(
-          ConnectionRequest(
+        (await source.createConnectionRule(
+          ConnectionRule(
             name: sourceToInputRequestName,
-            spec: ConnectionRequestData(
+            spec: ConnectionRuleData(
               sourceRef: DataItemRef.byName(
                 name: sourceName,
                 namespaceSelector:
@@ -1621,10 +2076,10 @@ void main() {
         isTrue,
       );
       expect(
-        (await inputOwner.createConnectionRequest(
-          ConnectionRequest(
+        (await inputOwner.createConnectionRule(
+          ConnectionRule(
             name: outputToSubscriberRequestName,
-            spec: ConnectionRequestData(
+            spec: ConnectionRuleData(
               sourceRef: DataItemRef.byName(
                 name: matchedOutputName,
                 namespaceSelector:
@@ -1776,10 +2231,10 @@ void main() {
       );
 
       expect(
-        (await inputOwner.createConnectionRequest(
-          ConnectionRequest(
+        (await inputOwner.createConnectionRule(
+          ConnectionRule(
             name: outputToSubscriberRequestName,
-            spec: ConnectionRequestData(
+            spec: ConnectionRuleData(
               sourceRef: DataItemRef.byName(
                 name: matchedOutputName,
                 namespaceSelector:
@@ -1921,10 +2376,10 @@ void main() {
       );
 
       expect(
-        (await source.createConnectionRequest(
-          ConnectionRequest(
+        (await source.createConnectionRule(
+          ConnectionRule(
             name: sourceToInputRequestName,
-            spec: ConnectionRequestData(
+            spec: ConnectionRuleData(
               sourceRef: DataItemRef.byName(
                 name: sourceName,
                 namespaceSelector:
@@ -1942,10 +2397,10 @@ void main() {
         isTrue,
       );
       expect(
-        (await inputOwner.createConnectionRequest(
-          ConnectionRequest(
+        (await inputOwner.createConnectionRule(
+          ConnectionRule(
             name: outputToSubscriberARequestName,
-            spec: ConnectionRequestData(
+            spec: ConnectionRuleData(
               sourceRef: DataItemRef.byName(
                 name: matchedOutputName,
                 namespaceSelector:
@@ -1963,10 +2418,10 @@ void main() {
         isTrue,
       );
       expect(
-        (await inputOwner.createConnectionRequest(
-          ConnectionRequest(
+        (await inputOwner.createConnectionRule(
+          ConnectionRule(
             name: outputToSubscriberBRequestName,
-            spec: ConnectionRequestData(
+            spec: ConnectionRuleData(
               sourceRef: DataItemRef.byName(
                 name: matchedOutputName,
                 namespaceSelector:
@@ -2017,7 +2472,7 @@ void main() {
       expect(valuesB, equals(<int>[4, 23]));
     });
 
-    test('ShimBackedMatchedOutputPublishesCommittedState', () async {
+    test('ShimEndpointMatchedOutputPublishesCommittedState', () async {
       final String suffix = DateTime.now().microsecondsSinceEpoch.toString();
       final String sourceName = 'matched_shim_source_$suffix';
       final String inputName = 'matched_shim_input_$suffix';
@@ -2088,7 +2543,7 @@ void main() {
         ),
       ));
       expect(shimResult.success, isTrue,
-          reason: 'Failed to create matched shim output: ${shimResult.error}');
+          reason: 'Failed to create matched ShimEndpoint: ${shimResult.error}');
 
       final Result<LocalEndpoint> subscriberResult =
           await subscriberOwner.createEndpoint(EndpointInfo(
@@ -2114,10 +2569,10 @@ void main() {
       );
 
       expect(
-        (await source.createConnectionRequest(
-          ConnectionRequest(
+        (await source.createConnectionRule(
+          ConnectionRule(
             name: sourceToInputRequestName,
-            spec: ConnectionRequestData(
+            spec: ConnectionRuleData(
               sourceRef: DataItemRef.byName(
                 name: sourceName,
                 namespaceSelector:
@@ -2135,10 +2590,10 @@ void main() {
         isTrue,
       );
       expect(
-        (await inputOwner.createConnectionRequest(
-          ConnectionRequest(
+        (await inputOwner.createConnectionRule(
+          ConnectionRule(
             name: shimToSubscriberRequestName,
-            spec: ConnectionRequestData(
+            spec: ConnectionRuleData(
               sourceRef: DataItemRef.byName(
                 name: shimOutputName,
                 namespaceSelector:
@@ -2414,10 +2869,10 @@ void main() {
           reason: 'Failed to create bootstrap input: ${inputResult.error}');
 
       expect(
-        (await source.createConnectionRequest(
-          ConnectionRequest(
+        (await source.createConnectionRule(
+          ConnectionRule(
             name: requestAName,
-            spec: ConnectionRequestData(
+            spec: ConnectionRuleData(
               sourceRef: DataItemRef.byName(
                 name: outputAName,
                 namespaceSelector:
@@ -2446,10 +2901,10 @@ void main() {
       expect(retainedValue, equals(4.0));
 
       expect(
-        (await otherSource.createConnectionRequest(
-          ConnectionRequest(
+        (await otherSource.createConnectionRule(
+          ConnectionRule(
             name: requestBName,
-            spec: ConnectionRequestData(
+            spec: ConnectionRuleData(
               sourceRef: DataItemRef.byName(
                 name: outputBName,
                 namespaceSelector:
@@ -2541,10 +2996,10 @@ void main() {
       );
 
       expect(
-        (await source.createConnectionRequest(
-          ConnectionRequest(
+        (await source.createConnectionRule(
+          ConnectionRule(
             name: sourceToInputRequestName,
-            spec: ConnectionRequestData(
+            spec: ConnectionRuleData(
               sourceRef: DataItemRef.byName(
                 name: sourceName,
                 namespaceSelector:
@@ -2562,10 +3017,10 @@ void main() {
         isTrue,
       );
       expect(
-        (await source.createConnectionRequest(
-          ConnectionRequest(
+        (await source.createConnectionRule(
+          ConnectionRule(
             name: outputToSubscriberRequestName,
-            spec: ConnectionRequestData(
+            spec: ConnectionRuleData(
               sourceRef: DataItemRef.byName(
                 name: matchedOutputName,
                 namespaceSelector:
@@ -2712,10 +3167,10 @@ void main() {
       );
 
       expect(
-        (await source.createConnectionRequest(
-          ConnectionRequest(
+        (await source.createConnectionRule(
+          ConnectionRule(
             name: sourceToInputRequestName,
-            spec: ConnectionRequestData(
+            spec: ConnectionRuleData(
               sourceRef: DataItemRef.byName(
                 name: sourceName,
                 namespaceSelector:
@@ -2733,10 +3188,10 @@ void main() {
         isTrue,
       );
       expect(
-        (await source.createConnectionRequest(
-          ConnectionRequest(
+        (await source.createConnectionRule(
+          ConnectionRule(
             name: outputToSubscriberRequestName,
-            spec: ConnectionRequestData(
+            spec: ConnectionRuleData(
               sourceRef: DataItemRef.byName(
                 name: matchedOutputName,
                 namespaceSelector:
@@ -2889,10 +3344,10 @@ void main() {
 
       final String validRequestName = 'int_enum_valid_request_$suffix';
       expect(
-        (await source.createConnectionRequest(
-          ConnectionRequest(
+        (await source.createConnectionRule(
+          ConnectionRule(
             name: validRequestName,
-            spec: ConnectionRequestData(
+            spec: ConnectionRuleData(
               sourceRef: DataItemRef.byName(
                 name: validOutputName,
                 namespaceSelector:
@@ -2959,10 +3414,10 @@ void main() {
 
       final String invalidRequestName = 'int_enum_invalid_request_$suffix';
       expect(
-        (await source.createConnectionRequest(
-          ConnectionRequest(
+        (await source.createConnectionRule(
+          ConnectionRule(
             name: invalidRequestName,
-            spec: ConnectionRequestData(
+            spec: ConnectionRuleData(
               sourceRef: DataItemRef.byName(
                 name: invalidOutputName,
                 namespaceSelector:
@@ -3029,10 +3484,10 @@ void main() {
 
       final String addRequestName = 'int_enum_add_request_$suffix';
       expect(
-        (await source.createConnectionRequest(
-          ConnectionRequest(
+        (await source.createConnectionRule(
+          ConnectionRule(
             name: addRequestName,
-            spec: ConnectionRequestData(
+            spec: ConnectionRuleData(
               sourceRef: DataItemRef.byName(
                 name: addOutputName,
                 namespaceSelector:
@@ -3230,10 +3685,10 @@ void main() {
               'Failed to create enum bootstrap input: ${inputResult.error}');
 
       expect(
-        (await source.createConnectionRequest(
-          ConnectionRequest(
+        (await source.createConnectionRule(
+          ConnectionRule(
             name: invalidRequestName,
-            spec: ConnectionRequestData(
+            spec: ConnectionRuleData(
               sourceRef: DataItemRef.byName(
                 name: invalidOutputName,
                 namespaceSelector:
@@ -3262,10 +3717,10 @@ void main() {
       expect(bootstrapQueryResult.value!.value, equals(2));
 
       expect(
-        (await otherSource.createConnectionRequest(
-          ConnectionRequest(
+        (await otherSource.createConnectionRule(
+          ConnectionRule(
             name: validRequestName,
-            spec: ConnectionRequestData(
+            spec: ConnectionRuleData(
               sourceRef: DataItemRef.byName(
                 name: validOutputName,
                 namespaceSelector:
@@ -3359,10 +3814,10 @@ void main() {
       );
 
       expect(
-        (await source.createConnectionRequest(
-          ConnectionRequest(
+        (await source.createConnectionRule(
+          ConnectionRule(
             name: sourceToInputRequestName,
-            spec: ConnectionRequestData(
+            spec: ConnectionRuleData(
               sourceRef: DataItemRef.byName(
                 name: sourceName,
                 namespaceSelector:
@@ -3380,10 +3835,10 @@ void main() {
         isTrue,
       );
       expect(
-        (await source.createConnectionRequest(
-          ConnectionRequest(
+        (await source.createConnectionRule(
+          ConnectionRule(
             name: outputToSubscriberRequestName,
-            spec: ConnectionRequestData(
+            spec: ConnectionRuleData(
               sourceRef: DataItemRef.byName(
                 name: matchedOutputName,
                 namespaceSelector:
@@ -3528,10 +3983,10 @@ void main() {
         expect(inputResult.value!.getRetainedStatefulFloatValue(), isNull);
 
         final Result<bool> createRequestResult =
-            await source.createConnectionRequest(
-          ConnectionRequest(
+            await source.createConnectionRule(
+          ConnectionRule(
             name: requestName,
-            spec: ConnectionRequestData(
+            spec: ConnectionRuleData(
               sourceRef: DataItemRef.byName(
                 name: sourceName,
                 namespaceSelector:
@@ -3693,7 +4148,7 @@ void main() {
           dataType: const DataTypeSpec(DataType.scopeBuffer),
           category: EndpointCategory.messageQueue,
           connectionPolicy: ConnectionPolicy(
-            autoConnectCriteria: SearchCriteria.andCombination([
+            endpointConnectionRule: SearchCriteria.andCombination([
               SearchCriteria.directionEquals(EndpointDirection.input),
               SearchCriteria.nameEquals(epName),
             ]),
@@ -3709,7 +4164,7 @@ void main() {
           dataType: const DataTypeSpec(DataType.scopeBuffer),
           category: EndpointCategory.messageQueue,
           connectionPolicy: ConnectionPolicy(
-            autoConnectCriteria: SearchCriteria.andCombination([
+            endpointConnectionRule: SearchCriteria.andCombination([
               SearchCriteria.directionEquals(EndpointDirection.output),
               SearchCriteria.nameEquals(epName),
             ]),
@@ -3790,7 +4245,7 @@ void main() {
           dataType: const DataTypeSpec(DataType.dppEditorMessage),
           category: EndpointCategory.messageQueue,
           connectionPolicy: ConnectionPolicy(
-            autoConnectCriteria: SearchCriteria.andCombination([
+            endpointConnectionRule: SearchCriteria.andCombination([
               SearchCriteria.directionEquals(EndpointDirection.input),
               SearchCriteria.nameEquals(epName),
             ]),
@@ -3807,7 +4262,7 @@ void main() {
           dataType: const DataTypeSpec(DataType.dppEditorMessage),
           category: EndpointCategory.messageQueue,
           connectionPolicy: ConnectionPolicy(
-            autoConnectCriteria: SearchCriteria.andCombination([
+            endpointConnectionRule: SearchCriteria.andCombination([
               SearchCriteria.directionEquals(EndpointDirection.output),
               SearchCriteria.nameEquals(epName),
             ]),
@@ -3885,7 +4340,7 @@ void main() {
           dataType: const DataTypeSpec(DataType.voiceMessage),
           category: EndpointCategory.messageQueue,
           connectionPolicy: ConnectionPolicy(
-            autoConnectCriteria: SearchCriteria.andCombination([
+            endpointConnectionRule: SearchCriteria.andCombination([
               SearchCriteria.directionEquals(EndpointDirection.input),
               SearchCriteria.nameEquals(epName),
             ]),
@@ -3902,7 +4357,7 @@ void main() {
           dataType: const DataTypeSpec(DataType.voiceMessage),
           category: EndpointCategory.messageQueue,
           connectionPolicy: ConnectionPolicy(
-            autoConnectCriteria: SearchCriteria.andCombination([
+            endpointConnectionRule: SearchCriteria.andCombination([
               SearchCriteria.directionEquals(EndpointDirection.output),
               SearchCriteria.nameEquals(epName),
             ]),
@@ -4113,7 +4568,7 @@ void main() {
           dataType: const DataTypeSpec(DataType.voiceOutputValue),
           category: EndpointCategory.messageQueue,
           connectionPolicy: ConnectionPolicy(
-            autoConnectCriteria: SearchCriteria.andCombination([
+            endpointConnectionRule: SearchCriteria.andCombination([
               SearchCriteria.directionEquals(EndpointDirection.input),
               SearchCriteria.nameEquals(epName),
             ]),
@@ -4130,7 +4585,7 @@ void main() {
           dataType: const DataTypeSpec(DataType.voiceOutputValue),
           category: EndpointCategory.messageQueue,
           connectionPolicy: ConnectionPolicy(
-            autoConnectCriteria: SearchCriteria.andCombination([
+            endpointConnectionRule: SearchCriteria.andCombination([
               SearchCriteria.directionEquals(EndpointDirection.output),
               SearchCriteria.nameEquals(epName),
             ]),
@@ -4208,7 +4663,7 @@ void main() {
           dataType: const DataTypeSpec(DataType.globalOutputValue),
           category: EndpointCategory.messageQueue,
           connectionPolicy: ConnectionPolicy(
-            autoConnectCriteria: SearchCriteria.andCombination([
+            endpointConnectionRule: SearchCriteria.andCombination([
               SearchCriteria.directionEquals(EndpointDirection.input),
               SearchCriteria.nameEquals(epName),
             ]),
@@ -4225,7 +4680,7 @@ void main() {
           dataType: const DataTypeSpec(DataType.globalOutputValue),
           category: EndpointCategory.messageQueue,
           connectionPolicy: ConnectionPolicy(
-            autoConnectCriteria: SearchCriteria.andCombination([
+            endpointConnectionRule: SearchCriteria.andCombination([
               SearchCriteria.directionEquals(EndpointDirection.output),
               SearchCriteria.nameEquals(epName),
             ]),
@@ -4299,7 +4754,7 @@ void main() {
           ),
           category: EndpointCategory.fileBacked,
           connectionPolicy: ConnectionPolicy(
-            autoConnectCriteria: SearchCriteria.andCombination([
+            endpointConnectionRule: SearchCriteria.andCombination([
               SearchCriteria.directionEquals(EndpointDirection.input),
               SearchCriteria.nameEquals(epName),
             ]),
@@ -4320,7 +4775,7 @@ void main() {
           ),
           category: EndpointCategory.fileBacked,
           connectionPolicy: ConnectionPolicy(
-            autoConnectCriteria: SearchCriteria.andCombination([
+            endpointConnectionRule: SearchCriteria.andCombination([
               SearchCriteria.directionEquals(EndpointDirection.output),
               SearchCriteria.nameEquals(epName),
             ]),
@@ -4443,10 +4898,10 @@ void main() {
         }
       });
 
-      final createRequestResult = await producer.createConnectionRequest(
-        ConnectionRequest(
+      final createRequestResult = await producer.createConnectionRule(
+        ConnectionRule(
           name: requestName,
-          spec: ConnectionRequestData(
+          spec: ConnectionRuleData(
             sourceRef: DataItemRef.byName(
               name: epName,
               namespaceSelector:
@@ -4462,7 +4917,7 @@ void main() {
       );
       expect(createRequestResult.success, isTrue,
           reason:
-              'Failed to create connection request: ${createRequestResult.error}');
+              'Failed to create connection rule: ${createRequestResult.error}');
 
       await Future.delayed(const Duration(milliseconds: 500));
 

@@ -111,7 +111,7 @@ class NamerService {
       dataType: const dp.DataTypeSpec(dp.DataType.keyPress),
       category: dp.EndpointCategory.messageQueue,
       connectionPolicy: dp.ConnectionPolicy(
-        autoConnectCriteria: keyInputCriteria,
+        endpointConnectionRule: keyInputCriteria,
       ),
     );
 
@@ -144,7 +144,7 @@ class NamerService {
       dataType: const dp.DataTypeSpec(dp.DataType.ledMessage),
       category: dp.EndpointCategory.messageQueue,
       connectionPolicy: dp.ConnectionPolicy(
-        autoConnectCriteria: ledOutputCriteria,
+        endpointConnectionRule: ledOutputCriteria,
       ),
     );
 

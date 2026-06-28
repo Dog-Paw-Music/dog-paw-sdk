@@ -534,7 +534,7 @@ List<String> _buildSdkRuntimeEpiphanyCandidates({
 /// - [packageRootPath] points at the `packages/dogpaw_test` directory.
 ///
 /// Guarantees/Postconditions:
-/// - The host-runtime candidate appears first when its triplet is known.
+/// - The host-runtime candidate appears when its triplet is known.
 ///
 /// Invariants:
 /// - Does not inspect source-checkout build directories.
@@ -545,8 +545,6 @@ List<String> _buildSdkRuntimeBridgeCandidates({
     path.join(packageRootPath, '..', '..'),
   );
   final String runtimeLibRootPath = path.join(sdkRootPath, 'runtime', 'lib');
-  final Directory runtimeLibRoot = Directory(runtimeLibRootPath);
-
   final List<String> candidates = <String>[];
   final Set<String> seenPaths = <String>{};
 
@@ -567,17 +565,6 @@ List<String> _buildSdkRuntimeBridgeCandidates({
 
   appendCandidate(path.join(runtimeLibRootPath, _bridgeLibraryBaseName));
 
-  if (runtimeLibRoot.existsSync()) {
-    final List<Directory> tripletDirectories = runtimeLibRoot
-        .listSync(followLinks: false)
-        .whereType<Directory>()
-        .toList()
-      ..sort((Directory left, Directory right) => left.path.compareTo(right.path));
-    for (final Directory tripletDirectory in tripletDirectories) {
-      appendCandidate(path.join(tripletDirectory.path, _bridgeLibraryBaseName));
-    }
-  }
-
   return candidates;
 }
 
@@ -597,7 +584,7 @@ List<String> _buildSdkRuntimeBridgeCandidates({
 /// - [packageRootPath] points at the `dogpaw` package directory.
 ///
 /// Guarantees/Postconditions:
-/// - The host-runtime candidate appears first when its triplet is known.
+/// - The host-runtime candidate appears when its triplet is known.
 ///
 /// Invariants:
 /// - Only package-owned prebuilt assets are considered.
@@ -621,18 +608,6 @@ List<String> _buildDogpawPackageBridgeCandidates({
     appendCandidate(
       path.join(prebuiltRootPath, preferredTriplet, _bridgeLibraryBaseName),
     );
-  }
-
-  final Directory prebuiltRoot = Directory(prebuiltRootPath);
-  if (prebuiltRoot.existsSync()) {
-    final List<Directory> tripletDirectories = prebuiltRoot
-        .listSync(followLinks: false)
-        .whereType<Directory>()
-        .toList()
-      ..sort((Directory left, Directory right) => left.path.compareTo(right.path));
-    for (final Directory tripletDirectory in tripletDirectories) {
-      appendCandidate(path.join(tripletDirectory.path, _bridgeLibraryBaseName));
-    }
   }
 
   return candidates;

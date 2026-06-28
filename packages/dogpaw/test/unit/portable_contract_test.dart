@@ -61,10 +61,17 @@ void main() {
 
     test('test tree does not import the internal repo-only test package', () {
       final Directory testRoot = Directory(path.join(packageRoot, 'test'));
+      final String thisTestPath = path.join(
+        packageRoot,
+        'test',
+        'unit',
+        'portable_contract_test.dart',
+      );
       final List<File> dartFiles = testRoot
           .listSync(recursive: true)
           .whereType<File>()
           .where((File file) => path.extension(file.path) == '.dart')
+          .where((File file) => path.normalize(file.path) != path.normalize(thisTestPath))
           .toList();
 
       for (final File dartFile in dartFiles) {

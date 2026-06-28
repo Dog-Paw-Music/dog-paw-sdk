@@ -1288,37 +1288,37 @@ std::unique_ptr<dogpaw::SearchCriteria> parse_search_criteria_json(
 }
 
 /**
- * @brief Parse one Dog Paw `ConnectionRequest` JSON string.
+ * @brief Parse one Dog Paw `ConnectionRule` JSON string.
  *
  * Purpose:
- * Reuses `ConnectionRequest::fromJson()` so the bridge does not duplicate
+ * Reuses `ConnectionRule::fromJson()` so the bridge does not duplicate
  * schema knowledge.
  *
- * @param jsonUtf8 UTF-8 JSON object text for one `ConnectionRequest`.
- * @return Parsed request on success, or `nullptr` if parsing fails.
+ * @param jsonUtf8 UTF-8 JSON object text for one `ConnectionRule`.
+ * @return Parsed rule on success, or `nullptr` if parsing fails.
  */
-std::unique_ptr<dogpaw::ConnectionRequest> parse_connection_request_json(
+std::unique_ptr<dogpaw::ConnectionRule> parse_connection_rule_json(
     const char* jsonUtf8) {
   const std::string jsonString = string_or_fallback(jsonUtf8, "{}");
   const nlohmann::json parsedJson = nlohmann::json::parse(jsonString);
-  return dogpaw::ConnectionRequest::fromJson(parsedJson, false);
+  return dogpaw::ConnectionRule::fromJson(parsedJson, false);
 }
 
 /**
- * @brief Parse one Dog Paw `FollowRequest` JSON string.
+ * @brief Parse one Dog Paw `FollowRule` JSON string.
  *
  * Purpose:
- * Reuses `FollowRequest::fromJson()` so the bridge does not duplicate schema
+ * Reuses `FollowRule::fromJson()` so the bridge does not duplicate schema
  * knowledge.
  *
- * @param jsonUtf8 UTF-8 JSON object text for one `FollowRequest`.
- * @return Parsed request on success, or `nullptr` if parsing fails.
+ * @param jsonUtf8 UTF-8 JSON object text for one `FollowRule`.
+ * @return Parsed rule on success, or `nullptr` if parsing fails.
  */
-std::unique_ptr<dogpaw::FollowRequest> parse_follow_request_json(
+std::unique_ptr<dogpaw::FollowRule> parse_follow_rule_json(
     const char* jsonUtf8) {
   const std::string jsonString = string_or_fallback(jsonUtf8, "{}");
   const nlohmann::json parsedJson = nlohmann::json::parse(jsonString);
-  return dogpaw::FollowRequest::fromJson(parsedJson, false);
+  return dogpaw::FollowRule::fromJson(parsedJson, false);
 }
 
 /**
@@ -5669,31 +5669,31 @@ int32_t dppb_dpe_local_endpoint_poll_file_backed(void* handle,
 }
 
 /**
- * @brief Launch an asynchronous native-backed `createConnectionRequest()`
+ * @brief Launch an asynchronous native-backed `createConnectionRule()`
  * request.
  */
-bool dppb_dpe_create_connection_request_async(
+bool dppb_dpe_create_connection_rule_async(
     void* handle,
     const int64_t request_id,
-    const char* connection_request_json) {
-  if (handle == nullptr || connection_request_json == nullptr) {
+    const char* connection_rule_json) {
+  if (handle == nullptr || connection_rule_json == nullptr) {
     return false;
   }
 
   NativeDogPawEntityBridge* bridge =
       static_cast<NativeDogPawEntityBridge*>(handle);
-  std::unique_ptr<dogpaw::ConnectionRequest> connectionRequest;
+  std::unique_ptr<dogpaw::ConnectionRule> connectionRule;
   try {
-    connectionRequest = parse_connection_request_json(connection_request_json);
-    if (connectionRequest == nullptr) {
-      throw std::runtime_error("Failed to parse connection request JSON");
+    connectionRule = parse_connection_rule_json(connection_rule_json);
+    if (connectionRule == nullptr) {
+      throw std::runtime_error("Failed to parse connection rule JSON");
     }
   } catch (const std::exception& exception) {
     post_bridge_event(
         bridge,
         make_request_result_event(
             request_id,
-            "createConnectionRequest",
+            "createConnectionRule",
             false,
             exception.what(),
             nlohmann::json::object()));
@@ -5701,15 +5701,15 @@ bool dppb_dpe_create_connection_request_async(
   }
 
   std::thread requestThread(
-      [bridge, request_id, connectionRequest = std::move(connectionRequest)]() mutable {
+      [bridge, request_id, connectionRule = std::move(connectionRule)]() mutable {
         try {
           dogpaw::OperationResult opResult =
-              bridge->entity->createConnectionRequest(*connectionRequest).get();
+              bridge->entity->createConnectionRule(*connectionRule).get();
           post_bridge_event(
               bridge,
               make_request_result_event(
                   request_id,
-                  "createConnectionRequest",
+                  "createConnectionRule",
                   opResult.success,
                   opResult.error,
                   nlohmann::json::object()));
@@ -5718,7 +5718,7 @@ bool dppb_dpe_create_connection_request_async(
               bridge,
               make_request_result_event(
                   request_id,
-                  "createConnectionRequest",
+                  "createConnectionRule",
                   false,
                   exception.what(),
                   nlohmann::json::object()));
@@ -5728,30 +5728,30 @@ bool dppb_dpe_create_connection_request_async(
 }
 
 /**
- * @brief Launch an asynchronous native-backed `setConnectionRequest()`
+ * @brief Launch an asynchronous native-backed `setConnectionRule()`
  * request.
  */
-bool dppb_dpe_set_connection_request_async(void* handle,
-                                           const int64_t request_id,
-                                           const char* connection_request_json) {
-  if (handle == nullptr || connection_request_json == nullptr) {
+bool dppb_dpe_set_connection_rule_async(void* handle,
+                                        const int64_t request_id,
+                                        const char* connection_rule_json) {
+  if (handle == nullptr || connection_rule_json == nullptr) {
     return false;
   }
 
   NativeDogPawEntityBridge* bridge =
       static_cast<NativeDogPawEntityBridge*>(handle);
-  std::unique_ptr<dogpaw::ConnectionRequest> connectionRequest;
+  std::unique_ptr<dogpaw::ConnectionRule> connectionRule;
   try {
-    connectionRequest = parse_connection_request_json(connection_request_json);
-    if (connectionRequest == nullptr) {
-      throw std::runtime_error("Failed to parse connection request JSON");
+    connectionRule = parse_connection_rule_json(connection_rule_json);
+    if (connectionRule == nullptr) {
+      throw std::runtime_error("Failed to parse connection rule JSON");
     }
   } catch (const std::exception& exception) {
     post_bridge_event(
         bridge,
         make_request_result_event(
             request_id,
-            "setConnectionRequest",
+            "setConnectionRule",
             false,
             exception.what(),
             nlohmann::json::object()));
@@ -5759,15 +5759,15 @@ bool dppb_dpe_set_connection_request_async(void* handle,
   }
 
   std::thread requestThread(
-      [bridge, request_id, connectionRequest = std::move(connectionRequest)]() mutable {
+      [bridge, request_id, connectionRule = std::move(connectionRule)]() mutable {
         try {
           dogpaw::OperationResult opResult =
-              bridge->entity->setConnectionRequest(*connectionRequest).get();
+              bridge->entity->setConnectionRule(*connectionRule).get();
           post_bridge_event(
               bridge,
               make_request_result_event(
                   request_id,
-                  "setConnectionRequest",
+                  "setConnectionRule",
                   opResult.success,
                   opResult.error,
                   nlohmann::json::object()));
@@ -5776,7 +5776,7 @@ bool dppb_dpe_set_connection_request_async(void* handle,
               bridge,
               make_request_result_event(
                   request_id,
-                  "setConnectionRequest",
+                  "setConnectionRule",
                   false,
                   exception.what(),
                   nlohmann::json::object()));
@@ -5786,31 +5786,31 @@ bool dppb_dpe_set_connection_request_async(void* handle,
 }
 
 /**
- * @brief Launch an asynchronous native-backed `updateConnectionRequest()`
+ * @brief Launch an asynchronous native-backed `updateConnectionRule()`
  * request.
  */
-bool dppb_dpe_update_connection_request_async(
+bool dppb_dpe_update_connection_rule_async(
     void* handle,
     const int64_t request_id,
-    const char* connection_request_json) {
-  if (handle == nullptr || connection_request_json == nullptr) {
+    const char* connection_rule_json) {
+  if (handle == nullptr || connection_rule_json == nullptr) {
     return false;
   }
 
   NativeDogPawEntityBridge* bridge =
       static_cast<NativeDogPawEntityBridge*>(handle);
-  std::unique_ptr<dogpaw::ConnectionRequest> connectionRequest;
+  std::unique_ptr<dogpaw::ConnectionRule> connectionRule;
   try {
-    connectionRequest = parse_connection_request_json(connection_request_json);
-    if (connectionRequest == nullptr) {
-      throw std::runtime_error("Failed to parse connection request JSON");
+    connectionRule = parse_connection_rule_json(connection_rule_json);
+    if (connectionRule == nullptr) {
+      throw std::runtime_error("Failed to parse connection rule JSON");
     }
   } catch (const std::exception& exception) {
     post_bridge_event(
         bridge,
         make_request_result_event(
             request_id,
-            "updateConnectionRequest",
+            "updateConnectionRule",
             false,
             exception.what(),
             nlohmann::json::object()));
@@ -5818,15 +5818,15 @@ bool dppb_dpe_update_connection_request_async(
   }
 
   std::thread requestThread(
-      [bridge, request_id, connectionRequest = std::move(connectionRequest)]() mutable {
+      [bridge, request_id, connectionRule = std::move(connectionRule)]() mutable {
         try {
           dogpaw::OperationResult opResult =
-              bridge->entity->updateConnectionRequest(*connectionRequest).get();
+              bridge->entity->updateConnectionRule(*connectionRule).get();
           post_bridge_event(
               bridge,
               make_request_result_event(
                   request_id,
-                  "updateConnectionRequest",
+                  "updateConnectionRule",
                   opResult.success,
                   opResult.error,
                   nlohmann::json::object()));
@@ -5835,7 +5835,7 @@ bool dppb_dpe_update_connection_request_async(
               bridge,
               make_request_result_event(
                   request_id,
-                  "updateConnectionRequest",
+                  "updateConnectionRule",
                   false,
                   exception.what(),
                   nlohmann::json::object()));
@@ -5845,10 +5845,10 @@ bool dppb_dpe_update_connection_request_async(
 }
 
 /**
- * @brief Launch an asynchronous native-backed `readConnectionRequest()`
+ * @brief Launch an asynchronous native-backed `readConnectionRule()`
  * request.
  */
-bool dppb_dpe_read_connection_request_async(
+bool dppb_dpe_read_connection_rule_async(
     void* handle,
     const int64_t request_id,
     const char* name,
@@ -5870,7 +5870,7 @@ bool dppb_dpe_read_connection_request_async(
         bridge,
         make_request_result_event(
             request_id,
-            "readConnectionRequest",
+            "readConnectionRule",
             false,
             exception.what(),
             nlohmann::json::object()));
@@ -5886,9 +5886,9 @@ bool dppb_dpe_read_connection_request_async(
        include_resolved,
        include_spec]() mutable {
         try {
-          dogpaw::ConnectionRequestResult readResult =
+          dogpaw::ConnectionRuleResult readResult =
               bridge->entity
-                  ->readConnectionRequest(
+                  ->readConnectionRule(
                       requestName,
                       namespaceSelector,
                       include_resolved,
@@ -5898,14 +5898,14 @@ bool dppb_dpe_read_connection_request_async(
           if (readResult.success) {
             nlohmann::json resultJson = nlohmann::json::object();
             if (readResult.value.has_value()) {
-              resultJson[JF::CONNECTION_REQUEST_ITEM] =
+              resultJson[JF::CONNECTION_RULE_ITEM] =
                   readResult.value.value().toJson();
             }
             post_bridge_event(
                 bridge,
                 make_request_result_event(
                     request_id,
-                    "readConnectionRequest",
+                    "readConnectionRule",
                     true,
                     "",
                     resultJson));
@@ -5914,7 +5914,7 @@ bool dppb_dpe_read_connection_request_async(
                 bridge,
                 make_request_result_event(
                     request_id,
-                    "readConnectionRequest",
+                    "readConnectionRule",
                     false,
                     readResult.error,
                     nlohmann::json::object()));
@@ -5924,7 +5924,7 @@ bool dppb_dpe_read_connection_request_async(
               bridge,
               make_request_result_event(
                   request_id,
-                  "readConnectionRequest",
+                  "readConnectionRule",
                   false,
                   exception.what(),
                   nlohmann::json::object()));
@@ -5934,10 +5934,10 @@ bool dppb_dpe_read_connection_request_async(
 }
 
 /**
- * @brief Launch an asynchronous native-backed `deleteConnectionRequest()`
+ * @brief Launch an asynchronous native-backed `deleteConnectionRule()`
  * request.
  */
-bool dppb_dpe_delete_connection_request_async(
+bool dppb_dpe_delete_connection_rule_async(
     void* handle,
     const int64_t request_id,
     const char* name,
@@ -5957,7 +5957,7 @@ bool dppb_dpe_delete_connection_request_async(
         bridge,
         make_request_result_event(
             request_id,
-            "deleteConnectionRequest",
+            "deleteConnectionRule",
             false,
             exception.what(),
             nlohmann::json::object()));
@@ -5970,13 +5970,13 @@ bool dppb_dpe_delete_connection_request_async(
         try {
           dogpaw::OperationResult deleteResult =
               bridge->entity
-                  ->deleteConnectionRequest(requestName, namespaceSelector)
+                  ->deleteConnectionRule(requestName, namespaceSelector)
                   .get();
           post_bridge_event(
               bridge,
               make_request_result_event(
                   request_id,
-                  "deleteConnectionRequest",
+                  "deleteConnectionRule",
                   deleteResult.success,
                   deleteResult.error,
                   nlohmann::json::object()));
@@ -5985,7 +5985,7 @@ bool dppb_dpe_delete_connection_request_async(
               bridge,
               make_request_result_event(
                   request_id,
-                  "deleteConnectionRequest",
+                  "deleteConnectionRule",
                   false,
                   exception.what(),
                   nlohmann::json::object()));
@@ -5995,10 +5995,10 @@ bool dppb_dpe_delete_connection_request_async(
 }
 
 /**
- * @brief Launch an asynchronous native-backed `listConnectionRequests()`
+ * @brief Launch an asynchronous native-backed `listConnectionRules()`
  * request.
  */
-bool dppb_dpe_list_connection_requests_async(
+bool dppb_dpe_list_connection_rules_async(
     void* handle,
     const int64_t request_id,
     const char* namespace_selector_json,
@@ -6018,46 +6018,46 @@ bool dppb_dpe_list_connection_requests_async(
         bridge,
         make_request_result_event(
             request_id,
-            "listConnectionRequests",
+            "listConnectionRules",
             false,
             exception.what(),
             nlohmann::json::object()));
     return true;
   }
 
-  std::future<dogpaw::ConnectionRequestListResult> listFuture;
+  std::future<dogpaw::ConnectionRuleListResult> listFuture;
   {
     std::lock_guard<std::mutex> lock(bridge->mutex);
     if (bridge->destroying || bridge->entity == nullptr) {
       return false;
     }
-    listFuture = bridge->entity->listConnectionRequests(
+    listFuture = bridge->entity->listConnectionRules(
         namespaceSelector, include_resolved, include_spec);
   }
 
   std::thread requestThread(
       [bridge, request_id, listFuture = std::move(listFuture)]() mutable {
         try {
-          dogpaw::ConnectionRequestListResult listResult = listFuture.get();
+          dogpaw::ConnectionRuleListResult listResult = listFuture.get();
           if (listResult.success) {
             nlohmann::json itemsJson = nlohmann::json::array();
-            for (const dogpaw::ConnectionRequest& item : listResult.value) {
+            for (const dogpaw::ConnectionRule& item : listResult.value) {
               itemsJson.push_back(item.toJson());
             }
             post_bridge_event(
                 bridge,
                 make_request_result_event(
                     request_id,
-                    "listConnectionRequests",
+                    "listConnectionRules",
                     true,
                     "",
-                    nlohmann::json{{JF::CONNECTION_REQUESTS, itemsJson}}));
+                    nlohmann::json{{JF::CONNECTION_RULES, itemsJson}}));
           } else {
             post_bridge_event(
                 bridge,
                 make_request_result_event(
                     request_id,
-                    "listConnectionRequests",
+                    "listConnectionRules",
                     false,
                     listResult.error,
                     nlohmann::json::object()));
@@ -6067,7 +6067,7 @@ bool dppb_dpe_list_connection_requests_async(
               bridge,
               make_request_result_event(
                   request_id,
-                  "listConnectionRequests",
+                  "listConnectionRules",
                   false,
                   exception.what(),
                   nlohmann::json::object()));
@@ -6077,87 +6077,30 @@ bool dppb_dpe_list_connection_requests_async(
 }
 
 /**
- * @brief Launch an asynchronous native-backed `createFollowRequest()`
+ * @brief Launch an asynchronous native-backed `createFollowRule()`
  * request.
  */
-bool dppb_dpe_create_follow_request_async(void* handle,
-                                          const int64_t request_id,
-                                          const char* follow_request_json) {
-  if (handle == nullptr || follow_request_json == nullptr) {
-    return false;
-  }
-
-  NativeDogPawEntityBridge* bridge =
-      static_cast<NativeDogPawEntityBridge*>(handle);
-  std::unique_ptr<dogpaw::FollowRequest> followRequest;
-  try {
-    followRequest = parse_follow_request_json(follow_request_json);
-    if (followRequest == nullptr) {
-      throw std::runtime_error("Failed to parse follow request JSON");
-    }
-  } catch (const std::exception& exception) {
-    post_bridge_event(
-        bridge,
-        make_request_result_event(
-            request_id,
-            "createFollowRequest",
-            false,
-            exception.what(),
-            nlohmann::json::object()));
-    return true;
-  }
-
-  std::thread requestThread(
-      [bridge, request_id, followRequest = std::move(followRequest)]() mutable {
-        try {
-          dogpaw::OperationResult opResult =
-              bridge->entity->createFollowRequest(*followRequest).get();
-          post_bridge_event(
-              bridge,
-              make_request_result_event(
-                  request_id,
-                  "createFollowRequest",
-                  opResult.success,
-                  opResult.error,
-                  nlohmann::json::object()));
-        } catch (const std::exception& exception) {
-          post_bridge_event(
-              bridge,
-              make_request_result_event(
-                  request_id,
-                  "createFollowRequest",
-                  false,
-                  exception.what(),
-                  nlohmann::json::object()));
-        }
-      });
-  return store_request_thread(bridge, std::move(requestThread));
-}
-
-/**
- * @brief Launch an asynchronous native-backed `setFollowRequest()` request.
- */
-bool dppb_dpe_set_follow_request_async(void* handle,
+bool dppb_dpe_create_follow_rule_async(void* handle,
                                        const int64_t request_id,
-                                       const char* follow_request_json) {
-  if (handle == nullptr || follow_request_json == nullptr) {
+                                       const char* follow_rule_json) {
+  if (handle == nullptr || follow_rule_json == nullptr) {
     return false;
   }
 
   NativeDogPawEntityBridge* bridge =
       static_cast<NativeDogPawEntityBridge*>(handle);
-  std::unique_ptr<dogpaw::FollowRequest> followRequest;
+  std::unique_ptr<dogpaw::FollowRule> followRule;
   try {
-    followRequest = parse_follow_request_json(follow_request_json);
-    if (followRequest == nullptr) {
-      throw std::runtime_error("Failed to parse follow request JSON");
+    followRule = parse_follow_rule_json(follow_rule_json);
+    if (followRule == nullptr) {
+      throw std::runtime_error("Failed to parse follow rule JSON");
     }
   } catch (const std::exception& exception) {
     post_bridge_event(
         bridge,
         make_request_result_event(
             request_id,
-            "setFollowRequest",
+            "createFollowRule",
             false,
             exception.what(),
             nlohmann::json::object()));
@@ -6165,15 +6108,15 @@ bool dppb_dpe_set_follow_request_async(void* handle,
   }
 
   std::thread requestThread(
-      [bridge, request_id, followRequest = std::move(followRequest)]() mutable {
+      [bridge, request_id, followRule = std::move(followRule)]() mutable {
         try {
           dogpaw::OperationResult opResult =
-              bridge->entity->setFollowRequest(*followRequest).get();
+              bridge->entity->createFollowRule(*followRule).get();
           post_bridge_event(
               bridge,
               make_request_result_event(
                   request_id,
-                  "setFollowRequest",
+                  "createFollowRule",
                   opResult.success,
                   opResult.error,
                   nlohmann::json::object()));
@@ -6182,7 +6125,7 @@ bool dppb_dpe_set_follow_request_async(void* handle,
               bridge,
               make_request_result_event(
                   request_id,
-                  "setFollowRequest",
+                  "createFollowRule",
                   false,
                   exception.what(),
                   nlohmann::json::object()));
@@ -6192,30 +6135,87 @@ bool dppb_dpe_set_follow_request_async(void* handle,
 }
 
 /**
- * @brief Launch an asynchronous native-backed `updateFollowRequest()`
+ * @brief Launch an asynchronous native-backed `setFollowRule()` request.
+ */
+bool dppb_dpe_set_follow_rule_async(void* handle,
+                                    const int64_t request_id,
+                                    const char* follow_rule_json) {
+  if (handle == nullptr || follow_rule_json == nullptr) {
+    return false;
+  }
+
+  NativeDogPawEntityBridge* bridge =
+      static_cast<NativeDogPawEntityBridge*>(handle);
+  std::unique_ptr<dogpaw::FollowRule> followRule;
+  try {
+    followRule = parse_follow_rule_json(follow_rule_json);
+    if (followRule == nullptr) {
+      throw std::runtime_error("Failed to parse follow rule JSON");
+    }
+  } catch (const std::exception& exception) {
+    post_bridge_event(
+        bridge,
+        make_request_result_event(
+            request_id,
+            "setFollowRule",
+            false,
+            exception.what(),
+            nlohmann::json::object()));
+    return true;
+  }
+
+  std::thread requestThread(
+      [bridge, request_id, followRule = std::move(followRule)]() mutable {
+        try {
+          dogpaw::OperationResult opResult =
+              bridge->entity->setFollowRule(*followRule).get();
+          post_bridge_event(
+              bridge,
+              make_request_result_event(
+                  request_id,
+                  "setFollowRule",
+                  opResult.success,
+                  opResult.error,
+                  nlohmann::json::object()));
+        } catch (const std::exception& exception) {
+          post_bridge_event(
+              bridge,
+              make_request_result_event(
+                  request_id,
+                  "setFollowRule",
+                  false,
+                  exception.what(),
+                  nlohmann::json::object()));
+        }
+      });
+  return store_request_thread(bridge, std::move(requestThread));
+}
+
+/**
+ * @brief Launch an asynchronous native-backed `updateFollowRule()`
  * request.
  */
-bool dppb_dpe_update_follow_request_async(void* handle,
-                                          const int64_t request_id,
-                                          const char* follow_request_json) {
-  if (handle == nullptr || follow_request_json == nullptr) {
+bool dppb_dpe_update_follow_rule_async(void* handle,
+                                       const int64_t request_id,
+                                       const char* follow_rule_json) {
+  if (handle == nullptr || follow_rule_json == nullptr) {
     return false;
   }
 
   NativeDogPawEntityBridge* bridge =
       static_cast<NativeDogPawEntityBridge*>(handle);
-  std::unique_ptr<dogpaw::FollowRequest> followRequest;
+  std::unique_ptr<dogpaw::FollowRule> followRule;
   try {
-    followRequest = parse_follow_request_json(follow_request_json);
-    if (followRequest == nullptr) {
-      throw std::runtime_error("Failed to parse follow request JSON");
+    followRule = parse_follow_rule_json(follow_rule_json);
+    if (followRule == nullptr) {
+      throw std::runtime_error("Failed to parse follow rule JSON");
     }
   } catch (const std::exception& exception) {
     post_bridge_event(
         bridge,
         make_request_result_event(
             request_id,
-            "updateFollowRequest",
+            "updateFollowRule",
             false,
             exception.what(),
             nlohmann::json::object()));
@@ -6223,15 +6223,15 @@ bool dppb_dpe_update_follow_request_async(void* handle,
   }
 
   std::thread requestThread(
-      [bridge, request_id, followRequest = std::move(followRequest)]() mutable {
+      [bridge, request_id, followRule = std::move(followRule)]() mutable {
         try {
           dogpaw::OperationResult opResult =
-              bridge->entity->updateFollowRequest(*followRequest).get();
+              bridge->entity->updateFollowRule(*followRule).get();
           post_bridge_event(
               bridge,
               make_request_result_event(
                   request_id,
-                  "updateFollowRequest",
+                  "updateFollowRule",
                   opResult.success,
                   opResult.error,
                   nlohmann::json::object()));
@@ -6240,7 +6240,7 @@ bool dppb_dpe_update_follow_request_async(void* handle,
               bridge,
               make_request_result_event(
                   request_id,
-                  "updateFollowRequest",
+                  "updateFollowRule",
                   false,
                   exception.what(),
                   nlohmann::json::object()));
@@ -6250,9 +6250,9 @@ bool dppb_dpe_update_follow_request_async(void* handle,
 }
 
 /**
- * @brief Launch an asynchronous native-backed `readFollowRequest()` request.
+ * @brief Launch an asynchronous native-backed `readFollowRule()` request.
  */
-bool dppb_dpe_read_follow_request_async(
+bool dppb_dpe_read_follow_rule_async(
     void* handle,
     const int64_t request_id,
     const char* name,
@@ -6274,7 +6274,7 @@ bool dppb_dpe_read_follow_request_async(
         bridge,
         make_request_result_event(
             request_id,
-            "readFollowRequest",
+            "readFollowRule",
             false,
             exception.what(),
             nlohmann::json::object()));
@@ -6290,9 +6290,9 @@ bool dppb_dpe_read_follow_request_async(
        include_resolved,
        include_spec]() mutable {
         try {
-          dogpaw::FollowRequestResult readResult =
+          dogpaw::FollowRuleResult readResult =
               bridge->entity
-                  ->readFollowRequest(
+                  ->readFollowRule(
                       requestName,
                       namespaceSelector,
                       include_resolved,
@@ -6302,14 +6302,14 @@ bool dppb_dpe_read_follow_request_async(
           if (readResult.success) {
             nlohmann::json resultJson = nlohmann::json::object();
             if (readResult.value.has_value()) {
-              resultJson[JF::FOLLOW_REQUEST_ITEM] =
+              resultJson[JF::FOLLOW_RULE_ITEM] =
                   readResult.value.value().toJson();
             }
             post_bridge_event(
                 bridge,
                 make_request_result_event(
                     request_id,
-                    "readFollowRequest",
+                    "readFollowRule",
                     true,
                     "",
                     resultJson));
@@ -6318,7 +6318,7 @@ bool dppb_dpe_read_follow_request_async(
                 bridge,
                 make_request_result_event(
                     request_id,
-                    "readFollowRequest",
+                    "readFollowRule",
                     false,
                     readResult.error,
                     nlohmann::json::object()));
@@ -6328,7 +6328,7 @@ bool dppb_dpe_read_follow_request_async(
               bridge,
               make_request_result_event(
                   request_id,
-                  "readFollowRequest",
+                  "readFollowRule",
                   false,
                   exception.what(),
                   nlohmann::json::object()));
@@ -6338,10 +6338,10 @@ bool dppb_dpe_read_follow_request_async(
 }
 
 /**
- * @brief Launch an asynchronous native-backed `deleteFollowRequest()`
+ * @brief Launch an asynchronous native-backed `deleteFollowRule()`
  * request.
  */
-bool dppb_dpe_delete_follow_request_async(
+bool dppb_dpe_delete_follow_rule_async(
     void* handle,
     const int64_t request_id,
     const char* name,
@@ -6361,7 +6361,7 @@ bool dppb_dpe_delete_follow_request_async(
         bridge,
         make_request_result_event(
             request_id,
-            "deleteFollowRequest",
+            "deleteFollowRule",
             false,
             exception.what(),
             nlohmann::json::object()));
@@ -6374,13 +6374,13 @@ bool dppb_dpe_delete_follow_request_async(
         try {
           dogpaw::OperationResult deleteResult =
               bridge->entity
-                  ->deleteFollowRequest(requestName, namespaceSelector)
+                  ->deleteFollowRule(requestName, namespaceSelector)
                   .get();
           post_bridge_event(
               bridge,
               make_request_result_event(
                   request_id,
-                  "deleteFollowRequest",
+                  "deleteFollowRule",
                   deleteResult.success,
                   deleteResult.error,
                   nlohmann::json::object()));
@@ -6389,7 +6389,7 @@ bool dppb_dpe_delete_follow_request_async(
               bridge,
               make_request_result_event(
                   request_id,
-                  "deleteFollowRequest",
+                  "deleteFollowRule",
                   false,
                   exception.what(),
                   nlohmann::json::object()));
@@ -6399,9 +6399,9 @@ bool dppb_dpe_delete_follow_request_async(
 }
 
 /**
- * @brief Launch an asynchronous native-backed `listFollowRequests()` request.
+ * @brief Launch an asynchronous native-backed `listFollowRules()` request.
  */
-bool dppb_dpe_list_follow_requests_async(
+bool dppb_dpe_list_follow_rules_async(
     void* handle,
     const int64_t request_id,
     const char* namespace_selector_json,
@@ -6421,46 +6421,46 @@ bool dppb_dpe_list_follow_requests_async(
         bridge,
         make_request_result_event(
             request_id,
-            "listFollowRequests",
+            "listFollowRules",
             false,
             exception.what(),
             nlohmann::json::object()));
     return true;
   }
 
-  std::future<dogpaw::FollowRequestListResult> listFuture;
+  std::future<dogpaw::FollowRuleListResult> listFuture;
   {
     std::lock_guard<std::mutex> lock(bridge->mutex);
     if (bridge->destroying || bridge->entity == nullptr) {
       return false;
     }
-    listFuture = bridge->entity->listFollowRequests(
+    listFuture = bridge->entity->listFollowRules(
         namespaceSelector, include_resolved, include_spec);
   }
 
   std::thread requestThread(
       [bridge, request_id, listFuture = std::move(listFuture)]() mutable {
         try {
-          dogpaw::FollowRequestListResult listResult = listFuture.get();
+          dogpaw::FollowRuleListResult listResult = listFuture.get();
           if (listResult.success) {
             nlohmann::json itemsJson = nlohmann::json::array();
-            for (const dogpaw::FollowRequest& item : listResult.value) {
+            for (const dogpaw::FollowRule& item : listResult.value) {
               itemsJson.push_back(item.toJson());
             }
             post_bridge_event(
                 bridge,
                 make_request_result_event(
                     request_id,
-                    "listFollowRequests",
+                    "listFollowRules",
                     true,
                     "",
-                    nlohmann::json{{JF::FOLLOW_REQUESTS, itemsJson}}));
+                    nlohmann::json{{JF::FOLLOW_RULES, itemsJson}}));
           } else {
             post_bridge_event(
                 bridge,
                 make_request_result_event(
                     request_id,
-                    "listFollowRequests",
+                    "listFollowRules",
                     false,
                     listResult.error,
                     nlohmann::json::object()));
@@ -6470,7 +6470,7 @@ bool dppb_dpe_list_follow_requests_async(
               bridge,
               make_request_result_event(
                   request_id,
-                  "listFollowRequests",
+                  "listFollowRules",
                   false,
                   exception.what(),
                   nlohmann::json::object()));

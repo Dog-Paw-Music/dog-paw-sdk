@@ -119,13 +119,13 @@ Future<String> _waitForFirstConnectionName(
   );
 }
 
-/// Purpose: Create one connection request and delete it shortly afterward to
+/// Purpose: Create one connection rule and delete it shortly afterward to
 /// force a realized connection add/remove notification cycle.
 ///
 /// Parameters:
 /// - [producer]: connected producer entity that owns the source endpoint.
 /// - [producerEntityName]: logical producer entity name for source references.
-/// - [requestName]: unique connection-request name for this cycle.
+/// - [requestName]: unique connection-rule name for this cycle.
 /// - [sourceEndpointName]: producer-owned output endpoint name.
 /// - [consumerEntityName]: target entity owning the destination endpoint.
 /// - [destinationEndpointName]: consumer-owned input endpoint name.
@@ -138,11 +138,11 @@ Future<String> _waitForFirstConnectionName(
 /// - Source and destination endpoints must already exist.
 ///
 /// Guarantees/Postconditions:
-/// - The request is removed before the function returns.
+/// - The rule is removed before the function returns.
 ///
 /// Invariants:
-/// - Leaves no durable connection-request record behind.
-Future<void> _createAndDeleteConnectionRequest(
+/// - Leaves no durable connection-rule record behind.
+Future<void> _createAndDeleteConnectionRule(
   NativeDogPawEntityClient producer, {
   required String producerEntityName,
   required String requestName,
@@ -150,10 +150,10 @@ Future<void> _createAndDeleteConnectionRequest(
   required String consumerEntityName,
   required String destinationEndpointName,
 }) async {
-  final Result<bool> createResult = await producer.createConnectionRequest(
-    ConnectionRequest(
+  final Result<bool> createResult = await producer.createConnectionRule(
+    ConnectionRule(
       name: requestName,
-      spec: ConnectionRequestData(
+      spec: ConnectionRuleData(
         sourceRef: DataItemRef.byName(
           name: sourceEndpointName,
           namespaceSelector:
@@ -169,7 +169,7 @@ Future<void> _createAndDeleteConnectionRequest(
   );
   if (!createResult.success) {
     throw StateError(
-      'Failed to create probe connection request $requestName: '
+      'Failed to create probe connection rule $requestName: '
       '${createResult.error}',
     );
   }
@@ -177,10 +177,10 @@ Future<void> _createAndDeleteConnectionRequest(
   await Future<void>.delayed(_connectionCountProbeDeleteDelay);
 
   final Result<bool> deleteResult =
-      await producer.deleteConnectionRequest(requestName);
+      await producer.deleteConnectionRule(requestName);
   if (!deleteResult.success) {
     throw StateError(
-      'Failed to delete probe connection request $requestName: '
+      'Failed to delete probe connection rule $requestName: '
       '${deleteResult.error}',
     );
   }
@@ -353,7 +353,7 @@ Future<void> _runConnectionCountDeadlockProbe() async {
       for (final String endpointName in endpointNames) {
         final String requestName =
             'native_bridge_deadlock_request_${requestCounter}_$suffix';
-        await _createAndDeleteConnectionRequest(
+        await _createAndDeleteConnectionRule(
           producer,
           producerEntityName: producerEntityName,
           requestName: requestName,
@@ -544,7 +544,7 @@ Future<void> _runContinuousStartupPollProbe() async {
         dataType: const DataTypeSpec(DataType.int_),
         category: EndpointCategory.continuous,
         connectionPolicy: ConnectionPolicy(
-          autoConnectCriteria: SearchCriteria.andCombination(<SearchCriteria>[
+          endpointConnectionRule: SearchCriteria.andCombination(<SearchCriteria>[
             SearchCriteria.directionEquals(EndpointDirection.input),
             SearchCriteria.nameEquals(endpointName),
           ]),
@@ -567,7 +567,7 @@ Future<void> _runContinuousStartupPollProbe() async {
           dataType: const DataTypeSpec(DataType.int_),
           category: EndpointCategory.continuous,
           connectionPolicy: ConnectionPolicy(
-            autoConnectCriteria: SearchCriteria.andCombination(<SearchCriteria>[
+            endpointConnectionRule: SearchCriteria.andCombination(<SearchCriteria>[
               SearchCriteria.directionEquals(EndpointDirection.output),
               SearchCriteria.nameEquals(endpointName),
             ]),

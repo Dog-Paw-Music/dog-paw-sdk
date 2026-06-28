@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -52,6 +53,13 @@ void main() {
       expect(localProvider, contains('copy_if_different'));
       expect(localProvider, contains('dogpaw_local_bridge_bundle'));
       expect(localProvider, contains('libdogpaw_bridge.so'));
+      expect(localProvider, contains('DOGPAW_HAS_REPO_LOCAL_RPI_PROJECT'));
+      expect(localProvider, contains('CMakePresets.json'));
+      expect(
+        localProvider,
+        contains('uiApps/tools/dogpaw_bridge/CMakeLists.txt'),
+      );
+      expect(localProvider, contains('linux/prebuilt'));
       expect(
         localProvider,
         contains(
@@ -64,6 +72,50 @@ void main() {
           r'COMMAND "${CMAKE_COMMAND}" -P "${DOGPAW_LOCAL_BRIDGE_STAGE_SCRIPT}"',
         ),
       );
+    });
+
+    test('rpi cmake presets declare explicit bridge prebuilt ABI', () {
+      final String packageRoot = Directory.current.path;
+      final File presetsFile = File(
+        path.normalize(path.join(packageRoot, '..', '..', '..', 'CMakePresets.json')),
+      );
+      final Map<String, dynamic> presets = jsonDecode(
+        presetsFile.readAsStringSync(),
+      ) as Map<String, dynamic>;
+      final List<dynamic> configurePresets =
+          presets['configurePresets'] as List<dynamic>;
+
+      Map<String, dynamic> presetNamed(String name) {
+        return configurePresets.cast<Map<String, dynamic>>().firstWhere(
+              (Map<String, dynamic> preset) => preset['name'] == name,
+            );
+      }
+
+      final Map<String, dynamic> nativeCache =
+          presetNamed('rpi-native-base')['cacheVariables'] as Map<String, dynamic>;
+      final Map<String, dynamic> armCache =
+          presetNamed('rpi-arm-base')['cacheVariables'] as Map<String, dynamic>;
+
+      expect(nativeCache['DOGPAW_BRIDGE_PREBUILT_ABI'], 'linux-x64');
+      expect(armCache['DOGPAW_BRIDGE_PREBUILT_ABI'], 'linux-arm64');
+    });
+
+    test('dogpaw bridge publisher uses explicit prebuilt ABI variable', () {
+      final String packageRoot = Directory.current.path;
+      final File bridgeCMakeFile = File(
+        path.normalize(path.join(
+          packageRoot,
+          '..',
+          '..',
+          'tools',
+          'dogpaw_bridge',
+          'CMakeLists.txt',
+        )),
+      );
+      final String cmake = bridgeCMakeFile.readAsStringSync();
+
+      expect(cmake, contains('DOGPAW_BRIDGE_PREBUILT_ABI'));
+      expect(cmake, isNot(contains('CMAKE_SYSTEM_PROCESSOR')));
     });
 
     test('source package keeps repo-local bridge helper out of exported src build files', () {

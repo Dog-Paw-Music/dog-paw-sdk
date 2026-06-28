@@ -5,15 +5,15 @@ import 'package:flutter_test/flutter_test.dart';
 
 class _FakeDogPawEntity extends dp.DogPawEntity {
   final List<dp.EndpointInfo> availableEndpoints;
-  final List<dp.ConnectionRequest> connectionRequests;
-  final List<dp.ConnectionRequest> createdRequests = <dp.ConnectionRequest>[];
+  final List<dp.ConnectionRule> connectionRules;
+  final List<dp.ConnectionRule> createdRules = <dp.ConnectionRule>[];
   final List<String> deletedRequestNames = <String>[];
 
   _FakeDogPawEntity({
     required this.availableEndpoints,
-    List<dp.ConnectionRequest>? initialRequests,
-  })  : connectionRequests = List<dp.ConnectionRequest>.from(
-          initialRequests ?? <dp.ConnectionRequest>[],
+    List<dp.ConnectionRule>? initialRules,
+  })  : connectionRules = List<dp.ConnectionRule>.from(
+          initialRules ?? <dp.ConnectionRule>[],
         ),
         super('fake_entity');
 
@@ -25,33 +25,33 @@ class _FakeDogPawEntity extends dp.DogPawEntity {
   }
 
   @override
-  Future<dp.Result<List<dp.ConnectionRequest>>> listConnectionRequests({
+  Future<dp.Result<List<dp.ConnectionRule>>> listConnectionRules({
     dp.NamespaceSelector? namespaceSelector,
     bool includeResolved = false,
     bool includeSpec = false,
   }) async {
-    return dp.Result<List<dp.ConnectionRequest>>.success(
-      List<dp.ConnectionRequest>.from(connectionRequests),
+    return dp.Result<List<dp.ConnectionRule>>.success(
+      List<dp.ConnectionRule>.from(connectionRules),
     );
   }
 
   @override
-  Future<dp.Result<bool>> createConnectionRequest(
-    dp.ConnectionRequest connectionRequest,
+  Future<dp.Result<bool>> createConnectionRule(
+    dp.ConnectionRule connectionRule,
   ) async {
-    createdRequests.add(connectionRequest);
-    connectionRequests.add(connectionRequest);
+    createdRules.add(connectionRule);
+    connectionRules.add(connectionRule);
     return dp.Result<bool>.success(true);
   }
 
   @override
-  Future<dp.Result<bool>> deleteConnectionRequest(
+  Future<dp.Result<bool>> deleteConnectionRule(
     String name, {
     dp.NamespaceSelector? namespaceSelector,
   }) async {
     deletedRequestNames.add(name);
-    connectionRequests.removeWhere(
-      (dp.ConnectionRequest request) => request.name == name,
+    connectionRules.removeWhere(
+      (dp.ConnectionRule rule) => rule.name == name,
     );
     return dp.Result<bool>.success(true);
   }
@@ -82,14 +82,14 @@ dp.EndpointInfo _buildEndpoint({
   );
 }
 
-dp.ConnectionRequest _buildConnectionRequest({
+dp.ConnectionRule _buildConnectionRule({
   required String name,
   required dp.EndpointInfo source,
   required dp.EndpointInfo destination,
 }) {
-  return dp.ConnectionRequest(
+  return dp.ConnectionRule(
     name: name,
-    spec: dp.ConnectionRequestData(
+    spec: dp.ConnectionRuleData(
       sourceRef: dp.DataItemRef.byName(
         name: source.name,
         namespaceSelector: source.namespaceSelector,
@@ -212,8 +212,8 @@ void main() {
     await tester.tap(find.byKey(const Key('connection-group-action-Main Knobs')));
     await tester.pumpAndSettle();
 
-    expect(entity.createdRequests, hasLength(2));
-    expect(entity.createdRequests.first.spec!.destinationRef.name, equals('cutoff'));
+    expect(entity.createdRules, hasLength(2));
+    expect(entity.createdRules.first.spec!.destinationRef.name, equals('cutoff'));
     expect(refreshCount, equals(1));
   });
 
@@ -246,9 +246,9 @@ void main() {
     await tester.tap(find.byKey(const Key('connection-group-action-Filter')));
     await tester.pumpAndSettle();
 
-    expect(entity.createdRequests, hasLength(1));
-    expect(entity.createdRequests.first.spec!.sourceRef.name, equals('knob_a'));
-    expect(entity.createdRequests.first.spec!.destinationRef.name, equals('cutoff'));
+    expect(entity.createdRules, hasLength(1));
+    expect(entity.createdRules.first.spec!.sourceRef.name, equals('knob_a'));
+    expect(entity.createdRules.first.spec!.destinationRef.name, equals('cutoff'));
   });
 
   testWidgets('existing grouped requests render a disconnect action',
@@ -275,9 +275,9 @@ void main() {
     );
     final _FakeDogPawEntity entity = _FakeDogPawEntity(
       availableEndpoints: <dp.EndpointInfo>[knobA, knobB],
-      initialRequests: <dp.ConnectionRequest>[
-        _buildConnectionRequest(name: 'req_a', source: knobA, destination: focusedInput),
-        _buildConnectionRequest(name: 'req_b', source: knobB, destination: focusedInput),
+      initialRules: <dp.ConnectionRule>[
+        _buildConnectionRule(name: 'req_a', source: knobA, destination: focusedInput),
+        _buildConnectionRule(name: 'req_b', source: knobB, destination: focusedInput),
       ],
     );
 
@@ -315,9 +315,9 @@ void main() {
     int refreshCount = 0;
     final _FakeDogPawEntity entity = _FakeDogPawEntity(
       availableEndpoints: <dp.EndpointInfo>[knobA, knobB],
-      initialRequests: <dp.ConnectionRequest>[
-        _buildConnectionRequest(name: 'req_a', source: knobA, destination: focusedInput),
-        _buildConnectionRequest(name: 'req_b', source: knobB, destination: focusedInput),
+      initialRules: <dp.ConnectionRule>[
+        _buildConnectionRule(name: 'req_a', source: knobA, destination: focusedInput),
+        _buildConnectionRule(name: 'req_b', source: knobB, destination: focusedInput),
       ],
     );
 
@@ -333,7 +333,7 @@ void main() {
     await tester.tap(find.byKey(const Key('connection-group-action-Main Knobs')));
     await tester.pumpAndSettle();
 
-    expect(entity.connectionRequests, isEmpty);
+    expect(entity.connectionRules, isEmpty);
     expect(entity.deletedRequestNames, containsAll(<String>['req_a', 'req_b']));
     expect(refreshCount, equals(1));
   });

@@ -132,24 +132,121 @@ class Connection extends DataItemType<ConnectionData> {
 }
 
 /// Stored request that asks Epiphany to realize a connection.
-class ConnectionRequestData {
-  final DataItemRef sourceRef;
-  final DataItemRef destinationRef;
+class ConnectionRuleSelector {
+  final DataItemRef? endpointRef;
+  final SearchCriteria? matchCriteria;
 
-  ConnectionRequestData({
-    required this.sourceRef,
-    required this.destinationRef,
+  const ConnectionRuleSelector._({
+    this.endpointRef,
+    this.matchCriteria,
   });
+
+  factory ConnectionRuleSelector.endpointRef(DataItemRef endpointRef) {
+    return ConnectionRuleSelector._(endpointRef: endpointRef);
+  }
+
+  factory ConnectionRuleSelector.matchCriteria(SearchCriteria matchCriteria) {
+    return ConnectionRuleSelector._(matchCriteria: matchCriteria);
+  }
 
   Map<String, dynamic> toJson() {
     return <String, dynamic>{
-      JsonFields.SOURCE_REF: sourceRef.toJson(),
-      JsonFields.DESTINATION_REF: destinationRef.toJson(),
+      if (endpointRef != null) 'endpointRef': endpointRef!.toJson(),
+      if (matchCriteria != null) 'matchCriteria': matchCriteria!.toJson(),
     }.toJsonClean();
   }
 
-  factory ConnectionRequestData.fromJson(Map<String, dynamic> json) {
-    return ConnectionRequestData(
+  factory ConnectionRuleSelector.fromJson(Map<String, dynamic> json) {
+    final bool hasEndpointRef = json.containsKey('endpointRef');
+    final bool hasMatchCriteria = json.containsKey('matchCriteria');
+    if (hasEndpointRef == hasMatchCriteria) {
+      throw StateError(
+        'ConnectionRuleSelector requires exactly one of endpointRef or matchCriteria.',
+      );
+    }
+    if (hasEndpointRef) {
+      return ConnectionRuleSelector.endpointRef(
+        DataItemRef.fromJson(json['endpointRef'] ?? <String, dynamic>{}),
+      );
+    }
+    return ConnectionRuleSelector.matchCriteria(
+      SearchCriteria.fromJson(json['matchCriteria'] ?? <String, dynamic>{}),
+    );
+  }
+}
+
+/// Stored rule that asks Epiphany to realize a connection.
+class ConnectionRuleData {
+  final ConnectionRuleSelector sourceSelector;
+  final ConnectionRuleSelector destinationSelector;
+
+  ConnectionRuleData({
+    DataItemRef? sourceRef,
+    DataItemRef? destinationRef,
+    ConnectionRuleSelector? sourceSelector,
+    ConnectionRuleSelector? destinationSelector,
+  })  : assert(
+          sourceSelector != null || sourceRef != null,
+          'Provide sourceSelector or sourceRef.',
+        ),
+        assert(
+          destinationSelector != null || destinationRef != null,
+          'Provide destinationSelector or destinationRef.',
+        ),
+        assert(
+          sourceSelector == null || sourceRef == null,
+          'Specify only one of sourceSelector or sourceRef.',
+        ),
+        assert(
+          destinationSelector == null || destinationRef == null,
+          'Specify only one of destinationSelector or destinationRef.',
+        ),
+        sourceSelector = sourceSelector ??
+            ConnectionRuleSelector.endpointRef(sourceRef!),
+        destinationSelector = destinationSelector ??
+            ConnectionRuleSelector.endpointRef(destinationRef!);
+
+  DataItemRef get sourceRef {
+    if (sourceSelector.endpointRef == null) {
+      throw StateError(
+        'This connection rule uses sourceSelector.matchCriteria instead of an exact sourceRef.',
+      );
+    }
+    return sourceSelector.endpointRef!;
+  }
+
+  DataItemRef get destinationRef {
+    if (destinationSelector.endpointRef == null) {
+      throw StateError(
+        'This connection rule uses destinationSelector.matchCriteria instead of an exact destinationRef.',
+      );
+    }
+    return destinationSelector.endpointRef!;
+  }
+  SearchCriteria? get sourceCriteria => sourceSelector.matchCriteria;
+  SearchCriteria? get destinationCriteria => destinationSelector.matchCriteria;
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'sourceSelector': sourceSelector.toJson(),
+      'destinationSelector': destinationSelector.toJson(),
+    }.toJsonClean();
+  }
+
+  factory ConnectionRuleData.fromJson(Map<String, dynamic> json) {
+    if (json.containsKey('sourceSelector') &&
+        json.containsKey('destinationSelector')) {
+      return ConnectionRuleData(
+        sourceSelector: ConnectionRuleSelector.fromJson(
+          Map<String, dynamic>.from(json['sourceSelector'] ?? {}),
+        ),
+        destinationSelector: ConnectionRuleSelector.fromJson(
+          Map<String, dynamic>.from(json['destinationSelector'] ?? {}),
+        ),
+      );
+    }
+
+    return ConnectionRuleData(
       sourceRef: DataItemRef.fromJson(json[JsonFields.SOURCE_REF] ?? {}),
       destinationRef:
           DataItemRef.fromJson(json[JsonFields.DESTINATION_REF] ?? {}),
@@ -158,10 +255,10 @@ class ConnectionRequestData {
 }
 
 /// Writable entity-scoped routing intent.
-class ConnectionRequest extends DataItemType<ConnectionRequestData> {
-  ConnectionRequest({
+class ConnectionRule extends DataItemType<ConnectionRuleData> {
+  ConnectionRule({
     required super.name,
-    required ConnectionRequestData spec,
+    required ConnectionRuleData spec,
     NamespaceSelector? namespaceSelector,
   }) : super(
           spec: spec,
@@ -169,7 +266,7 @@ class ConnectionRequest extends DataItemType<ConnectionRequestData> {
               namespaceSelector ?? const NamespaceSelector.currentEntity(),
         );
 
-  ConnectionRequest.full({
+  ConnectionRule.full({
     required super.name,
     super.namespaceSelector,
     super.spec,
@@ -177,26 +274,26 @@ class ConnectionRequest extends DataItemType<ConnectionRequestData> {
   });
 
   @override
-  Map<String, dynamic> specToJson(ConnectionRequestData data) => data.toJson();
+  Map<String, dynamic> specToJson(ConnectionRuleData data) => data.toJson();
 
-  factory ConnectionRequest.fromJson(Map<String, dynamic> json) {
+  factory ConnectionRule.fromJson(Map<String, dynamic> json) {
     final name = json[JsonFields.NAME] as String? ?? '';
     final NamespaceSelector namespaceSelector = NamespaceSelector.fromJson(
         json[JsonFields.NAMESPACE_SELECTOR] as Map<String, dynamic>);
 
-    ConnectionRequestData? spec;
+    ConnectionRuleData? spec;
     if (json.containsKey(JsonFields.SPEC)) {
-      spec = ConnectionRequestData.fromJson(
+      spec = ConnectionRuleData.fromJson(
           json[JsonFields.SPEC] as Map<String, dynamic>);
     }
 
-    ConnectionRequestData? resolved;
+    ConnectionRuleData? resolved;
     if (json.containsKey(JsonFields.RESOLVED)) {
-      resolved = ConnectionRequestData.fromJson(
+      resolved = ConnectionRuleData.fromJson(
           json[JsonFields.RESOLVED] as Map<String, dynamic>);
     }
 
-    return ConnectionRequest.full(
+    return ConnectionRule.full(
       name: name,
       namespaceSelector: namespaceSelector,
       spec: spec,
@@ -205,12 +302,12 @@ class ConnectionRequest extends DataItemType<ConnectionRequestData> {
   }
 }
 
-/// Stored request that asks Epiphany to mirror routing from matching leaders.
-class FollowRequestData {
+/// Stored rule that asks Epiphany to mirror routing from matching leaders.
+class FollowRuleData {
   final DataItemRef followerRef;
   final SearchCriteria leaderCriteria;
 
-  FollowRequestData({
+  FollowRuleData({
     required this.followerRef,
     required this.leaderCriteria,
   });
@@ -222,8 +319,8 @@ class FollowRequestData {
     }.toJsonClean();
   }
 
-  factory FollowRequestData.fromJson(Map<String, dynamic> json) {
-    return FollowRequestData(
+  factory FollowRuleData.fromJson(Map<String, dynamic> json) {
+    return FollowRuleData(
       followerRef: DataItemRef.fromJson(
           Map<String, dynamic>.from(json[JsonFields.FOLLOWER_REF] ?? {})),
       leaderCriteria: SearchCriteria.fromJson(
@@ -233,10 +330,10 @@ class FollowRequestData {
 }
 
 /// Writable entity-scoped routing intent for selector-based follow behavior.
-class FollowRequest extends DataItemType<FollowRequestData> {
-  FollowRequest({
+class FollowRule extends DataItemType<FollowRuleData> {
+  FollowRule({
     required super.name,
-    required FollowRequestData spec,
+    required FollowRuleData spec,
     NamespaceSelector? namespaceSelector,
   }) : super(
           spec: spec,
@@ -244,7 +341,7 @@ class FollowRequest extends DataItemType<FollowRequestData> {
               namespaceSelector ?? const NamespaceSelector.currentEntity(),
         );
 
-  FollowRequest.full({
+  FollowRule.full({
     required super.name,
     super.namespaceSelector,
     super.spec,
@@ -252,26 +349,26 @@ class FollowRequest extends DataItemType<FollowRequestData> {
   });
 
   @override
-  Map<String, dynamic> specToJson(FollowRequestData data) => data.toJson();
+  Map<String, dynamic> specToJson(FollowRuleData data) => data.toJson();
 
-  factory FollowRequest.fromJson(Map<String, dynamic> json) {
+  factory FollowRule.fromJson(Map<String, dynamic> json) {
     final name = json[JsonFields.NAME] as String? ?? '';
     final NamespaceSelector namespaceSelector = NamespaceSelector.fromJson(
         json[JsonFields.NAMESPACE_SELECTOR] as Map<String, dynamic>);
 
-    FollowRequestData? spec;
+    FollowRuleData? spec;
     if (json.containsKey(JsonFields.SPEC)) {
-      spec = FollowRequestData.fromJson(
+      spec = FollowRuleData.fromJson(
           json[JsonFields.SPEC] as Map<String, dynamic>);
     }
 
-    FollowRequestData? resolved;
+    FollowRuleData? resolved;
     if (json.containsKey(JsonFields.RESOLVED)) {
-      resolved = FollowRequestData.fromJson(
+      resolved = FollowRuleData.fromJson(
           json[JsonFields.RESOLVED] as Map<String, dynamic>);
     }
 
-    return FollowRequest.full(
+    return FollowRule.full(
       name: name,
       namespaceSelector: namespaceSelector,
       spec: spec,
@@ -279,3 +376,4 @@ class FollowRequest extends DataItemType<FollowRequestData> {
     );
   }
 }
+

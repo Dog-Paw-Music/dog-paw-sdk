@@ -1,57 +1,41 @@
 import 'dart:async';
-import 'dart:ffi';
 import 'dart:io';
 
 import '../test_support.dart';
 import 'package:dogpaw/dogpaw.dart';
 import 'package:dogpaw/src/json_constants.dart';
 import 'package:dogpaw/src/ffi/native_dogpaw_entity.dart';
+import 'package:dogpaw_test/src/package_runtime_paths.dart';
 import 'package:path/path.dart' as path;
 import 'package:test/test.dart';
 
-/// Purpose: Resolve the package-owned prebuilt native bridge library for the
-/// current test host.
+/// Purpose: Resolve the native bridge library used by child-process bridge
+/// probes in the direct package integration suite.
 ///
 /// Parameters: None.
 ///
 /// Return value:
-/// - Absolute `String` path to the matching `libdogpaw_bridge.so` artifact.
+/// - Absolute `String` path to the selected `libdogpaw_bridge.so` artifact.
 ///
 /// Requirements/Preconditions:
-/// - The package prebuilt bridge must already exist for the current host ABI.
+/// - The package fixture or source checkout must expose a bridge artifact for
+///   the current host ABI.
 ///
 /// Guarantees/Postconditions:
 /// - Throws [StateError] when the current host ABI is unsupported or the
-///   prebuilt artifact is missing.
+///   bridge artifact is missing.
 ///
 /// Invariants:
 /// - Does not modify filesystem state.
-String _resolvePackagePrebuiltBridgePath() {
+String _resolveFixtureBridgePath() {
   final String packageRoot = Directory.current.path;
-  final String subdir;
-  switch (Abi.current()) {
-    case Abi.linuxX64:
-      subdir = 'linux-x64';
-      break;
-    case Abi.linuxArm64:
-      subdir = 'linux-arm64';
-      break;
-    default:
-      throw StateError(
-        'Unsupported ABI for native bridge probe test: ${Abi.current()}',
-      );
-  }
-
-  final String bridgePath = path.join(
-    packageRoot,
-    'linux',
-    'prebuilt',
-    subdir,
-    'libdogpaw_bridge.so',
+  final String? bridgePath = resolveBridgeLibraryPathForFixture(
+    environment: Platform.environment,
+    dogpawPackageRootPath: packageRoot,
   );
-  if (!File(bridgePath).existsSync()) {
+  if (bridgePath == null || bridgePath.isEmpty) {
     throw StateError(
-      'Missing prebuilt bridge artifact for integration probe: $bridgePath',
+      'Missing bridge artifact for integration probe in package: $packageRoot',
     );
   }
   return bridgePath;
@@ -75,7 +59,8 @@ String _resolvePackagePrebuiltBridgePath() {
 /// - The child process is killed before returning when the timeout expires.
 ///
 /// Invariants:
-/// - Always launches the probe with the package-local prebuilt bridge library.
+/// - Always launches the probe with the bridge library resolved by the shared
+///   fixture policy.
 Future<ProcessResult> _runNativeBridgeProbe(
   String scenario, {
   Duration timeout = const Duration(seconds: 25),
@@ -83,7 +68,7 @@ Future<ProcessResult> _runNativeBridgeProbe(
   final String packageRoot = Directory.current.path;
   final String packageConfigPath =
       path.join(packageRoot, '.dart_tool', 'package_config.json');
-  final String bridgeLibraryPath = _resolvePackagePrebuiltBridgePath();
+  final String bridgeLibraryPath = _resolveFixtureBridgePath();
   final String probePath = path.join(
     packageRoot,
     'test',
@@ -1052,9 +1037,9 @@ void main() {
       final String destinationEndpointName =
           uniqueName('native_bridge_route_in');
       final String connectionRequestName =
-          uniqueName('native_bridge_connection_request');
+          uniqueName('native_bridge_connection_rule');
       final String followRequestName =
-          uniqueName('native_bridge_follow_request');
+          uniqueName('native_bridge_follow_rule');
       final String leaderFlag = uniqueName('native_bridge_leader_flag');
 
       expect(
@@ -1087,9 +1072,9 @@ void main() {
         isTrue,
       );
 
-      final ConnectionRequest connectionRequest = ConnectionRequest(
+      final ConnectionRule connectionRequest = ConnectionRule(
         name: connectionRequestName,
-        spec: ConnectionRequestData(
+        spec: ConnectionRuleData(
           sourceRef: DataItemRef.byName(
             name: sourceEndpointName,
             namespaceSelector:
@@ -1103,20 +1088,20 @@ void main() {
         ),
       );
 
-      final Result<bool> createConnectionRequestResult =
-          await observer.createConnectionRequest(connectionRequest);
-      expect(createConnectionRequestResult.success, isTrue,
+      final Result<bool> createConnectionRuleResult =
+          await observer.createConnectionRule(connectionRequest);
+      expect(createConnectionRuleResult.success, isTrue,
           reason:
-              'Native-backed createConnectionRequest should succeed: ${createConnectionRequestResult.error}');
+              'Native-backed createConnectionRule should succeed: ${createConnectionRuleResult.error}');
 
-      final Result<List<ConnectionRequest>> connectionRequestsResult =
-          await observer.listConnectionRequests(includeSpec: true);
+      final Result<List<ConnectionRule>> connectionRequestsResult =
+          await observer.listConnectionRules(includeSpec: true);
       expect(connectionRequestsResult.success, isTrue,
           reason:
-              'Native-backed listConnectionRequests should succeed: ${connectionRequestsResult.error}');
+              'Native-backed listConnectionRules should succeed: ${connectionRequestsResult.error}');
       expect(
         connectionRequestsResult.value!.any(
-            (ConnectionRequest item) => item.name == connectionRequestName),
+            (ConnectionRule item) => item.name == connectionRequestName),
         isTrue,
       );
 
@@ -1139,9 +1124,9 @@ void main() {
         isTrue,
       );
 
-      final FollowRequest followRequest = FollowRequest(
+      final FollowRule followRule = FollowRule(
         name: followRequestName,
-        spec: FollowRequestData(
+        spec: FollowRuleData(
           followerRef: DataItemRef.byName(
             name: destinationEndpointName,
             namespaceSelector: const NamespaceSelector.specificEntity(
@@ -1151,20 +1136,20 @@ void main() {
         ),
       );
 
-      final Result<bool> createFollowRequestResult =
-          await destinationOwner.createFollowRequest(followRequest);
-      expect(createFollowRequestResult.success, isTrue,
+      final Result<bool> createFollowRuleResult =
+          await destinationOwner.createFollowRule(followRule);
+      expect(createFollowRuleResult.success, isTrue,
           reason:
-              'Native-backed createFollowRequest should succeed: ${createFollowRequestResult.error}');
+              'Native-backed createFollowRule should succeed: ${createFollowRuleResult.error}');
 
-      final Result<List<FollowRequest>> followRequestsResult =
-          await destinationOwner.listFollowRequests(includeSpec: true);
-      expect(followRequestsResult.success, isTrue,
+      final Result<List<FollowRule>> followRulesResult =
+          await destinationOwner.listFollowRules(includeSpec: true);
+      expect(followRulesResult.success, isTrue,
           reason:
-              'Native-backed listFollowRequests should succeed: ${followRequestsResult.error}');
+              'Native-backed listFollowRules should succeed: ${followRulesResult.error}');
       expect(
-        followRequestsResult.value!
-            .any((FollowRequest item) => item.name == followRequestName),
+        followRulesResult.value!
+            .any((FollowRule item) => item.name == followRequestName),
         isTrue,
       );
 

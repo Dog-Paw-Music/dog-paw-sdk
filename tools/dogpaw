@@ -1199,7 +1199,7 @@ def unimplemented_message(area: str, args: Sequence[str]) -> str:
         f"'dogpaw {attempted}' is not implemented yet.\n"
         f"Currently supported workflows include:\n"
         f"  dogpaw target apply ...\n"
-        f"  dogpaw app install <headless|flutter> ...\n"
+        f"  dogpaw app install --manifest ...\n"
         f"  dogpaw debug <cxx|flutter> ...\n"
         f"  dogpaw emulator ...\n"
         f"See the current workflow plan at: {PLAN_PATH.relative_to(WORKSPACE_ROOT)}"
@@ -1959,7 +1959,11 @@ def compute_deploy_globals_fingerprint(hardware_profile: str) -> str:
             WORKSPACE_ROOT,
             generated_path,
         )
-        _, fingerprint = install_fingerprint.fingerprint_source_inputs(source_inputs)
+        generated_profile_text = generated_path.read_text(encoding="utf-8")
+        _, fingerprint = install_fingerprint.fingerprint_source_inputs_with_text(
+            source_inputs[1:],
+            {"generated/hardware_profile.sh": generated_profile_text},
+        )
     return fingerprint
 
 
@@ -3922,6 +3926,13 @@ def dispatch_app(args: Sequence[str]) -> int:
             return dispatch_app_uninstall(args[1:])
         print(f"Unsupported app command: {args[0]}", file=sys.stderr)
         print_app_help()
+        return 2
+    if len(args) > 1 and args[1] == "flutter":
+        print(
+            "The split Flutter install command has been replaced. Use "
+            "dogpaw app install --manifest PATH instead.",
+            file=sys.stderr,
+        )
         return 2
     if len(args) == 1 or args[1] != "headless":
         return dispatch_app_install(args[1:])

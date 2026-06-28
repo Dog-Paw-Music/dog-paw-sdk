@@ -185,7 +185,7 @@ class EndpointSpec {
   /// Optional grouping key for stereo/device grouping.
   final String? groupKey;
 
-  /// Optional backing endpoint reference for output shims.
+  /// Optional backing endpoint reference for the current output-only shim rule.
   final DataItemRef? shimTargetRef;
 
   /// Optional stateful-input contract layered on queue inputs.

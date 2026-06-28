@@ -187,7 +187,7 @@ class _HelloDogPawHomeScreenState extends State<HelloDogPawHomeScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'This hello example auto-connects on startup, listens to '
+                      'This hello example declares endpoint-owned connection rules on startup, listens to '
                       'key messages, and sends retained LED highlight updates '
                       'through the public Dog Paw wire surface.',
                       style: Theme.of(context).textTheme.bodyLarge,

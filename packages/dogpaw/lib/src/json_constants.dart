@@ -179,10 +179,10 @@ class JsonFields {
   static const String CONNECTION = "connection";
   static const String CONNECTIONS = "connections";
   static const String TARGET = "target";
-  static const String CONNECTION_REQUEST_ITEM = "connectionRequest";
-  static const String CONNECTION_REQUESTS = "connectionRequests";
-  static const String FOLLOW_REQUEST_ITEM = "followRequest";
-  static const String FOLLOW_REQUESTS = "followRequests";
+  static const String CONNECTION_RULE_ITEM = "connectionRule";
+  static const String CONNECTION_RULES = "connectionRules";
+  static const String FOLLOW_RULE_ITEM = "followRule";
+  static const String FOLLOW_RULES = "followRules";
   static const String CONNECTION_ID = "connectionId";
   static const String CONNECTION_NAME = "connectionName";
   static const String SOURCE_REF = "sourceRef";
@@ -517,28 +517,28 @@ class Topics {
   static const String CONNECTION_UNSUBSCRIBE = "connection/unsubscribe";
   static const String CONNECTION_NOTIFICATION = "connection/notification";
 
-  static const String CONNECTION_REQUEST_SET = "connection_request/set";
-  static const String CONNECTION_REQUEST_CREATE = "connection_request/create";
-  static const String CONNECTION_REQUEST_READ = "connection_request/read";
-  static const String CONNECTION_REQUEST_UPDATE = "connection_request/update";
-  static const String CONNECTION_REQUEST_DELETE = "connection_request/delete";
-  static const String CONNECTION_REQUEST_LIST = "connection_request/list";
-  static const String FOLLOW_REQUEST_SET = "follow_request/set";
-  static const String FOLLOW_REQUEST_CREATE = "follow_request/create";
-  static const String FOLLOW_REQUEST_READ = "follow_request/read";
-  static const String FOLLOW_REQUEST_UPDATE = "follow_request/update";
-  static const String FOLLOW_REQUEST_DELETE = "follow_request/delete";
-  static const String FOLLOW_REQUEST_LIST = "follow_request/list";
-  static const String CONNECTION_REQUEST_SUBSCRIBE =
-      "connection_request/subscribe";
-  static const String CONNECTION_REQUEST_UNSUBSCRIBE =
-      "connection_request/unsubscribe";
-  static const String CONNECTION_REQUEST_NOTIFICATION =
-      "connection_request/notification";
+  static const String CONNECTION_RULE_SET = "connection_rule/set";
+  static const String CONNECTION_RULE_CREATE = "connection_rule/create";
+  static const String CONNECTION_RULE_READ = "connection_rule/read";
+  static const String CONNECTION_RULE_UPDATE = "connection_rule/update";
+  static const String CONNECTION_RULE_DELETE = "connection_rule/delete";
+  static const String CONNECTION_RULE_LIST = "connection_rule/list";
+  static const String FOLLOW_RULE_SET = "follow_rule/set";
+  static const String FOLLOW_RULE_CREATE = "follow_rule/create";
+  static const String FOLLOW_RULE_READ = "follow_rule/read";
+  static const String FOLLOW_RULE_UPDATE = "follow_rule/update";
+  static const String FOLLOW_RULE_DELETE = "follow_rule/delete";
+  static const String FOLLOW_RULE_LIST = "follow_rule/list";
+  static const String CONNECTION_RULE_SUBSCRIBE =
+      "connection_rule/subscribe";
+  static const String CONNECTION_RULE_UNSUBSCRIBE =
+      "connection_rule/unsubscribe";
+  static const String CONNECTION_RULE_NOTIFICATION =
+      "connection_rule/notification";
 
   static const String CONNECTION_VALIDATION_REQUEST =
       "connection/validation_request";
-  static const String CONNECTION_REQUEST = "connection/request";
+  static const String CONNECTION_RULE = "connection/rule";
 
   // Key state
   static const String KEY_STATE_SET = "key/state/set";

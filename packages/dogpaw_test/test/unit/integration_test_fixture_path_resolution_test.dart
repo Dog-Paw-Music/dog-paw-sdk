@@ -331,5 +331,61 @@ void main() {
 
       expect(resolved, bridgePath);
     });
+
+    test(
+        'resolveBridgeLibraryPathForFixture ignores non-host package prebuilt before source build fallback',
+        () async {
+      final Directory tempRoot = await Directory.systemTemp.createTemp(
+        'dogpaw_test_source_bridge_arch_',
+      );
+      addTearDown(() async {
+        if (await tempRoot.exists()) {
+          await tempRoot.delete(recursive: true);
+        }
+      });
+
+      final String dogpawTestPackageRootPath = path.join(
+        tempRoot.path,
+        'tree',
+        'apps',
+        'packages',
+        'dogpaw_test',
+      );
+      final String dogpawPackageRootPath = path.join(
+        tempRoot.path,
+        'tree',
+        'apps',
+        'packages',
+        'dogpaw',
+      );
+      final String nonHostPrebuiltPath = path.join(
+        dogpawPackageRootPath,
+        'linux',
+        'prebuilt',
+        'linux-arm64',
+        'libdogpaw_bridge.so',
+      );
+      final String sourceBuildBridgePath = path.join(
+        tempRoot.path,
+        'tree',
+        'build_local',
+        'lib',
+        'libdogpaw_bridge.so',
+      );
+      await Directory(dogpawTestPackageRootPath).create(recursive: true);
+      await Directory(path.dirname(nonHostPrebuiltPath)).create(recursive: true);
+      await Directory(path.dirname(sourceBuildBridgePath))
+          .create(recursive: true);
+      await File(nonHostPrebuiltPath).writeAsString('wrong architecture');
+      await File(sourceBuildBridgePath).writeAsString('host bridge');
+
+      final String? resolved = resolveBridgeLibraryPathForFixture(
+        environment: const <String, String>{},
+        dogpawTestPackageRootPath: dogpawTestPackageRootPath,
+        dogpawPackageRootPath: dogpawPackageRootPath,
+      );
+
+      expect(resolved, sourceBuildBridgePath);
+    });
   });
 }

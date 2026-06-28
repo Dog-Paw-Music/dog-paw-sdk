@@ -33,6 +33,6 @@ void main() {
     expect(find.text('Hello Dog Paw'), findsOneWidget);
     expect(find.text('Active Keys'), findsOneWidget);
     expect(find.text('Pressed Keys'), findsOneWidget);
-    expect(find.textContaining('auto-connects on startup'), findsOneWidget);
+    expect(find.textContaining('declares endpoint-owned connection rules on startup'), findsOneWidget);
   });
 }

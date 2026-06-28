@@ -882,40 +882,40 @@ typedef DppbDpeLocalEndpointPollFileBackedDart = int Function(
   int maxSize,
 );
 
-typedef DppbDpeCreateConnectionRequestAsyncC = Bool Function(
+typedef DppbDpeCreateConnectionRuleAsyncC = Bool Function(
   Pointer<Void> handle,
   Int64 requestId,
   Pointer<Utf8> connectionRequestJson,
 );
-typedef DppbDpeCreateConnectionRequestAsyncDart = bool Function(
+typedef DppbDpeCreateConnectionRuleAsyncDart = bool Function(
   Pointer<Void> handle,
   int requestId,
   Pointer<Utf8> connectionRequestJson,
 );
 
-typedef DppbDpeSetConnectionRequestAsyncC = Bool Function(
+typedef DppbDpeSetConnectionRuleAsyncC = Bool Function(
   Pointer<Void> handle,
   Int64 requestId,
   Pointer<Utf8> connectionRequestJson,
 );
-typedef DppbDpeSetConnectionRequestAsyncDart = bool Function(
+typedef DppbDpeSetConnectionRuleAsyncDart = bool Function(
   Pointer<Void> handle,
   int requestId,
   Pointer<Utf8> connectionRequestJson,
 );
 
-typedef DppbDpeUpdateConnectionRequestAsyncC = Bool Function(
+typedef DppbDpeUpdateConnectionRuleAsyncC = Bool Function(
   Pointer<Void> handle,
   Int64 requestId,
   Pointer<Utf8> connectionRequestJson,
 );
-typedef DppbDpeUpdateConnectionRequestAsyncDart = bool Function(
+typedef DppbDpeUpdateConnectionRuleAsyncDart = bool Function(
   Pointer<Void> handle,
   int requestId,
   Pointer<Utf8> connectionRequestJson,
 );
 
-typedef DppbDpeReadConnectionRequestAsyncC = Bool Function(
+typedef DppbDpeReadConnectionRuleAsyncC = Bool Function(
   Pointer<Void> handle,
   Int64 requestId,
   Pointer<Utf8> name,
@@ -923,7 +923,7 @@ typedef DppbDpeReadConnectionRequestAsyncC = Bool Function(
   Bool includeResolved,
   Bool includeSpec,
 );
-typedef DppbDpeReadConnectionRequestAsyncDart = bool Function(
+typedef DppbDpeReadConnectionRuleAsyncDart = bool Function(
   Pointer<Void> handle,
   int requestId,
   Pointer<Utf8> name,
@@ -932,27 +932,27 @@ typedef DppbDpeReadConnectionRequestAsyncDart = bool Function(
   bool includeSpec,
 );
 
-typedef DppbDpeDeleteConnectionRequestAsyncC = Bool Function(
+typedef DppbDpeDeleteConnectionRuleAsyncC = Bool Function(
   Pointer<Void> handle,
   Int64 requestId,
   Pointer<Utf8> name,
   Pointer<Utf8> namespaceSelectorJson,
 );
-typedef DppbDpeDeleteConnectionRequestAsyncDart = bool Function(
+typedef DppbDpeDeleteConnectionRuleAsyncDart = bool Function(
   Pointer<Void> handle,
   int requestId,
   Pointer<Utf8> name,
   Pointer<Utf8> namespaceSelectorJson,
 );
 
-typedef DppbDpeListConnectionRequestsAsyncC = Bool Function(
+typedef DppbDpeListConnectionRulesAsyncC = Bool Function(
   Pointer<Void> handle,
   Int64 requestId,
   Pointer<Utf8> namespaceSelectorJson,
   Bool includeResolved,
   Bool includeSpec,
 );
-typedef DppbDpeListConnectionRequestsAsyncDart = bool Function(
+typedef DppbDpeListConnectionRulesAsyncDart = bool Function(
   Pointer<Void> handle,
   int requestId,
   Pointer<Utf8> namespaceSelectorJson,
@@ -960,40 +960,40 @@ typedef DppbDpeListConnectionRequestsAsyncDart = bool Function(
   bool includeSpec,
 );
 
-typedef DppbDpeCreateFollowRequestAsyncC = Bool Function(
+typedef DppbDpeCreateFollowRuleAsyncC = Bool Function(
   Pointer<Void> handle,
   Int64 requestId,
   Pointer<Utf8> followRequestJson,
 );
-typedef DppbDpeCreateFollowRequestAsyncDart = bool Function(
+typedef DppbDpeCreateFollowRuleAsyncDart = bool Function(
   Pointer<Void> handle,
   int requestId,
   Pointer<Utf8> followRequestJson,
 );
 
-typedef DppbDpeSetFollowRequestAsyncC = Bool Function(
+typedef DppbDpeSetFollowRuleAsyncC = Bool Function(
   Pointer<Void> handle,
   Int64 requestId,
   Pointer<Utf8> followRequestJson,
 );
-typedef DppbDpeSetFollowRequestAsyncDart = bool Function(
+typedef DppbDpeSetFollowRuleAsyncDart = bool Function(
   Pointer<Void> handle,
   int requestId,
   Pointer<Utf8> followRequestJson,
 );
 
-typedef DppbDpeUpdateFollowRequestAsyncC = Bool Function(
+typedef DppbDpeUpdateFollowRuleAsyncC = Bool Function(
   Pointer<Void> handle,
   Int64 requestId,
   Pointer<Utf8> followRequestJson,
 );
-typedef DppbDpeUpdateFollowRequestAsyncDart = bool Function(
+typedef DppbDpeUpdateFollowRuleAsyncDart = bool Function(
   Pointer<Void> handle,
   int requestId,
   Pointer<Utf8> followRequestJson,
 );
 
-typedef DppbDpeReadFollowRequestAsyncC = Bool Function(
+typedef DppbDpeReadFollowRuleAsyncC = Bool Function(
   Pointer<Void> handle,
   Int64 requestId,
   Pointer<Utf8> name,
@@ -1001,7 +1001,7 @@ typedef DppbDpeReadFollowRequestAsyncC = Bool Function(
   Bool includeResolved,
   Bool includeSpec,
 );
-typedef DppbDpeReadFollowRequestAsyncDart = bool Function(
+typedef DppbDpeReadFollowRuleAsyncDart = bool Function(
   Pointer<Void> handle,
   int requestId,
   Pointer<Utf8> name,
@@ -1010,27 +1010,27 @@ typedef DppbDpeReadFollowRequestAsyncDart = bool Function(
   bool includeSpec,
 );
 
-typedef DppbDpeDeleteFollowRequestAsyncC = Bool Function(
+typedef DppbDpeDeleteFollowRuleAsyncC = Bool Function(
   Pointer<Void> handle,
   Int64 requestId,
   Pointer<Utf8> name,
   Pointer<Utf8> namespaceSelectorJson,
 );
-typedef DppbDpeDeleteFollowRequestAsyncDart = bool Function(
+typedef DppbDpeDeleteFollowRuleAsyncDart = bool Function(
   Pointer<Void> handle,
   int requestId,
   Pointer<Utf8> name,
   Pointer<Utf8> namespaceSelectorJson,
 );
 
-typedef DppbDpeListFollowRequestsAsyncC = Bool Function(
+typedef DppbDpeListFollowRulesAsyncC = Bool Function(
   Pointer<Void> handle,
   Int64 requestId,
   Pointer<Utf8> namespaceSelectorJson,
   Bool includeResolved,
   Bool includeSpec,
 );
-typedef DppbDpeListFollowRequestsAsyncDart = bool Function(
+typedef DppbDpeListFollowRulesAsyncDart = bool Function(
   Pointer<Void> handle,
   int requestId,
   Pointer<Utf8> namespaceSelectorJson,
@@ -1700,18 +1700,18 @@ class DogPawBridge {
       dpeLocalEndpointAdoptRetainedStateJson;
   late DppbDpeLocalEndpointReadFileBackedDart dpeLocalEndpointReadFileBacked;
   late DppbDpeLocalEndpointPollFileBackedDart dpeLocalEndpointPollFileBacked;
-  late DppbDpeCreateConnectionRequestAsyncDart dpeCreateConnectionRequestAsync;
-  late DppbDpeSetConnectionRequestAsyncDart dpeSetConnectionRequestAsync;
-  late DppbDpeUpdateConnectionRequestAsyncDart dpeUpdateConnectionRequestAsync;
-  late DppbDpeReadConnectionRequestAsyncDart dpeReadConnectionRequestAsync;
-  late DppbDpeDeleteConnectionRequestAsyncDart dpeDeleteConnectionRequestAsync;
-  late DppbDpeListConnectionRequestsAsyncDart dpeListConnectionRequestsAsync;
-  late DppbDpeCreateFollowRequestAsyncDart dpeCreateFollowRequestAsync;
-  late DppbDpeSetFollowRequestAsyncDart dpeSetFollowRequestAsync;
-  late DppbDpeUpdateFollowRequestAsyncDart dpeUpdateFollowRequestAsync;
-  late DppbDpeReadFollowRequestAsyncDart dpeReadFollowRequestAsync;
-  late DppbDpeDeleteFollowRequestAsyncDart dpeDeleteFollowRequestAsync;
-  late DppbDpeListFollowRequestsAsyncDart dpeListFollowRequestsAsync;
+  late DppbDpeCreateConnectionRuleAsyncDart dpeCreateConnectionRuleAsync;
+  late DppbDpeSetConnectionRuleAsyncDart dpeSetConnectionRuleAsync;
+  late DppbDpeUpdateConnectionRuleAsyncDart dpeUpdateConnectionRuleAsync;
+  late DppbDpeReadConnectionRuleAsyncDart dpeReadConnectionRuleAsync;
+  late DppbDpeDeleteConnectionRuleAsyncDart dpeDeleteConnectionRuleAsync;
+  late DppbDpeListConnectionRulesAsyncDart dpeListConnectionRulesAsync;
+  late DppbDpeCreateFollowRuleAsyncDart dpeCreateFollowRuleAsync;
+  late DppbDpeSetFollowRuleAsyncDart dpeSetFollowRuleAsync;
+  late DppbDpeUpdateFollowRuleAsyncDart dpeUpdateFollowRuleAsync;
+  late DppbDpeReadFollowRuleAsyncDart dpeReadFollowRuleAsync;
+  late DppbDpeDeleteFollowRuleAsyncDart dpeDeleteFollowRuleAsync;
+  late DppbDpeListFollowRulesAsyncDart dpeListFollowRulesAsync;
   late DppbDpeReadConnectionAsyncDart dpeReadConnectionAsync;
   late DppbDpeListConnectionsAsyncDart dpeListConnectionsAsync;
   late DppbDpeSubscribeScalesAsyncDart dpeSubscribeScalesAsync;
@@ -1997,52 +1997,52 @@ class DogPawBridge {
             DppbDpeLocalEndpointPollFileBackedC,
             DppbDpeLocalEndpointPollFileBackedDart>(
         'dppb_dpe_local_endpoint_poll_file_backed');
-    dpeCreateConnectionRequestAsync = _lib.lookupFunction<
-            DppbDpeCreateConnectionRequestAsyncC,
-            DppbDpeCreateConnectionRequestAsyncDart>(
-        'dppb_dpe_create_connection_request_async');
-    dpeSetConnectionRequestAsync = _lib.lookupFunction<
-            DppbDpeSetConnectionRequestAsyncC,
-            DppbDpeSetConnectionRequestAsyncDart>(
-        'dppb_dpe_set_connection_request_async');
-    dpeUpdateConnectionRequestAsync = _lib.lookupFunction<
-            DppbDpeUpdateConnectionRequestAsyncC,
-            DppbDpeUpdateConnectionRequestAsyncDart>(
-        'dppb_dpe_update_connection_request_async');
-    dpeReadConnectionRequestAsync = _lib.lookupFunction<
-            DppbDpeReadConnectionRequestAsyncC,
-            DppbDpeReadConnectionRequestAsyncDart>(
-        'dppb_dpe_read_connection_request_async');
-    dpeDeleteConnectionRequestAsync = _lib.lookupFunction<
-            DppbDpeDeleteConnectionRequestAsyncC,
-            DppbDpeDeleteConnectionRequestAsyncDart>(
-        'dppb_dpe_delete_connection_request_async');
-    dpeListConnectionRequestsAsync = _lib.lookupFunction<
-            DppbDpeListConnectionRequestsAsyncC,
-            DppbDpeListConnectionRequestsAsyncDart>(
-        'dppb_dpe_list_connection_requests_async');
-    dpeCreateFollowRequestAsync = _lib.lookupFunction<
-            DppbDpeCreateFollowRequestAsyncC,
-            DppbDpeCreateFollowRequestAsyncDart>(
-        'dppb_dpe_create_follow_request_async');
-    dpeSetFollowRequestAsync = _lib.lookupFunction<
-        DppbDpeSetFollowRequestAsyncC,
-        DppbDpeSetFollowRequestAsyncDart>('dppb_dpe_set_follow_request_async');
-    dpeUpdateFollowRequestAsync = _lib.lookupFunction<
-            DppbDpeUpdateFollowRequestAsyncC,
-            DppbDpeUpdateFollowRequestAsyncDart>(
-        'dppb_dpe_update_follow_request_async');
-    dpeReadFollowRequestAsync = _lib.lookupFunction<
-            DppbDpeReadFollowRequestAsyncC, DppbDpeReadFollowRequestAsyncDart>(
-        'dppb_dpe_read_follow_request_async');
-    dpeDeleteFollowRequestAsync = _lib.lookupFunction<
-            DppbDpeDeleteFollowRequestAsyncC,
-            DppbDpeDeleteFollowRequestAsyncDart>(
-        'dppb_dpe_delete_follow_request_async');
-    dpeListFollowRequestsAsync = _lib.lookupFunction<
-            DppbDpeListFollowRequestsAsyncC,
-            DppbDpeListFollowRequestsAsyncDart>(
-        'dppb_dpe_list_follow_requests_async');
+    dpeCreateConnectionRuleAsync = _lib.lookupFunction<
+            DppbDpeCreateConnectionRuleAsyncC,
+            DppbDpeCreateConnectionRuleAsyncDart>(
+        'dppb_dpe_create_connection_rule_async');
+    dpeSetConnectionRuleAsync = _lib.lookupFunction<
+            DppbDpeSetConnectionRuleAsyncC,
+            DppbDpeSetConnectionRuleAsyncDart>(
+        'dppb_dpe_set_connection_rule_async');
+    dpeUpdateConnectionRuleAsync = _lib.lookupFunction<
+            DppbDpeUpdateConnectionRuleAsyncC,
+            DppbDpeUpdateConnectionRuleAsyncDart>(
+        'dppb_dpe_update_connection_rule_async');
+    dpeReadConnectionRuleAsync = _lib.lookupFunction<
+            DppbDpeReadConnectionRuleAsyncC,
+            DppbDpeReadConnectionRuleAsyncDart>(
+        'dppb_dpe_read_connection_rule_async');
+    dpeDeleteConnectionRuleAsync = _lib.lookupFunction<
+            DppbDpeDeleteConnectionRuleAsyncC,
+            DppbDpeDeleteConnectionRuleAsyncDart>(
+        'dppb_dpe_delete_connection_rule_async');
+    dpeListConnectionRulesAsync = _lib.lookupFunction<
+            DppbDpeListConnectionRulesAsyncC,
+            DppbDpeListConnectionRulesAsyncDart>(
+        'dppb_dpe_list_connection_rules_async');
+    dpeCreateFollowRuleAsync = _lib.lookupFunction<
+            DppbDpeCreateFollowRuleAsyncC,
+            DppbDpeCreateFollowRuleAsyncDart>(
+        'dppb_dpe_create_follow_rule_async');
+    dpeSetFollowRuleAsync = _lib.lookupFunction<
+        DppbDpeSetFollowRuleAsyncC,
+        DppbDpeSetFollowRuleAsyncDart>('dppb_dpe_set_follow_rule_async');
+    dpeUpdateFollowRuleAsync = _lib.lookupFunction<
+            DppbDpeUpdateFollowRuleAsyncC,
+            DppbDpeUpdateFollowRuleAsyncDart>(
+        'dppb_dpe_update_follow_rule_async');
+    dpeReadFollowRuleAsync = _lib.lookupFunction<
+            DppbDpeReadFollowRuleAsyncC, DppbDpeReadFollowRuleAsyncDart>(
+        'dppb_dpe_read_follow_rule_async');
+    dpeDeleteFollowRuleAsync = _lib.lookupFunction<
+            DppbDpeDeleteFollowRuleAsyncC,
+            DppbDpeDeleteFollowRuleAsyncDart>(
+        'dppb_dpe_delete_follow_rule_async');
+    dpeListFollowRulesAsync = _lib.lookupFunction<
+            DppbDpeListFollowRulesAsyncC,
+            DppbDpeListFollowRulesAsyncDart>(
+        'dppb_dpe_list_follow_rules_async');
     dpeReadConnectionAsync = _lib.lookupFunction<DppbDpeReadConnectionAsyncC,
         DppbDpeReadConnectionAsyncDart>('dppb_dpe_read_connection_async');
     dpeListConnectionsAsync = _lib.lookupFunction<DppbDpeListConnectionsAsyncC,
@@ -4906,16 +4906,16 @@ class DogPawBridge {
     }
   }
 
-  /// Launch an asynchronous native `createConnectionRequest()` request.
+  /// Launch an asynchronous native `createConnectionRule()` request.
   ///
   /// Purpose:
-  /// Starts `DogPawEntity::createConnectionRequest()` and completes via the
+  /// Starts `DogPawEntity::createConnectionRule()` and completes via the
   /// registered event port.
   ///
   /// Parameters:
   /// - [handle]: native bridge handle.
   /// - [requestId]: Dart bridge request id.
-  /// - [connectionRequestJson]: JSON for one `ConnectionRequest`.
+  /// - [connectionRuleJson]: JSON for one `ConnectionRule`.
   ///
   /// Return value: whether the native worker was started.
   ///
@@ -4924,26 +4924,26 @@ class DogPawBridge {
   /// Guarantees/Postconditions: result posted asynchronously.
   ///
   /// Invariants: caller isolate not blocked on Epiphany.
-  bool dpeCreateConnectionRequestAsyncManaged(
+  bool dpeCreateConnectionRuleAsyncManaged(
     Pointer<Void> handle,
     int requestId,
-    String connectionRequestJson,
+    String connectionRuleJson,
   ) {
-    final Pointer<Utf8> ptr = connectionRequestJson.toNativeUtf8();
+    final Pointer<Utf8> ptr = connectionRuleJson.toNativeUtf8();
     try {
-      return dpeCreateConnectionRequestAsync(handle, requestId, ptr);
+      return dpeCreateConnectionRuleAsync(handle, requestId, ptr);
     } finally {
       malloc.free(ptr);
     }
   }
 
-  /// Launch an asynchronous native `setConnectionRequest()` request.
+  /// Launch an asynchronous native `setConnectionRule()` request.
   ///
   /// Purpose:
-  /// Starts `DogPawEntity::setConnectionRequest()`; completes via event port.
+  /// Starts `DogPawEntity::setConnectionRule()`; completes via event port.
   ///
   /// Parameters:
-  /// - [connectionRequestJson]: JSON for one `ConnectionRequest`.
+  /// - [connectionRuleJson]: JSON for one `ConnectionRule`.
   ///
   /// Return value: whether the native worker was started.
   ///
@@ -4952,26 +4952,26 @@ class DogPawBridge {
   /// Guarantees/Postconditions: result posted asynchronously.
   ///
   /// Invariants: caller isolate not blocked on Epiphany.
-  bool dpeSetConnectionRequestAsyncManaged(
+  bool dpeSetConnectionRuleAsyncManaged(
     Pointer<Void> handle,
     int requestId,
-    String connectionRequestJson,
+    String connectionRuleJson,
   ) {
-    final Pointer<Utf8> ptr = connectionRequestJson.toNativeUtf8();
+    final Pointer<Utf8> ptr = connectionRuleJson.toNativeUtf8();
     try {
-      return dpeSetConnectionRequestAsync(handle, requestId, ptr);
+      return dpeSetConnectionRuleAsync(handle, requestId, ptr);
     } finally {
       malloc.free(ptr);
     }
   }
 
-  /// Launch an asynchronous native `updateConnectionRequest()` request.
+  /// Launch an asynchronous native `updateConnectionRule()` request.
   ///
   /// Purpose:
-  /// Starts `DogPawEntity::updateConnectionRequest()`; completes via event port.
+  /// Starts `DogPawEntity::updateConnectionRule()`; completes via event port.
   ///
   /// Parameters:
-  /// - [connectionRequestJson]: JSON for one `ConnectionRequest`.
+  /// - [connectionRuleJson]: JSON for one `ConnectionRule`.
   ///
   /// Return value: whether the native worker was started.
   ///
@@ -4980,23 +4980,23 @@ class DogPawBridge {
   /// Guarantees/Postconditions: result posted asynchronously.
   ///
   /// Invariants: caller isolate not blocked on Epiphany.
-  bool dpeUpdateConnectionRequestAsyncManaged(
+  bool dpeUpdateConnectionRuleAsyncManaged(
     Pointer<Void> handle,
     int requestId,
-    String connectionRequestJson,
+    String connectionRuleJson,
   ) {
-    final Pointer<Utf8> ptr = connectionRequestJson.toNativeUtf8();
+    final Pointer<Utf8> ptr = connectionRuleJson.toNativeUtf8();
     try {
-      return dpeUpdateConnectionRequestAsync(handle, requestId, ptr);
+      return dpeUpdateConnectionRuleAsync(handle, requestId, ptr);
     } finally {
       malloc.free(ptr);
     }
   }
 
-  /// Launch an asynchronous native `readConnectionRequest()` request.
+  /// Launch an asynchronous native `readConnectionRule()` request.
   ///
   /// Purpose:
-  /// Starts `DogPawEntity::readConnectionRequest()`; typed payload in result.
+  /// Starts `DogPawEntity::readConnectionRule()`; typed payload in result.
   ///
   /// Return value: whether the native worker was started.
   ///
@@ -5005,7 +5005,7 @@ class DogPawBridge {
   /// Guarantees/Postconditions: result posted asynchronously.
   ///
   /// Invariants: caller isolate not blocked on Epiphany.
-  bool dpeReadConnectionRequestAsyncManaged(
+  bool dpeReadConnectionRuleAsyncManaged(
     Pointer<Void> handle,
     int requestId,
     String name,
@@ -5016,7 +5016,7 @@ class DogPawBridge {
     final Pointer<Utf8> namePtr = name.toNativeUtf8();
     final Pointer<Utf8> nsPtr = namespaceSelectorJson.toNativeUtf8();
     try {
-      return dpeReadConnectionRequestAsync(
+      return dpeReadConnectionRuleAsync(
         handle,
         requestId,
         namePtr,
@@ -5030,10 +5030,10 @@ class DogPawBridge {
     }
   }
 
-  /// Launch an asynchronous native `deleteConnectionRequest()` request.
+  /// Launch an asynchronous native `deleteConnectionRule()` request.
   ///
   /// Purpose:
-  /// Starts `DogPawEntity::deleteConnectionRequest()` for [name] in the given
+  /// Starts `DogPawEntity::deleteConnectionRule()` for [name] in the given
   /// namespace scope.
   ///
   /// Return value: whether the native worker was started.
@@ -5043,7 +5043,7 @@ class DogPawBridge {
   /// Guarantees/Postconditions: result posted asynchronously.
   ///
   /// Invariants: caller isolate not blocked on Epiphany.
-  bool dpeDeleteConnectionRequestAsyncManaged(
+  bool dpeDeleteConnectionRuleAsyncManaged(
     Pointer<Void> handle,
     int requestId,
     String name,
@@ -5052,7 +5052,7 @@ class DogPawBridge {
     final Pointer<Utf8> namePtr = name.toNativeUtf8();
     final Pointer<Utf8> nsPtr = namespaceSelectorJson.toNativeUtf8();
     try {
-      return dpeDeleteConnectionRequestAsync(
+      return dpeDeleteConnectionRuleAsync(
         handle,
         requestId,
         namePtr,
@@ -5064,10 +5064,10 @@ class DogPawBridge {
     }
   }
 
-  /// Launch an asynchronous native `listConnectionRequests()` request.
+  /// Launch an asynchronous native `listConnectionRules()` request.
   ///
   /// Purpose:
-  /// Starts `DogPawEntity::listConnectionRequests()`; list in result payload.
+  /// Starts `DogPawEntity::listConnectionRules()`; list in result payload.
   ///
   /// Return value: whether the native worker was started.
   ///
@@ -5076,7 +5076,7 @@ class DogPawBridge {
   /// Guarantees/Postconditions: result posted asynchronously.
   ///
   /// Invariants: caller isolate not blocked on Epiphany.
-  bool dpeListConnectionRequestsAsyncManaged(
+  bool dpeListConnectionRulesAsyncManaged(
     Pointer<Void> handle,
     int requestId,
     String namespaceSelectorJson, {
@@ -5085,7 +5085,7 @@ class DogPawBridge {
   }) {
     final Pointer<Utf8> nsPtr = namespaceSelectorJson.toNativeUtf8();
     try {
-      return dpeListConnectionRequestsAsync(
+      return dpeListConnectionRulesAsync(
         handle,
         requestId,
         nsPtr,
@@ -5097,67 +5097,67 @@ class DogPawBridge {
     }
   }
 
-  /// Launch an asynchronous native `createFollowRequest()` request.
+  /// Launch an asynchronous native `createFollowRule()` request.
   ///
-  /// Purpose: starts `DogPawEntity::createFollowRequest()`.
+  /// Purpose: starts `DogPawEntity::createFollowRule()`.
   ///
   /// Return value: whether the native worker was started.
-  bool dpeCreateFollowRequestAsyncManaged(
+  bool dpeCreateFollowRuleAsyncManaged(
     Pointer<Void> handle,
     int requestId,
-    String followRequestJson,
+    String followRuleJson,
   ) {
-    final Pointer<Utf8> ptr = followRequestJson.toNativeUtf8();
+    final Pointer<Utf8> ptr = followRuleJson.toNativeUtf8();
     try {
-      return dpeCreateFollowRequestAsync(handle, requestId, ptr);
+      return dpeCreateFollowRuleAsync(handle, requestId, ptr);
     } finally {
       malloc.free(ptr);
     }
   }
 
-  /// Launch an asynchronous native `setFollowRequest()` request.
+  /// Launch an asynchronous native `setFollowRule()` request.
   ///
-  /// Purpose: starts `DogPawEntity::setFollowRequest()`.
+  /// Purpose: starts `DogPawEntity::setFollowRule()`.
   ///
   /// Return value: whether the native worker was started.
-  bool dpeSetFollowRequestAsyncManaged(
+  bool dpeSetFollowRuleAsyncManaged(
     Pointer<Void> handle,
     int requestId,
-    String followRequestJson,
+    String followRuleJson,
   ) {
-    final Pointer<Utf8> ptr = followRequestJson.toNativeUtf8();
+    final Pointer<Utf8> ptr = followRuleJson.toNativeUtf8();
     try {
-      return dpeSetFollowRequestAsync(handle, requestId, ptr);
+      return dpeSetFollowRuleAsync(handle, requestId, ptr);
     } finally {
       malloc.free(ptr);
     }
   }
 
-  /// Launch an asynchronous native `updateFollowRequest()` request.
+  /// Launch an asynchronous native `updateFollowRule()` request.
   ///
-  /// Purpose: starts `DogPawEntity::updateFollowRequest()`.
+  /// Purpose: starts `DogPawEntity::updateFollowRule()`.
   ///
   /// Return value: whether the native worker was started.
-  bool dpeUpdateFollowRequestAsyncManaged(
+  bool dpeUpdateFollowRuleAsyncManaged(
     Pointer<Void> handle,
     int requestId,
-    String followRequestJson,
+    String followRuleJson,
   ) {
-    final Pointer<Utf8> ptr = followRequestJson.toNativeUtf8();
+    final Pointer<Utf8> ptr = followRuleJson.toNativeUtf8();
     try {
-      return dpeUpdateFollowRequestAsync(handle, requestId, ptr);
+      return dpeUpdateFollowRuleAsync(handle, requestId, ptr);
     } finally {
       malloc.free(ptr);
     }
   }
 
-  /// Launch an asynchronous native `readFollowRequest()` request.
+  /// Launch an asynchronous native `readFollowRule()` request.
   ///
-  /// Purpose: starts `DogPawEntity::readFollowRequest()`; optional item in
+  /// Purpose: starts `DogPawEntity::readFollowRule()`; optional item in
   /// result.
   ///
   /// Return value: whether the native worker was started.
-  bool dpeReadFollowRequestAsyncManaged(
+  bool dpeReadFollowRuleAsyncManaged(
     Pointer<Void> handle,
     int requestId,
     String name,
@@ -5168,7 +5168,7 @@ class DogPawBridge {
     final Pointer<Utf8> namePtr = name.toNativeUtf8();
     final Pointer<Utf8> nsPtr = namespaceSelectorJson.toNativeUtf8();
     try {
-      return dpeReadFollowRequestAsync(
+      return dpeReadFollowRuleAsync(
         handle,
         requestId,
         namePtr,
@@ -5182,12 +5182,12 @@ class DogPawBridge {
     }
   }
 
-  /// Launch an asynchronous native `deleteFollowRequest()` request.
+  /// Launch an asynchronous native `deleteFollowRule()` request.
   ///
-  /// Purpose: starts `DogPawEntity::deleteFollowRequest()`.
+  /// Purpose: starts `DogPawEntity::deleteFollowRule()`.
   ///
   /// Return value: whether the native worker was started.
-  bool dpeDeleteFollowRequestAsyncManaged(
+  bool dpeDeleteFollowRuleAsyncManaged(
     Pointer<Void> handle,
     int requestId,
     String name,
@@ -5196,7 +5196,7 @@ class DogPawBridge {
     final Pointer<Utf8> namePtr = name.toNativeUtf8();
     final Pointer<Utf8> nsPtr = namespaceSelectorJson.toNativeUtf8();
     try {
-      return dpeDeleteFollowRequestAsync(
+      return dpeDeleteFollowRuleAsync(
         handle,
         requestId,
         namePtr,
@@ -5208,12 +5208,12 @@ class DogPawBridge {
     }
   }
 
-  /// Launch an asynchronous native `listFollowRequests()` request.
+  /// Launch an asynchronous native `listFollowRules()` request.
   ///
-  /// Purpose: starts `DogPawEntity::listFollowRequests()`.
+  /// Purpose: starts `DogPawEntity::listFollowRules()`.
   ///
   /// Return value: whether the native worker was started.
-  bool dpeListFollowRequestsAsyncManaged(
+  bool dpeListFollowRulesAsyncManaged(
     Pointer<Void> handle,
     int requestId,
     String namespaceSelectorJson, {
@@ -5222,7 +5222,7 @@ class DogPawBridge {
   }) {
     final Pointer<Utf8> nsPtr = namespaceSelectorJson.toNativeUtf8();
     try {
-      return dpeListFollowRequestsAsync(
+      return dpeListFollowRulesAsync(
         handle,
         requestId,
         nsPtr,

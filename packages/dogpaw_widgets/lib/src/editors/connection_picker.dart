@@ -158,14 +158,14 @@ class _ConnectionPickerState extends State<ConnectionPicker> {
     final List<dynamic> results = await Future.wait<dynamic>(
       <Future<dynamic>>[
         widget.entity.searchEndpoints(criteria),
-        widget.entity.listConnectionRequests(includeSpec: true),
+        widget.entity.listConnectionRules(includeSpec: true),
       ],
     );
 
     final dp.Result<List<dp.EndpointInfo>> endpointResult =
         results[0] as dp.Result<List<dp.EndpointInfo>>;
-    final dp.Result<List<dp.ConnectionRequest>> requestResult =
-        results[1] as dp.Result<List<dp.ConnectionRequest>>;
+    final dp.Result<List<dp.ConnectionRule>> requestResult =
+        results[1] as dp.Result<List<dp.ConnectionRule>>;
 
     if (!endpointResult.success) {
       setState(() {
@@ -186,11 +186,11 @@ class _ConnectionPickerState extends State<ConnectionPicker> {
     final List<dp.EndpointInfo> compatibleEndpoints = endpointResult.value!
         .where(_isCompatibleCandidate)
         .toList();
-    final List<dp.ConnectionRequest> connectionRequests =
-        requestResult.value ?? <dp.ConnectionRequest>[];
+    final List<dp.ConnectionRule> connectionRules =
+        requestResult.value ?? <dp.ConnectionRule>[];
 
     setState(() {
-      _candidateGroups = _groupCandidates(compatibleEndpoints, connectionRequests);
+      _candidateGroups = _groupCandidates(compatibleEndpoints, connectionRules);
       _isLoading = false;
     });
   }
@@ -233,7 +233,7 @@ class _ConnectionPickerState extends State<ConnectionPicker> {
   ///
   /// Parameters:
   /// - `candidates`: Compatible endpoints discovered from the entity.
-  /// - `connectionRequests`: Current request state used to infer connected rows.
+  /// - `connectionRules`: Current rule state used to infer connected rows.
   ///
   /// Return value:
   /// - Sorted grouped candidate rows.
@@ -243,13 +243,13 @@ class _ConnectionPickerState extends State<ConnectionPicker> {
   ///
   /// Guarantees/Postconditions:
   /// - Endpoints sharing a `groupKey` become one grouped action row.
-  /// - Each row captures the matching current connection requests for its members.
+  /// - Each row captures the matching current connection rules for its members.
   ///
   /// Invariants:
   /// - Grouping uses endpoint metadata already present in the system.
   List<_ConnectionCandidateGroup> _groupCandidates(
     List<dp.EndpointInfo> candidates,
-    List<dp.ConnectionRequest> connectionRequests,
+    List<dp.ConnectionRule> connectionRules,
   ) {
     final Map<String, List<dp.EndpointInfo>> groupedEndpoints =
         <String, List<dp.EndpointInfo>>{};
@@ -266,8 +266,8 @@ class _ConnectionPickerState extends State<ConnectionPicker> {
       final List<_ConnectionCandidateMember> members =
           entry.value.map(_ConnectionCandidateMember.fromEndpoint).toList();
       for (final _ConnectionCandidateMember member in members) {
-        member.matchingRequest =
-            _matchingConnectionRequest(member.endpoint, connectionRequests);
+        member.matchingRule =
+            _matchingConnectionRule(member.endpoint, connectionRules);
       }
       return _ConnectionCandidateGroup(label: entry.key, members: members);
     }).toList();
@@ -283,52 +283,52 @@ class _ConnectionPickerState extends State<ConnectionPicker> {
     return groups;
   }
 
-  /// Find the existing connection request that matches one candidate/focused pair.
+  /// Find the existing connection rule that matches one candidate/focused pair.
   ///
   /// Parameters:
   /// - `candidate`: Candidate endpoint shown in the picker.
-  /// - `connectionRequests`: Current connection requests to inspect.
+  /// - `connectionRules`: Current connection rules to inspect.
   ///
   /// Return value:
-  /// - Matching connection request, or `null` when none exists.
+  /// - Matching connection rule, or `null` when none exists.
   ///
   /// Requirements/Preconditions:
   /// - None.
   ///
   /// Guarantees/Postconditions:
-  /// - Matching is symmetric with `_buildConnectionRequestForCandidate`.
+  /// - Matching is symmetric with `_buildConnectionRuleForCandidate`.
   ///
   /// Invariants:
   /// - Existing request objects are not mutated.
-  dp.ConnectionRequest? _matchingConnectionRequest(
+  dp.ConnectionRule? _matchingConnectionRule(
     dp.EndpointInfo candidate,
-    List<dp.ConnectionRequest> connectionRequests,
+    List<dp.ConnectionRule> connectionRules,
   ) {
-    final dp.ConnectionRequest prototype =
-        _buildConnectionRequestForCandidate(candidate);
+    final dp.ConnectionRule prototype =
+        _buildConnectionRuleForCandidate(candidate);
     final dp.DataItemRef expectedSource = prototype.spec!.sourceRef;
     final dp.DataItemRef expectedDestination = prototype.spec!.destinationRef;
 
-    for (final dp.ConnectionRequest request in connectionRequests) {
-      final dp.ConnectionRequestData? requestData = request.spec ?? request.resolved;
-      if (requestData == null) {
+    for (final dp.ConnectionRule rule in connectionRules) {
+      final dp.ConnectionRuleData? ruleData = rule.spec ?? rule.resolved;
+      if (ruleData == null) {
         continue;
       }
-      if (requestData.sourceRef == expectedSource &&
-          requestData.destinationRef == expectedDestination) {
-        return request;
+      if (ruleData.sourceRef == expectedSource &&
+          ruleData.destinationRef == expectedDestination) {
+        return rule;
       }
     }
     return null;
   }
 
-  /// Create the request payload for one focused/candidate endpoint pair.
+  /// Create the rule payload for one focused/candidate endpoint pair.
   ///
   /// Parameters:
   /// - `candidate`: Candidate endpoint to connect with the focused endpoint.
   ///
   /// Return value:
-  /// - New `ConnectionRequest` describing the desired routing pair.
+  /// - New `ConnectionRule` describing the desired routing pair.
   ///
   /// Requirements/Preconditions:
   /// - `candidate` is compatible with `widget.focusedEndpoint`.
@@ -338,8 +338,8 @@ class _ConnectionPickerState extends State<ConnectionPicker> {
   /// - Focused-output flows use the candidate as destination.
   ///
   /// Invariants:
-  /// - Request naming is deterministic for the same endpoint pair.
-  dp.ConnectionRequest _buildConnectionRequestForCandidate(dp.EndpointInfo candidate) {
+  /// - Rule naming is deterministic for the same endpoint pair.
+  dp.ConnectionRule _buildConnectionRuleForCandidate(dp.EndpointInfo candidate) {
     final dp.EndpointSpec focusedSpec = _effectiveSpec(widget.focusedEndpoint)!;
     final bool focusedIsInput = focusedSpec.direction == dp.EndpointDirection.input;
     final dp.DataItemRef sourceRef = focusedIsInput
@@ -349,9 +349,9 @@ class _ConnectionPickerState extends State<ConnectionPicker> {
         ? _endpointRef(widget.focusedEndpoint)
         : _endpointRef(candidate);
 
-    return dp.ConnectionRequest(
+    return dp.ConnectionRule(
       name: _requestNameForPair(sourceRef, destinationRef),
-      spec: dp.ConnectionRequestData(
+      spec: dp.ConnectionRuleData(
         sourceRef: sourceRef,
         destinationRef: destinationRef,
       ),
@@ -383,12 +383,12 @@ class _ConnectionPickerState extends State<ConnectionPicker> {
     bool sawFailure = false;
     if (group.isFullyConnected) {
       for (final _ConnectionCandidateMember member in group.members) {
-        final dp.ConnectionRequest? matchingRequest = member.matchingRequest;
-        if (matchingRequest == null) {
+        final dp.ConnectionRule? matchingRule = member.matchingRule;
+        if (matchingRule == null) {
           continue;
         }
-        final dp.Result<bool> result = await widget.entity.deleteConnectionRequest(
-          matchingRequest.name,
+        final dp.Result<bool> result = await widget.entity.deleteConnectionRule(
+          matchingRule.name,
         );
         if (!result.success) {
           sawFailure = true;
@@ -398,11 +398,11 @@ class _ConnectionPickerState extends State<ConnectionPicker> {
       }
     } else {
       for (final _ConnectionCandidateMember member in group.members) {
-        if (member.matchingRequest != null) {
+        if (member.matchingRule != null) {
           continue;
         }
-        final dp.Result<bool> result = await widget.entity.createConnectionRequest(
-          _buildConnectionRequestForCandidate(member.endpoint),
+        final dp.Result<bool> result = await widget.entity.createConnectionRule(
+          _buildConnectionRuleForCandidate(member.endpoint),
         );
         if (!result.success) {
           sawFailure = true;
@@ -422,7 +422,7 @@ class _ConnectionPickerState extends State<ConnectionPicker> {
     await _loadCandidates();
   }
 
-  /// Build one endpoint reference suitable for connection requests.
+  /// Build one endpoint reference suitable for connection rules.
   ///
   /// Parameters:
   /// - `endpoint`: Endpoint metadata snapshot to reference.
@@ -620,7 +620,7 @@ class _ConnectionCandidateGroup {
   bool get isFullyConnected {
     return members.isNotEmpty &&
         members.every(
-          (_ConnectionCandidateMember member) => member.matchingRequest != null,
+          (_ConnectionCandidateMember member) => member.matchingRule != null,
         );
   }
 
@@ -650,8 +650,8 @@ class _ConnectionCandidateMember {
   /// Semantic routing flags from endpoint metadata.
   final List<String> flags;
 
-  /// Existing connection request if this member is already connected.
-  dp.ConnectionRequest? matchingRequest;
+  /// Existing connection rule if this member is already connected.
+  dp.ConnectionRule? matchingRule;
 
   /// Create one grouped candidate member from raw endpoint metadata.
   _ConnectionCandidateMember({
@@ -659,7 +659,7 @@ class _ConnectionCandidateMember {
     required this.label,
     required this.ownerEntityName,
     required this.flags,
-    this.matchingRequest,
+    this.matchingRule,
   });
 
   /// Construct one candidate member directly from an endpoint snapshot.

@@ -90,7 +90,7 @@ class LayoutStackEntry {
 ///
 /// Purpose:
 /// Gives clients the stack specification they can manipulate plus the resolved
-/// layout product that consumers such as Monolith can use directly.
+/// layout product that consumers such as `SimpleSynth` or `Voice2LED` can use directly.
 class LayoutStackSnapshot {
   final List<LayoutStackEntry> entries;
   final Layout? resolvedLayout;

@@ -3995,11 +3995,11 @@ class NativeDogPawEntityClient {
     return _listLocalEndpointConnections(endpointName);
   }
 
-  /// Purpose: Create a connection request through the native DogPawEntity
+  /// Purpose: Create a connection rule through the native DogPawEntity
   /// bridge.
   ///
   /// Parameters:
-  /// - [connectionRequest]: typed connection request payload.
+  /// - [connectionRule]: typed connection rule payload.
   ///
   /// Return value: `Future<Result<bool>>` indicating whether the native
   /// operation succeeded.
@@ -4009,79 +4009,79 @@ class NativeDogPawEntityClient {
   /// Guarantees/Postconditions: on success, Epiphany accepted the create.
   ///
   /// Invariants: isolate not blocked on server I/O.
-  Future<Result<bool>> createConnectionRequest(
-    ConnectionRequest connectionRequest,
+  Future<Result<bool>> createConnectionRule(
+    ConnectionRule connectionRule,
   ) async {
     return _runBooleanRequest(
-      'createConnectionRequest',
-      (int requestId) => _bridge.dpeCreateConnectionRequestAsyncManaged(
+      'createConnectionRule',
+      (int requestId) => _bridge.dpeCreateConnectionRuleAsyncManaged(
         _nativeHandle,
         requestId,
-        jsonEncode(connectionRequest.toJson()),
+        jsonEncode(connectionRule.toJson()),
       ),
     );
   }
 
-  /// Purpose: Set (upsert) a connection request through the native bridge.
+  /// Purpose: Set (upsert) a connection rule through the native bridge.
   ///
   /// Parameters:
-  /// - [connectionRequest]: typed connection request payload.
+  /// - [connectionRule]: typed connection rule payload.
   ///
   /// Return value: `Future<Result<bool>>`.
   ///
   /// Requirements/Preconditions: wrapper not disposed.
   ///
   /// Invariants: isolate not blocked on server I/O.
-  Future<Result<bool>> setConnectionRequest(
-    ConnectionRequest connectionRequest,
+  Future<Result<bool>> setConnectionRule(
+    ConnectionRule connectionRule,
   ) async {
     return _runBooleanRequest(
-      'setConnectionRequest',
-      (int requestId) => _bridge.dpeSetConnectionRequestAsyncManaged(
+      'setConnectionRule',
+      (int requestId) => _bridge.dpeSetConnectionRuleAsyncManaged(
         _nativeHandle,
         requestId,
-        jsonEncode(connectionRequest.toJson()),
+        jsonEncode(connectionRule.toJson()),
       ),
     );
   }
 
-  /// Purpose: Update an existing connection request through the native bridge.
+  /// Purpose: Update an existing connection rule through the native bridge.
   ///
   /// Parameters:
-  /// - [connectionRequest]: typed connection request payload.
+  /// - [connectionRule]: typed connection rule payload.
   ///
   /// Return value: `Future<Result<bool>>`.
   ///
   /// Requirements/Preconditions: wrapper not disposed.
   ///
   /// Invariants: isolate not blocked on server I/O.
-  Future<Result<bool>> updateConnectionRequest(
-    ConnectionRequest connectionRequest,
+  Future<Result<bool>> updateConnectionRule(
+    ConnectionRule connectionRule,
   ) async {
     return _runBooleanRequest(
-      'updateConnectionRequest',
-      (int requestId) => _bridge.dpeUpdateConnectionRequestAsyncManaged(
+      'updateConnectionRule',
+      (int requestId) => _bridge.dpeUpdateConnectionRuleAsyncManaged(
         _nativeHandle,
         requestId,
-        jsonEncode(connectionRequest.toJson()),
+        jsonEncode(connectionRule.toJson()),
       ),
     );
   }
 
-  /// Purpose: Read one connection request through the native bridge.
+  /// Purpose: Read one connection rule through the native bridge.
   ///
   /// Parameters:
   /// - [name]: request name.
   /// - [namespaceSelector]: namespace scope.
   /// - [includeResolved], [includeSpec]: forwarded to native read.
   ///
-  /// Return value: `Future<Result<ConnectionRequest?>>` with decoded data or
+  /// Return value: `Future<Result<ConnectionRule?>>` with decoded data or
   /// null when absent.
   ///
   /// Requirements/Preconditions: wrapper not disposed.
   ///
   /// Invariants: isolate not blocked on server I/O.
-  Future<Result<ConnectionRequest?>> readConnectionRequest(
+  Future<Result<ConnectionRule?>> readConnectionRule(
     String name, {
     NamespaceSelector namespaceSelector =
         const NamespaceSelector.currentEntity(),
@@ -4090,8 +4090,8 @@ class NativeDogPawEntityClient {
   }) async {
     try {
       final Map<String, dynamic> response = await _invokeRequest(
-        'readConnectionRequest',
-        (int requestId) => _bridge.dpeReadConnectionRequestAsyncManaged(
+        'readConnectionRule',
+        (int requestId) => _bridge.dpeReadConnectionRuleAsyncManaged(
           _nativeHandle,
           requestId,
           name,
@@ -4101,20 +4101,20 @@ class NativeDogPawEntityClient {
         ),
       );
       if (response[JsonFields.SUCCESS] != true) {
-        return Result<ConnectionRequest?>.error(
+        return Result<ConnectionRule?>.error(
           response[JsonFields.ERROR] as String? ??
-              'readConnectionRequest failed',
+              'readConnectionRule failed',
         );
       }
-      return Result<ConnectionRequest?>.success(
-        _decodeConnectionRequestFromResultPayload(response),
+      return Result<ConnectionRule?>.success(
+        _decodeConnectionRuleFromResultPayload(response),
       );
     } catch (exception) {
-      return Result<ConnectionRequest?>.error(exception.toString());
+      return Result<ConnectionRule?>.error(exception.toString());
     }
   }
 
-  /// Purpose: Delete a connection request through the native bridge.
+  /// Purpose: Delete a connection rule through the native bridge.
   ///
   /// Parameters:
   /// - [name]: request name.
@@ -4125,14 +4125,14 @@ class NativeDogPawEntityClient {
   /// Requirements/Preconditions: wrapper not disposed.
   ///
   /// Invariants: isolate not blocked on server I/O.
-  Future<Result<bool>> deleteConnectionRequest(
+  Future<Result<bool>> deleteConnectionRule(
     String name, {
     NamespaceSelector namespaceSelector =
         const NamespaceSelector.currentEntity(),
   }) async {
     return _runBooleanRequest(
-      'deleteConnectionRequest',
-      (int requestId) => _bridge.dpeDeleteConnectionRequestAsyncManaged(
+      'deleteConnectionRule',
+      (int requestId) => _bridge.dpeDeleteConnectionRuleAsyncManaged(
         _nativeHandle,
         requestId,
         name,
@@ -4141,19 +4141,19 @@ class NativeDogPawEntityClient {
     );
   }
 
-  /// Purpose: List connection requests in a namespace through the native
+  /// Purpose: List connection rules in a namespace through the native
   /// bridge.
   ///
   /// Parameters:
   /// - [namespaceSelector]: namespace scope.
   /// - [includeResolved], [includeSpec]: forwarded to native list.
   ///
-  /// Return value: `Future<Result<List<ConnectionRequest>>>`.
+  /// Return value: `Future<Result<List<ConnectionRule>>>`.
   ///
   /// Requirements/Preconditions: wrapper not disposed.
   ///
   /// Invariants: isolate not blocked on server I/O.
-  Future<Result<List<ConnectionRequest>>> listConnectionRequests({
+  Future<Result<List<ConnectionRule>>> listConnectionRules({
     NamespaceSelector namespaceSelector =
         const NamespaceSelector.currentEntity(),
     bool includeResolved = false,
@@ -4161,8 +4161,8 @@ class NativeDogPawEntityClient {
   }) async {
     try {
       final Map<String, dynamic> response = await _invokeRequest(
-        'listConnectionRequests',
-        (int requestId) => _bridge.dpeListConnectionRequestsAsyncManaged(
+        'listConnectionRules',
+        (int requestId) => _bridge.dpeListConnectionRulesAsyncManaged(
           _nativeHandle,
           requestId,
           jsonEncode(namespaceSelector.toJson()),
@@ -4171,33 +4171,33 @@ class NativeDogPawEntityClient {
         ),
       );
       if (response[JsonFields.SUCCESS] != true) {
-        return Result<List<ConnectionRequest>>.error(
+        return Result<List<ConnectionRule>>.error(
           response[JsonFields.ERROR] as String? ??
-              'listConnectionRequests failed',
+              'listConnectionRules failed',
         );
       }
       final Map<String, dynamic> result =
           Map<String, dynamic>.from(response[JsonFields.RESULT] as Map);
       final List<dynamic> items =
-          List<dynamic>.from(result[JsonFields.CONNECTION_REQUESTS] as List);
-      return Result<List<ConnectionRequest>>.success(
+          List<dynamic>.from(result[JsonFields.CONNECTION_RULES] as List);
+      return Result<List<ConnectionRule>>.success(
         items
             .map(
-              (dynamic e) => ConnectionRequest.fromJson(
+              (dynamic e) => ConnectionRule.fromJson(
                 Map<String, dynamic>.from(e as Map),
               ),
             )
             .toList(),
       );
     } catch (exception) {
-      return Result<List<ConnectionRequest>>.error(exception.toString());
+      return Result<List<ConnectionRule>>.error(exception.toString());
     }
   }
 
-  /// Purpose: Create a follow request through the native DogPawEntity bridge.
+  /// Purpose: Create a follow rule through the native DogPawEntity bridge.
   ///
   /// Parameters:
-  /// - [followRequest]: typed follow request payload.
+  /// - [followRule]: typed follow rule payload.
   ///
   /// Return value: `Future<Result<bool>>` for native operation success.
   ///
@@ -4206,72 +4206,72 @@ class NativeDogPawEntityClient {
   /// Guarantees/Postconditions: on success, Epiphany accepted the create.
   ///
   /// Invariants: isolate not blocked on server I/O.
-  Future<Result<bool>> createFollowRequest(FollowRequest followRequest) async {
+  Future<Result<bool>> createFollowRule(FollowRule followRule) async {
     return _runBooleanRequest(
-      'createFollowRequest',
-      (int requestId) => _bridge.dpeCreateFollowRequestAsyncManaged(
+      'createFollowRule',
+      (int requestId) => _bridge.dpeCreateFollowRuleAsyncManaged(
         _nativeHandle,
         requestId,
-        jsonEncode(followRequest.toJson()),
+        jsonEncode(followRule.toJson()),
       ),
     );
   }
 
-  /// Purpose: Set (upsert) a follow request through the native bridge.
+  /// Purpose: Set (upsert) a follow rule through the native bridge.
   ///
   /// Parameters:
-  /// - [followRequest]: typed follow request payload.
+  /// - [followRule]: typed follow rule payload.
   ///
   /// Return value: `Future<Result<bool>>`.
   ///
   /// Requirements/Preconditions: wrapper not disposed.
   ///
   /// Invariants: isolate not blocked on server I/O.
-  Future<Result<bool>> setFollowRequest(FollowRequest followRequest) async {
+  Future<Result<bool>> setFollowRule(FollowRule followRule) async {
     return _runBooleanRequest(
-      'setFollowRequest',
-      (int requestId) => _bridge.dpeSetFollowRequestAsyncManaged(
+      'setFollowRule',
+      (int requestId) => _bridge.dpeSetFollowRuleAsyncManaged(
         _nativeHandle,
         requestId,
-        jsonEncode(followRequest.toJson()),
+        jsonEncode(followRule.toJson()),
       ),
     );
   }
 
-  /// Purpose: Update a follow request through the native bridge.
+  /// Purpose: Update a follow rule through the native bridge.
   ///
   /// Parameters:
-  /// - [followRequest]: typed follow request payload.
+  /// - [followRule]: typed follow rule payload.
   ///
   /// Return value: `Future<Result<bool>>`.
   ///
   /// Requirements/Preconditions: wrapper not disposed.
   ///
   /// Invariants: isolate not blocked on server I/O.
-  Future<Result<bool>> updateFollowRequest(FollowRequest followRequest) async {
+  Future<Result<bool>> updateFollowRule(FollowRule followRule) async {
     return _runBooleanRequest(
-      'updateFollowRequest',
-      (int requestId) => _bridge.dpeUpdateFollowRequestAsyncManaged(
+      'updateFollowRule',
+      (int requestId) => _bridge.dpeUpdateFollowRuleAsyncManaged(
         _nativeHandle,
         requestId,
-        jsonEncode(followRequest.toJson()),
+        jsonEncode(followRule.toJson()),
       ),
     );
   }
 
-  /// Purpose: Read one follow request through the native bridge.
+  /// Purpose: Read one follow rule through the native bridge.
   ///
   /// Parameters:
-  /// - [name]: request name.
+  /// - [name]: rule name.
   /// - [namespaceSelector]: namespace scope.
   /// - [includeResolved], [includeSpec]: forwarded to native read.
   ///
-  /// Return value: `Future<Result<FollowRequest?>>` or null when absent.
+  /// Return value: `Future<Result<FollowRule?>>` or null when absent.
   ///
   /// Requirements/Preconditions: wrapper not disposed.
   ///
   /// Invariants: isolate not blocked on server I/O.
-  Future<Result<FollowRequest?>> readFollowRequest(
+  Future<Result<FollowRule?>> readFollowRule(
     String name, {
     NamespaceSelector namespaceSelector =
         const NamespaceSelector.currentEntity(),
@@ -4280,8 +4280,8 @@ class NativeDogPawEntityClient {
   }) async {
     try {
       final Map<String, dynamic> response = await _invokeRequest(
-        'readFollowRequest',
-        (int requestId) => _bridge.dpeReadFollowRequestAsyncManaged(
+        'readFollowRule',
+        (int requestId) => _bridge.dpeReadFollowRuleAsyncManaged(
           _nativeHandle,
           requestId,
           name,
@@ -4291,22 +4291,22 @@ class NativeDogPawEntityClient {
         ),
       );
       if (response[JsonFields.SUCCESS] != true) {
-        return Result<FollowRequest?>.error(
-          response[JsonFields.ERROR] as String? ?? 'readFollowRequest failed',
+        return Result<FollowRule?>.error(
+          response[JsonFields.ERROR] as String? ?? 'readFollowRule failed',
         );
       }
-      return Result<FollowRequest?>.success(
-        _decodeFollowRequestFromResultPayload(response),
+      return Result<FollowRule?>.success(
+        _decodeFollowRuleFromResultPayload(response),
       );
     } catch (exception) {
-      return Result<FollowRequest?>.error(exception.toString());
+      return Result<FollowRule?>.error(exception.toString());
     }
   }
 
-  /// Purpose: Delete a follow request through the native bridge.
+  /// Purpose: Delete a follow rule through the native bridge.
   ///
   /// Parameters:
-  /// - [name]: request name.
+  /// - [name]: rule name.
   /// - [namespaceSelector]: namespace scope.
   ///
   /// Return value: `Future<Result<bool>>`.
@@ -4314,14 +4314,14 @@ class NativeDogPawEntityClient {
   /// Requirements/Preconditions: wrapper not disposed.
   ///
   /// Invariants: isolate not blocked on server I/O.
-  Future<Result<bool>> deleteFollowRequest(
+  Future<Result<bool>> deleteFollowRule(
     String name, {
     NamespaceSelector namespaceSelector =
         const NamespaceSelector.currentEntity(),
   }) async {
     return _runBooleanRequest(
-      'deleteFollowRequest',
-      (int requestId) => _bridge.dpeDeleteFollowRequestAsyncManaged(
+      'deleteFollowRule',
+      (int requestId) => _bridge.dpeDeleteFollowRuleAsyncManaged(
         _nativeHandle,
         requestId,
         name,
@@ -4330,18 +4330,18 @@ class NativeDogPawEntityClient {
     );
   }
 
-  /// Purpose: List follow requests through the native bridge.
+  /// Purpose: List follow rules through the native bridge.
   ///
   /// Parameters:
   /// - [namespaceSelector]: namespace scope.
   /// - [includeResolved], [includeSpec]: forwarded to native list.
   ///
-  /// Return value: `Future<Result<List<FollowRequest>>>`.
+  /// Return value: `Future<Result<List<FollowRule>>>`.
   ///
   /// Requirements/Preconditions: wrapper not disposed.
   ///
   /// Invariants: isolate not blocked on server I/O.
-  Future<Result<List<FollowRequest>>> listFollowRequests({
+  Future<Result<List<FollowRule>>> listFollowRules({
     NamespaceSelector namespaceSelector =
         const NamespaceSelector.currentEntity(),
     bool includeResolved = false,
@@ -4349,8 +4349,8 @@ class NativeDogPawEntityClient {
   }) async {
     try {
       final Map<String, dynamic> response = await _invokeRequest(
-        'listFollowRequests',
-        (int requestId) => _bridge.dpeListFollowRequestsAsyncManaged(
+        'listFollowRules',
+        (int requestId) => _bridge.dpeListFollowRulesAsyncManaged(
           _nativeHandle,
           requestId,
           jsonEncode(namespaceSelector.toJson()),
@@ -4359,25 +4359,25 @@ class NativeDogPawEntityClient {
         ),
       );
       if (response[JsonFields.SUCCESS] != true) {
-        return Result<List<FollowRequest>>.error(
-          response[JsonFields.ERROR] as String? ?? 'listFollowRequests failed',
+        return Result<List<FollowRule>>.error(
+          response[JsonFields.ERROR] as String? ?? 'listFollowRules failed',
         );
       }
       final Map<String, dynamic> result =
           Map<String, dynamic>.from(response[JsonFields.RESULT] as Map);
       final List<dynamic> items =
-          List<dynamic>.from(result[JsonFields.FOLLOW_REQUESTS] as List);
-      return Result<List<FollowRequest>>.success(
+          List<dynamic>.from(result[JsonFields.FOLLOW_RULES] as List);
+      return Result<List<FollowRule>>.success(
         items
             .map(
-              (dynamic e) => FollowRequest.fromJson(
+              (dynamic e) => FollowRule.fromJson(
                 Map<String, dynamic>.from(e as Map),
               ),
             )
             .toList(),
       );
     } catch (exception) {
-      return Result<List<FollowRequest>>.error(exception.toString());
+      return Result<List<FollowRule>>.error(exception.toString());
     }
   }
 
@@ -4763,7 +4763,7 @@ class NativeDogPawEntityClient {
     );
   }
 
-  /// Purpose: Decode optional `ConnectionRequest` from bridge result payload.
+  /// Purpose: Decode optional `ConnectionRule` from bridge result payload.
   ///
   /// Parameters: [response] request-result envelope from native.
   ///
@@ -4772,40 +4772,40 @@ class NativeDogPawEntityClient {
   /// Requirements/Preconditions: envelope shape matches other read-* bridges.
   ///
   /// Invariants: does not mutate [response].
-  ConnectionRequest? _decodeConnectionRequestFromResultPayload(
+  ConnectionRule? _decodeConnectionRuleFromResultPayload(
     Map<String, dynamic> response,
   ) {
     final Map<String, dynamic> result =
         Map<String, dynamic>.from(response[JsonFields.RESULT] as Map);
-    if (!result.containsKey(JsonFields.CONNECTION_REQUEST_ITEM) ||
-        result[JsonFields.CONNECTION_REQUEST_ITEM] == null) {
+    if (!result.containsKey(JsonFields.CONNECTION_RULE_ITEM) ||
+        result[JsonFields.CONNECTION_RULE_ITEM] == null) {
       return null;
     }
-    return ConnectionRequest.fromJson(
+    return ConnectionRule.fromJson(
       Map<String, dynamic>.from(
-        result[JsonFields.CONNECTION_REQUEST_ITEM] as Map,
+        result[JsonFields.CONNECTION_RULE_ITEM] as Map,
       ),
     );
   }
 
-  /// Purpose: Decode optional `FollowRequest` from bridge result payload.
+  /// Purpose: Decode optional `FollowRule` from bridge result payload.
   ///
   /// Parameters: [response] request-result envelope from native.
   ///
   /// Return value: decoded item or null.
   ///
   /// Invariants: does not mutate [response].
-  FollowRequest? _decodeFollowRequestFromResultPayload(
+  FollowRule? _decodeFollowRuleFromResultPayload(
     Map<String, dynamic> response,
   ) {
     final Map<String, dynamic> result =
         Map<String, dynamic>.from(response[JsonFields.RESULT] as Map);
-    if (!result.containsKey(JsonFields.FOLLOW_REQUEST_ITEM) ||
-        result[JsonFields.FOLLOW_REQUEST_ITEM] == null) {
+    if (!result.containsKey(JsonFields.FOLLOW_RULE_ITEM) ||
+        result[JsonFields.FOLLOW_RULE_ITEM] == null) {
       return null;
     }
-    return FollowRequest.fromJson(
-      Map<String, dynamic>.from(result[JsonFields.FOLLOW_REQUEST_ITEM] as Map),
+    return FollowRule.fromJson(
+      Map<String, dynamic>.from(result[JsonFields.FOLLOW_RULE_ITEM] as Map),
     );
   }
 

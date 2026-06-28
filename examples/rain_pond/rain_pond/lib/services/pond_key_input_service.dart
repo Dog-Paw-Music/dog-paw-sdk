@@ -176,7 +176,7 @@ dp.PosData? extractKeyPositionSample(
 /// Requirements:
 ///     None.
 /// Guarantees:
-///     Returns an input continuous key-position endpoint that auto-connects to
+///     Returns an input continuous key-position endpoint that declares endpoint-owned connection rules for
 ///     `BladeHW`.
 /// Invariants:
 ///     Does not create endpoints or perform network I/O.
@@ -197,7 +197,7 @@ dp.EndpointInfo buildRainPondKeyPositionEndpointInfo() {
       indexSpec: dp.IndexSpecKey(8, 8),
     ),
     category: dp.EndpointCategory.continuous,
-    connectionPolicy: dp.ConnectionPolicy(autoConnectCriteria: criteria),
+    connectionPolicy: dp.ConnectionPolicy(endpointConnectionRule: criteria),
   );
   return dp.EndpointInfo(name: 'rain_pond_key_position_input', spec: spec);
 }
@@ -304,7 +304,7 @@ class PondKeyInputService {
       direction: dp.EndpointDirection.input,
       dataType: const dp.DataTypeSpec(dp.DataType.keyPress),
       category: dp.EndpointCategory.messageQueue,
-      connectionPolicy: dp.ConnectionPolicy(autoConnectCriteria: criteria),
+      connectionPolicy: dp.ConnectionPolicy(endpointConnectionRule: criteria),
     );
 
     final dp.EndpointInfo ep =

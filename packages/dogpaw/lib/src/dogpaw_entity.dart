@@ -2483,36 +2483,106 @@ class DogPawEntity {
 
   // CONNECTIONS
 
-  Future<Result<bool>> createConnectionRequest(
-      ConnectionRequest connectionRequest) async {
+  /// Purpose: Create one standalone persistent connection rule using the
+  /// canonical rule-family vocabulary.
+  ///
+  /// Parameters:
+  /// - [connectionRule]: `ConnectionRule` describing the stored standalone
+  ///   routing intent.
+  ///
+  /// Return value:
+  /// - `Future<Result<bool>>` indicating whether the rule was stored.
+  ///
+  /// Requirements/Preconditions:
+  /// - This entity must be connected to Epiphany.
+  /// - `connectionRule.spec` must include both concrete endpoint refs.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Reuses the current request-backed native CRUD path.
+  ///
+  /// Invariants:
+  /// - Realized `Connection` data remains derived, read-only state.
+  Future<Result<bool>> createConnectionRule(
+      ConnectionRule connectionRule) async {
     return _runNativeCrudOperation<bool>(
       (NativeDogPawEntityClient client) =>
-          client.createConnectionRequest(connectionRequest),
+          client.createConnectionRule(connectionRule),
     );
   }
 
-  Future<Result<bool>> setConnectionRequest(
-      ConnectionRequest connectionRequest) async {
+  /// Purpose: Create or replace one standalone persistent connection rule.
+  ///
+  /// Parameters:
+  /// - [connectionRule]: `ConnectionRule` to upsert.
+  ///
+  /// Return value:
+  /// - `Future<Result<bool>>` indicating whether the rule was stored.
+  ///
+  /// Requirements/Preconditions:
+  /// - This entity must be connected to Epiphany.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Reuses the current request-backed native CRUD path.
+  ///
+  /// Invariants:
+  /// - Does not create a second routing storage model.
+  Future<Result<bool>> setConnectionRule(ConnectionRule connectionRule) async {
     return _runNativeCrudOperation<bool>(
       (NativeDogPawEntityClient client) =>
-          client.setConnectionRequest(connectionRequest),
+          client.setConnectionRule(connectionRule),
     );
   }
 
-  Future<Result<bool>> updateConnectionRequest(
-      ConnectionRequest connectionRequest) async {
+  /// Purpose: Update one existing standalone persistent connection rule.
+  ///
+  /// Parameters:
+  /// - [connectionRule]: Updated `ConnectionRule`.
+  ///
+  /// Return value:
+  /// - `Future<Result<bool>>` indicating whether the rule update succeeded.
+  ///
+  /// Requirements/Preconditions:
+  /// - This entity must be connected to Epiphany.
+  /// - The rule must already exist in the target namespace.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Reuses the current request-backed native CRUD path.
+  ///
+  /// Invariants:
+  /// - Realized `Connection` data remains derived, read-only state.
+  Future<Result<bool>> updateConnectionRule(
+      ConnectionRule connectionRule) async {
     return _runNativeCrudOperation<bool>(
       (NativeDogPawEntityClient client) =>
-          client.updateConnectionRequest(connectionRequest),
+          client.updateConnectionRule(connectionRule),
     );
   }
 
-  Future<Result<ConnectionRequest?>> readConnectionRequest(String name,
+  /// Purpose: Read one standalone persistent connection rule by name.
+  ///
+  /// Parameters:
+  /// - [name]: `String` rule name to read.
+  /// - [namespaceSelector]: optional namespace to read from.
+  /// - [includeResolved]: whether to include resolved server metadata.
+  /// - [includeSpec]: whether to include original stored spec data.
+  ///
+  /// Return value:
+  /// - `Future<Result<ConnectionRule?>>` containing the rule when found.
+  ///
+  /// Requirements/Preconditions:
+  /// - This entity must be connected to Epiphany.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Reuses the current request-backed native CRUD path.
+  ///
+  /// Invariants:
+  /// - Reading rules never mutates realized connection state.
+  Future<Result<ConnectionRule?>> readConnectionRule(String name,
       {NamespaceSelector? namespaceSelector,
       bool includeResolved = false,
       bool includeSpec = false}) async {
-    return _runNativeCrudOperation<ConnectionRequest?>(
-      (NativeDogPawEntityClient client) => client.readConnectionRequest(
+    return _runNativeCrudOperation<ConnectionRule?>(
+      (NativeDogPawEntityClient client) => client.readConnectionRule(
         name,
         namespaceSelector:
             namespaceSelector ?? const NamespaceSelector.currentEntity(),
@@ -2522,10 +2592,28 @@ class DogPawEntity {
     );
   }
 
-  Future<Result<bool>> deleteConnectionRequest(String name,
+  /// Purpose: Delete one standalone persistent connection rule by name.
+  ///
+  /// Parameters:
+  /// - [name]: `String` rule name to delete.
+  /// - [namespaceSelector]: optional namespace containing the rule.
+  ///
+  /// Return value:
+  /// - `Future<Result<bool>>` indicating whether the delete succeeded.
+  ///
+  /// Requirements/Preconditions:
+  /// - This entity must be connected to Epiphany.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Reuses the current request-backed native CRUD path.
+  ///
+  /// Invariants:
+  /// - Deleting one rule does not directly remove other rules that justify the
+  ///   same realized connection.
+  Future<Result<bool>> deleteConnectionRule(String name,
       {NamespaceSelector? namespaceSelector}) async {
     return _runNativeCrudOperation<bool>(
-      (NativeDogPawEntityClient client) => client.deleteConnectionRequest(
+      (NativeDogPawEntityClient client) => client.deleteConnectionRule(
         name,
         namespaceSelector:
             namespaceSelector ?? const NamespaceSelector.currentEntity(),
@@ -2533,12 +2621,31 @@ class DogPawEntity {
     );
   }
 
-  Future<Result<List<ConnectionRequest>>> listConnectionRequests(
+  /// Purpose: List standalone persistent connection rules in one namespace.
+  ///
+  /// Parameters:
+  /// - [namespaceSelector]: optional namespace to query.
+  /// - [includeResolved]: whether to include resolved server metadata.
+  /// - [includeSpec]: whether to include original stored spec data.
+  ///
+  /// Return value:
+  /// - `Future<Result<List<ConnectionRule>>>` containing matching rules.
+  ///
+  /// Requirements/Preconditions:
+  /// - This entity must be connected to Epiphany.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Reuses the current request-backed native CRUD path.
+  ///
+  /// Invariants:
+  /// - Returned items are writable standalone rule definitions, not realized
+  ///   connections.
+  Future<Result<List<ConnectionRule>>> listConnectionRules(
       {NamespaceSelector? namespaceSelector,
       bool includeResolved = false,
       bool includeSpec = false}) async {
-    return _runNativeCrudOperation<List<ConnectionRequest>>(
-      (NativeDogPawEntityClient client) => client.listConnectionRequests(
+    return _runNativeCrudOperation<List<ConnectionRule>>(
+      (NativeDogPawEntityClient client) => client.listConnectionRules(
         namespaceSelector:
             namespaceSelector ?? const NamespaceSelector.currentEntity(),
         includeResolved: includeResolved,
@@ -2547,33 +2654,101 @@ class DogPawEntity {
     );
   }
 
-  Future<Result<bool>> createFollowRequest(FollowRequest followRequest) async {
+  /// Purpose: Create one follow rule using the canonical rule-family
+  /// vocabulary for mirrored routing.
+  ///
+  /// Parameters:
+  /// - [followRule]: `FollowRule` describing the stored mirrored-routing
+  ///   intent.
+  ///
+  /// Return value:
+  /// - `Future<Result<bool>>` indicating whether the rule was stored.
+  ///
+  /// Requirements/Preconditions:
+  /// - This entity must be connected to Epiphany.
+  /// - `followRule.spec` must include a follower ref and leader criteria.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Reuses the current request-backed native CRUD path.
+  ///
+  /// Invariants:
+  /// - Realized `Connection` data remains derived, read-only state.
+  Future<Result<bool>> createFollowRule(FollowRule followRule) async {
     return _runNativeCrudOperation<bool>(
-      (NativeDogPawEntityClient client) =>
-          client.createFollowRequest(followRequest),
+      (NativeDogPawEntityClient client) => client.createFollowRule(followRule),
     );
   }
 
-  Future<Result<bool>> setFollowRequest(FollowRequest followRequest) async {
+  /// Purpose: Create or replace one follow rule.
+  ///
+  /// Parameters:
+  /// - [followRule]: `FollowRule` to upsert.
+  ///
+  /// Return value:
+  /// - `Future<Result<bool>>` indicating whether the rule was stored.
+  ///
+  /// Requirements/Preconditions:
+  /// - This entity must be connected to Epiphany.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Reuses the current request-backed native CRUD path.
+  ///
+  /// Invariants:
+  /// - Does not create a second mirrored-routing storage model.
+  Future<Result<bool>> setFollowRule(FollowRule followRule) async {
     return _runNativeCrudOperation<bool>(
-      (NativeDogPawEntityClient client) =>
-          client.setFollowRequest(followRequest),
+      (NativeDogPawEntityClient client) => client.setFollowRule(followRule),
     );
   }
 
-  Future<Result<bool>> updateFollowRequest(FollowRequest followRequest) async {
+  /// Purpose: Update one existing follow rule.
+  ///
+  /// Parameters:
+  /// - [followRule]: Updated `FollowRule`.
+  ///
+  /// Return value:
+  /// - `Future<Result<bool>>` indicating whether the rule update succeeded.
+  ///
+  /// Requirements/Preconditions:
+  /// - This entity must be connected to Epiphany.
+  /// - The rule must already exist in the target namespace.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Reuses the current request-backed native CRUD path.
+  ///
+  /// Invariants:
+  /// - Realized `Connection` data remains derived, read-only state.
+  Future<Result<bool>> updateFollowRule(FollowRule followRule) async {
     return _runNativeCrudOperation<bool>(
-      (NativeDogPawEntityClient client) =>
-          client.updateFollowRequest(followRequest),
+      (NativeDogPawEntityClient client) => client.updateFollowRule(followRule),
     );
   }
 
-  Future<Result<FollowRequest?>> readFollowRequest(String name,
+  /// Purpose: Read one follow rule by name.
+  ///
+  /// Parameters:
+  /// - [name]: `String` rule name to read.
+  /// - [namespaceSelector]: optional namespace to read from.
+  /// - [includeResolved]: whether to include resolved server metadata.
+  /// - [includeSpec]: whether to include original stored spec data.
+  ///
+  /// Return value:
+  /// - `Future<Result<FollowRule?>>` containing the rule when found.
+  ///
+  /// Requirements/Preconditions:
+  /// - This entity must be connected to Epiphany.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Reuses the current request-backed native CRUD path.
+  ///
+  /// Invariants:
+  /// - Reading rules never mutates realized connection state.
+  Future<Result<FollowRule?>> readFollowRule(String name,
       {NamespaceSelector? namespaceSelector,
       bool includeResolved = false,
       bool includeSpec = false}) async {
-    return _runNativeCrudOperation<FollowRequest?>(
-      (NativeDogPawEntityClient client) => client.readFollowRequest(
+    return _runNativeCrudOperation<FollowRule?>(
+      (NativeDogPawEntityClient client) => client.readFollowRule(
         name,
         namespaceSelector:
             namespaceSelector ?? const NamespaceSelector.currentEntity(),
@@ -2583,10 +2758,28 @@ class DogPawEntity {
     );
   }
 
-  Future<Result<bool>> deleteFollowRequest(String name,
+  /// Purpose: Delete one follow rule by name.
+  ///
+  /// Parameters:
+  /// - [name]: `String` rule name to delete.
+  /// - [namespaceSelector]: optional namespace containing the rule.
+  ///
+  /// Return value:
+  /// - `Future<Result<bool>>` indicating whether the delete succeeded.
+  ///
+  /// Requirements/Preconditions:
+  /// - This entity must be connected to Epiphany.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Reuses the current request-backed native CRUD path.
+  ///
+  /// Invariants:
+  /// - Deleting one rule does not directly remove other rules that justify the
+  ///   same realized connection.
+  Future<Result<bool>> deleteFollowRule(String name,
       {NamespaceSelector? namespaceSelector}) async {
     return _runNativeCrudOperation<bool>(
-      (NativeDogPawEntityClient client) => client.deleteFollowRequest(
+      (NativeDogPawEntityClient client) => client.deleteFollowRule(
         name,
         namespaceSelector:
             namespaceSelector ?? const NamespaceSelector.currentEntity(),
@@ -2594,12 +2787,31 @@ class DogPawEntity {
     );
   }
 
-  Future<Result<List<FollowRequest>>> listFollowRequests(
+  /// Purpose: List follow rules in one namespace.
+  ///
+  /// Parameters:
+  /// - [namespaceSelector]: optional namespace to query.
+  /// - [includeResolved]: whether to include resolved server metadata.
+  /// - [includeSpec]: whether to include original stored spec data.
+  ///
+  /// Return value:
+  /// - `Future<Result<List<FollowRule>>>` containing matching rules.
+  ///
+  /// Requirements/Preconditions:
+  /// - This entity must be connected to Epiphany.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Reuses the current request-backed native CRUD path.
+  ///
+  /// Invariants:
+  /// - Returned items are writable mirrored-routing rule definitions, not
+  ///   realized connections.
+  Future<Result<List<FollowRule>>> listFollowRules(
       {NamespaceSelector? namespaceSelector,
       bool includeResolved = false,
       bool includeSpec = false}) async {
-    return _runNativeCrudOperation<List<FollowRequest>>(
-      (NativeDogPawEntityClient client) => client.listFollowRequests(
+    return _runNativeCrudOperation<List<FollowRule>>(
+      (NativeDogPawEntityClient client) => client.listFollowRules(
         namespaceSelector:
             namespaceSelector ?? const NamespaceSelector.currentEntity(),
         includeResolved: includeResolved,
