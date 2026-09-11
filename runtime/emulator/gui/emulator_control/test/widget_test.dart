@@ -293,7 +293,8 @@ void main() {
     await tester.tap(find.byTooltip('Rotate knob 0 left'));
     await tester.tap(find.byTooltip('Rotate knob 0 right'));
 
-    expect(rawValues, <int>[-25, 1, -1]);
+    // Snapshot raw equals simulator position; no GUI-side direction flip.
+    expect(rawValues, <int>[25, -1, 1]);
     expect(normalizedValues, <double>[0.25]);
   });
 

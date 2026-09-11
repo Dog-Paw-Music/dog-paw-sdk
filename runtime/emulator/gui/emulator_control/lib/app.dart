@@ -19,33 +19,6 @@ typedef BakKnobSetNormalizedHandler = Future<void> Function(
   double value,
 );
 
-/// Translate one displayed raw knob value into simulator hardware position.
-///
-/// Purpose: keeps the GUI's raw slider aligned with the post-processed raw
-/// values shown in BAK snapshots, even though the simulator hardware path still
-/// uses the pre-inversion encoder direction.
-/// Parameters: [displayedRawValue] is the raw value currently shown in the GUI.
-/// Return value: raw position to send through the bridge to the simulator.
-/// Requirements: [displayedRawValue] should be within the GUI raw slider range.
-/// Guarantees: preserves magnitude and flips only direction.
-/// Invariants: pure mapping; does not inspect widget or bridge state.
-int bakDisplayedRawValueToSimulatorRaw(int displayedRawValue) {
-  return -displayedRawValue;
-}
-
-/// Translate one displayed rotation direction into simulator hardware steps.
-///
-/// Purpose: keeps the left/right knob buttons moving the displayed raw value in
-/// the same direction the user clicked.
-/// Parameters: [displayedDelta] is the desired displayed step delta.
-/// Return value: hardware delta to send through the bridge.
-/// Requirements: callers should pass a small signed step count.
-/// Guarantees: preserves magnitude and flips only direction.
-/// Invariants: pure mapping; does not inspect widget or bridge state.
-int bakDisplayedRotationDeltaToSimulatorDelta(int displayedDelta) {
-  return -displayedDelta;
-}
-
 const Color _defaultKeyTileFillColor = Color(0xFF22303B);
 const Duration _bridgeStatusPollInterval = Duration(milliseconds: 750);
 const Duration _ledSnapshotPollInterval = Duration(milliseconds: 33);
@@ -1543,22 +1516,14 @@ class _BakControlRow extends StatelessWidget {
                   Text('Raw: ${knob.raw}'),
                   const SizedBox(width: 8),
                   IconButton.filled(
-                    onPressed: enabled
-                        ? () => onKnobRotate(
-                              index,
-                              bakDisplayedRotationDeltaToSimulatorDelta(-1),
-                            )
-                        : null,
+                    onPressed:
+                        enabled ? () => onKnobRotate(index, -1) : null,
                     icon: const Icon(Icons.remove),
                     tooltip: 'Rotate knob $index left',
                   ),
                   IconButton.filled(
-                    onPressed: enabled
-                        ? () => onKnobRotate(
-                              index,
-                              bakDisplayedRotationDeltaToSimulatorDelta(1),
-                            )
-                        : null,
+                    onPressed:
+                        enabled ? () => onKnobRotate(index, 1) : null,
                     icon: const Icon(Icons.add),
                     tooltip: 'Rotate knob $index right',
                   ),
@@ -1571,10 +1536,7 @@ class _BakControlRow extends StatelessWidget {
                 divisions: 200,
                 label: knob.raw.toString(),
                 onChanged: enabled
-                    ? (value) => onKnobSetRaw(
-                          index,
-                          bakDisplayedRawValueToSimulatorRaw(value.round()),
-                        )
+                    ? (value) => onKnobSetRaw(index, value.round())
                     : null,
               ),
               Row(
