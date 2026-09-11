@@ -514,6 +514,10 @@ void registerCRUDTests<T>(
   // Stress Tests
   // ===========================================================================
 
+  // Stress: fire many concurrent sets and require all to succeed within the
+  // entity request timeout. Layout CRUD is known to be much slower here than
+  // Theme/Scale under the same pattern; layout_test.dart raises that timeout
+  // as a temporary mitigation — investigate layout/set concurrency cost later.
   test('ManyCreatedConcurrently', () async {
     final entities = getEntities();
     const numItems = 50;

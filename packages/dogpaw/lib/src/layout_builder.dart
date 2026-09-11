@@ -1,10 +1,8 @@
 import 'dart:collection';
 
-import 'data_reference.dart';
 import 'json_constants.dart';
 import 'layout.dart';
-import 'scale.dart';
-import 'theme.dart';
+import 'layout_choice.dart';
 
 /// Purpose:
 /// Shared immutable musical grid settings used to generate interval-based layout
@@ -192,6 +190,33 @@ class LayoutSettings {
         'semitoneTranspose: $semitoneTranspose, '
         'bendRange: $bendRange)';
   }
+}
+
+/// Purpose:
+/// Convert one reusable layout-editor note mode into the persisted bend policy
+/// that DPPHost consumes from `LayoutData`.
+///
+/// Parameters:
+/// - `layoutMode`: Draft note-layout mode such as `'scale'` or `'chromatic'`.
+///
+/// Return value:
+/// - `'nextInScale'` when scale mode should derive asymmetric per-key bend
+///   ranges from the resolved scale.
+/// - `'fixed'` for chromatic and all other modes.
+///
+/// Requirements/Preconditions:
+/// - `layoutMode` should follow the same contract as `LayoutSettings.layoutMode`.
+///
+/// Guarantees/Postconditions:
+/// - Returns a bend-policy string accepted by `LayoutData`.
+///
+/// Invariants:
+/// - Pure mapping with no I/O or stateful behavior.
+String bendModeForLayoutMode(String layoutMode) {
+  if (layoutMode == 'scale') {
+    return 'nextInScale';
+  }
+  return 'fixed';
 }
 
 /// Purpose:
@@ -731,8 +756,8 @@ Map<String, dynamic> generateLayoutKeyColors(LayoutColorStrategy strategy) {
 /// - `scope`: layout ownership metadata.
 /// - `bounds`: inclusive grid rectangle to emit.
 /// - `colorStrategy`: key-color generation strategy.
-/// - `themeRef`: theme reference to embed; defaults to current theme.
-/// - `scaleRef`: scale reference to embed; defaults to current scale.
+/// - `themeChoice`: persisted theme-selection choice; defaults to shared theme.
+/// - `scaleChoice`: persisted scale-selection choice; defaults to shared scale.
 ///
 /// Return value:
 /// - Fully populated `LayoutData`.
@@ -751,16 +776,17 @@ LayoutData buildIntervalGridLayoutData({
   LayoutScopeSettings scope = const LayoutScopeSettings.shared(),
   LayoutGridBounds bounds = const LayoutGridBounds.fullGrid(),
   LayoutColorStrategy colorStrategy = const LayoutColorStrategy.scaleCategories(),
-  DataReference<Theme>? themeRef,
-  DataReference<Scale>? scaleRef,
+  LayoutThemeChoice themeChoice = const LayoutThemeChoice.shared(),
+  LayoutScaleChoice scaleChoice = const LayoutScaleChoice.shared(),
 }) {
   return LayoutData(
     displayName: displayName,
+    bendMode: bendModeForLayoutMode(settings.layoutMode),
     scope: scope.scope,
     targetKey: scope.targetKey,
     keyIntents: generateIntervalGridKeyIntents(settings, bounds: bounds),
     keyColors: generateLayoutKeyColors(colorStrategy),
-    themeRef: themeRef ?? DataReference<Theme>.current(),
-    scaleRef: scaleRef ?? DataReference<Scale>.current(),
+    themeChoice: themeChoice,
+    scaleChoice: scaleChoice,
   );
 }

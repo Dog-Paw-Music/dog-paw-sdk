@@ -13,8 +13,9 @@
 **/.flutter-plugins-dependencies
 **/build/
 
-# Flutter lockfiles are host-toolchain-local in the exported SDK
+# Flutter lockfiles and host-local overrides are toolchain/checkout local
 **/pubspec.lock
+**/pubspec_overrides.yaml
 
 # Python bytecode
 **/__pycache__/

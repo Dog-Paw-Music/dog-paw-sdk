@@ -35,7 +35,8 @@ void main() {
       final Map<String, dynamic> firstIntent = intents['0,0']!.first;
 
       expect(firstIntent[JsonFields.INTENT], equals(JsonFields.MIDI_NOTE));
-      expect(firstIntent.containsKey(JsonFields.SCALE_DEGREES_FROM_ROOT), isTrue);
+      expect(
+          firstIntent.containsKey(JsonFields.SCALE_DEGREES_FROM_ROOT), isTrue);
       expect(firstIntent.containsKey(JsonFields.SEMITONES_FROM_ROOT), isFalse);
       expect(firstIntent.containsKey(JsonFields.OCTAVE), isTrue);
     });
@@ -48,7 +49,8 @@ void main() {
       final Map<String, dynamic> firstIntent = intents['0,0']!.first;
 
       expect(firstIntent[JsonFields.INTENT], equals(JsonFields.MIDI_NOTE));
-      expect(firstIntent.containsKey(JsonFields.SCALE_DEGREES_FROM_ROOT), isFalse);
+      expect(
+          firstIntent.containsKey(JsonFields.SCALE_DEGREES_FROM_ROOT), isFalse);
       expect(firstIntent.containsKey(JsonFields.SEMITONES_FROM_ROOT), isTrue);
       expect(firstIntent.containsKey(JsonFields.OCTAVE), isTrue);
     });
@@ -75,7 +77,8 @@ void main() {
       expect(intents.containsKey('7,7'), isFalse);
     });
 
-    test('anchors the lowest note to the top row for negative row intervals', () {
+    test('anchors the lowest note to the top row for negative row intervals',
+        () {
       const LayoutSettings settings = LayoutSettings(
         layoutMode: 'chromatic',
         rowInterval: -3,
@@ -90,7 +93,9 @@ void main() {
       expect(_semitoneOffsetForKey(intents, '0,6'), equals(3));
     });
 
-    test('anchors the lowest note to the right column for negative column intervals', () {
+    test(
+        'anchors the lowest note to the right column for negative column intervals',
+        () {
       const LayoutSettings settings = LayoutSettings(
         layoutMode: 'chromatic',
         rowInterval: 5,
@@ -124,11 +129,12 @@ void main() {
 
   group('LayoutColorStrategy', () {
     test('builds default scale-category key colors', () {
-      const LayoutColorStrategy strategy = LayoutColorStrategy.scaleCategories();
+      const LayoutColorStrategy strategy =
+          LayoutColorStrategy.scaleCategories();
 
       final Map<String, dynamic> keyColors = generateLayoutKeyColors(strategy);
-      final Map<String, dynamic> noteCategoryMap =
-          Map<String, dynamic>.from(keyColors[JsonFields.NOTE_CATEGORY_MAP] as Map);
+      final Map<String, dynamic> noteCategoryMap = Map<String, dynamic>.from(
+          keyColors[JsonFields.NOTE_CATEGORY_MAP] as Map);
 
       expect(noteCategoryMap['-1'], equals('background'));
       expect(noteCategoryMap['1'], equals('secondary'));
@@ -144,8 +150,8 @@ void main() {
       );
 
       final Map<String, dynamic> keyColors = generateLayoutKeyColors(strategy);
-      final Map<String, dynamic> noteNumberMap =
-          Map<String, dynamic>.from(keyColors[JsonFields.NOTE_NUMBER_MAP] as Map);
+      final Map<String, dynamic> noteNumberMap = Map<String, dynamic>.from(
+          keyColors[JsonFields.NOTE_NUMBER_MAP] as Map);
 
       expect(noteNumberMap['0'], equals('primary'));
       expect(
@@ -156,7 +162,8 @@ void main() {
   });
 
   group('buildIntervalGridLayoutData', () {
-    test('builds shared layout data with current refs by default', () {
+    test('builds shared layout data with shared choices and scale bend by default',
+        () {
       const LayoutSettings settings = LayoutSettings();
 
       final LayoutData layoutData = buildIntervalGridLayoutData(
@@ -168,12 +175,18 @@ void main() {
       expect(layoutData.scope, equals('shared'));
       expect(layoutData.targetKey, isNull);
       expect(layoutData.keyIntents.length, equals(64));
-      expect(layoutData.keyColors.containsKey(JsonFields.NOTE_CATEGORY_MAP), isTrue);
-      expect(layoutData.themeRef, equals(DataReference<Theme>.current()));
-      expect(layoutData.scaleRef, equals(DataReference<Scale>.current()));
+      expect(layoutData.keyColors.containsKey(JsonFields.NOTE_CATEGORY_MAP),
+          isTrue);
+      expect(layoutData.themeChoice, equals(const LayoutThemeChoice.shared()));
+      expect(layoutData.scaleChoice, equals(const LayoutScaleChoice.shared()));
+      expect(layoutData.themeRef, equals(sharedThemeDataReference()));
+      expect(layoutData.scaleRef, equals(sharedScaleDataReference()));
+      expect(layoutData.toJson()['bendMode'], equals('nextInScale'));
+      expect(layoutData.toJson()['bendRangeSemitones'], equals(2.0));
     });
 
-    test('builds targeted layout data with bounded grid and explicit refs', () {
+    test('builds targeted layout data with bounded grid and explicit choices',
+        () {
       const LayoutSettings settings = LayoutSettings(layoutMode: 'chromatic');
       const LayoutGridBounds bounds = LayoutGridBounds(
         startColumn: 0,
@@ -193,18 +206,20 @@ void main() {
         scope: const LayoutScopeSettings.targeted('Voice2LED_2'),
         bounds: bounds,
         colorStrategy: strategy,
-        themeRef: DataReference<Theme>.byName(
-          'Theme A',
-          namespaceSelector: const NamespaceSelector.global(),
+        themeChoice: const LayoutThemeChoice.shared(
+          overrideTheme: ThemeData(
+            displayName: 'Dormant Theme Override',
+            primaryColor: '#101010',
+            secondaryColor: '#202020',
+            accentColor: '#303030',
+            backgroundColor: '#000000',
+          ),
         ),
-        scaleRef: DataReference<Scale>.inline(
-          Scale(
-            name: 'inline_scale',
-            spec: const ScaleData(
-              displayName: 'Inline Scale',
-              rootNote: 0,
-              noteCategories: <int>[3, -1, 1, -1, 1, 1, -1, 1, -1, 1, -1, 1],
-            ),
+        scaleChoice: const LayoutScaleChoice.overrideValue(
+          ScaleData(
+            displayName: 'Inline Scale',
+            rootNote: 0,
+            noteCategories: <int>[3, -1, 1, -1, 1, 1, -1, 1, -1, 1, -1, 1],
           ),
         ),
       );
@@ -212,9 +227,14 @@ void main() {
       expect(layoutData.scope, equals('targeted'));
       expect(layoutData.targetKey, equals('Voice2LED_2'));
       expect(layoutData.keyIntents.length, equals(4));
-      expect(layoutData.keyColors.containsKey(JsonFields.NOTE_NUMBER_MAP), isTrue);
+      expect(
+          layoutData.keyColors.containsKey(JsonFields.NOTE_NUMBER_MAP), isTrue);
+      expect(layoutData.themeChoice, isNotNull);
+      expect(layoutData.scaleChoice, isNotNull);
       expect(layoutData.themeRef, isNotNull);
       expect(layoutData.scaleRef, isNotNull);
+      expect(layoutData.toJson()['bendMode'], equals('fixed'));
+      expect(layoutData.toJson()['bendRangeSemitones'], equals(2.0));
     });
   });
 }

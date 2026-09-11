@@ -4,12 +4,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _RecordingThemePreviewController
-    implements EditorPreviewController<dp.ThemeData> {
-  dp.ThemeData? lastPreviewValue;
+    implements
+        EditorPreviewController<SharedOverrideEditorValue<dp.ThemeData>> {
+  SharedOverrideEditorValue<dp.ThemeData>? lastPreviewValue;
   bool wasCleared = false;
 
   @override
-  Future<void> preview(dp.ThemeData value) async {
+  Future<void> preview(
+    SharedOverrideEditorValue<dp.ThemeData> value,
+  ) async {
     lastPreviewValue = value;
   }
 
@@ -22,9 +25,11 @@ class _RecordingThemePreviewController
 void main() {
   Future<void> pumpThemeEditor(
     WidgetTester tester, {
-    required dp.ThemeData value,
-    required ValueChanged<dp.ThemeData> onChanged,
-    EditorPreviewController<dp.ThemeData>? previewController,
+    required SharedOverrideEditorValue<dp.ThemeData> value,
+    required ValueChanged<SharedOverrideEditorValue<dp.ThemeData>> onChanged,
+    EditorPreviewController<SharedOverrideEditorValue<dp.ThemeData>>?
+        previewController,
+    bool showSourceSelector = true,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -33,6 +38,7 @@ void main() {
             value: value,
             onChanged: onChanged,
             previewController: previewController,
+            showSourceSelector: showSourceSelector,
           ),
         ),
       ),
@@ -44,16 +50,21 @@ void main() {
       (WidgetTester tester) async {
     await pumpThemeEditor(
       tester,
-      value: const dp.ThemeData(
-        displayName: 'Test Theme',
-        primaryColor: '#ff0000',
-        secondaryColor: '#00ff00',
-        accentColor: '#0000ff',
-        backgroundColor: '#101010',
+      value: const SharedOverrideEditorValue<dp.ThemeData>(
+        activeSource: dp.LayoutChoiceActiveSource.shared,
+        sharedValue: dp.ThemeData(
+          displayName: 'Test Theme',
+          primaryColor: '#ff0000',
+          secondaryColor: '#00ff00',
+          accentColor: '#0000ff',
+          backgroundColor: '#101010',
+        ),
       ),
       onChanged: (_) {},
     );
 
+    expect(find.byKey(const Key('theme-source-shared')), findsOneWidget);
+    expect(find.byKey(const Key('theme-source-override')), findsOneWidget);
     expect(find.byKey(const Key('theme-role-Root')), findsOneWidget);
     expect(find.byKey(const Key('theme-role-In Scale')), findsOneWidget);
     expect(find.byKey(const Key('theme-role-Background')), findsOneWidget);
@@ -68,12 +79,15 @@ void main() {
       (WidgetTester tester) async {
     await pumpThemeEditor(
       tester,
-      value: const dp.ThemeData(
-        displayName: 'Test Theme',
-        primaryColor: '#ff0000',
-        secondaryColor: '#00ff00',
-        accentColor: '#0000ff',
-        backgroundColor: '#101010',
+      value: const SharedOverrideEditorValue<dp.ThemeData>(
+        activeSource: dp.LayoutChoiceActiveSource.shared,
+        sharedValue: dp.ThemeData(
+          displayName: 'Test Theme',
+          primaryColor: '#ff0000',
+          secondaryColor: '#00ff00',
+          accentColor: '#0000ff',
+          backgroundColor: '#101010',
+        ),
       ),
       onChanged: (_) {},
     );
@@ -94,12 +108,15 @@ void main() {
       (WidgetTester tester) async {
     await pumpThemeEditor(
       tester,
-      value: const dp.ThemeData(
-        displayName: 'Test Theme',
-        primaryColor: '#ff0000',
-        secondaryColor: '#00ff00',
-        accentColor: '#0000ff',
-        backgroundColor: '#101010',
+      value: const SharedOverrideEditorValue<dp.ThemeData>(
+        activeSource: dp.LayoutChoiceActiveSource.shared,
+        sharedValue: dp.ThemeData(
+          displayName: 'Test Theme',
+          primaryColor: '#ff0000',
+          secondaryColor: '#00ff00',
+          accentColor: '#0000ff',
+          backgroundColor: '#101010',
+        ),
       ),
       onChanged: (_) {},
     );
@@ -117,18 +134,21 @@ void main() {
       (WidgetTester tester) async {
     final _RecordingThemePreviewController previewController =
         _RecordingThemePreviewController();
-    dp.ThemeData? latestValue;
+    SharedOverrideEditorValue<dp.ThemeData>? latestValue;
 
     await pumpThemeEditor(
       tester,
-      value: const dp.ThemeData(
-        displayName: 'Test Theme',
-        primaryColor: '#ff0000',
-        secondaryColor: '#00ff00',
-        accentColor: '#0000ff',
-        backgroundColor: '#101010',
+      value: const SharedOverrideEditorValue<dp.ThemeData>(
+        activeSource: dp.LayoutChoiceActiveSource.shared,
+        sharedValue: dp.ThemeData(
+          displayName: 'Test Theme',
+          primaryColor: '#ff0000',
+          secondaryColor: '#00ff00',
+          accentColor: '#0000ff',
+          backgroundColor: '#101010',
+        ),
       ),
-      onChanged: (dp.ThemeData nextValue) {
+      onChanged: (SharedOverrideEditorValue<dp.ThemeData> nextValue) {
         latestValue = nextValue;
       },
       previewController: previewController,
@@ -143,21 +163,27 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(latestValue, isNotNull);
-    expect(latestValue!.primaryColor, equals('#2196f3'));
+    expect(latestValue!.sharedValue.primaryColor, equals('#2196f3'));
     expect(previewController.lastPreviewValue, isNotNull);
-    expect(previewController.lastPreviewValue!.primaryColor, equals('#2196f3'));
+    expect(
+      previewController.lastPreviewValue!.effectiveValue.primaryColor,
+      equals('#2196f3'),
+    );
   });
 
   testWidgets('selected theme role is visibly emphasized',
       (WidgetTester tester) async {
     await pumpThemeEditor(
       tester,
-      value: const dp.ThemeData(
-        displayName: 'Test Theme',
-        primaryColor: '#ff0000',
-        secondaryColor: '#00ff00',
-        accentColor: '#0000ff',
-        backgroundColor: '#101010',
+      value: const SharedOverrideEditorValue<dp.ThemeData>(
+        activeSource: dp.LayoutChoiceActiveSource.shared,
+        sharedValue: dp.ThemeData(
+          displayName: 'Test Theme',
+          primaryColor: '#ff0000',
+          secondaryColor: '#00ff00',
+          accentColor: '#0000ff',
+          backgroundColor: '#101010',
+        ),
       ),
       onChanged: (_) {},
     );
@@ -193,12 +219,15 @@ void main() {
 
     await pumpThemeEditor(
       tester,
-      value: const dp.ThemeData(
-        displayName: 'Test Theme',
-        primaryColor: '#ff0000',
-        secondaryColor: '#00ff00',
-        accentColor: '#0000ff',
-        backgroundColor: '#101010',
+      value: const SharedOverrideEditorValue<dp.ThemeData>(
+        activeSource: dp.LayoutChoiceActiveSource.shared,
+        sharedValue: dp.ThemeData(
+          displayName: 'Test Theme',
+          primaryColor: '#ff0000',
+          secondaryColor: '#00ff00',
+          accentColor: '#0000ff',
+          backgroundColor: '#101010',
+        ),
       ),
       onChanged: (_) {},
       previewController: previewController,
@@ -211,7 +240,83 @@ void main() {
     await tester.pump(const Duration(milliseconds: 120));
 
     expect(previewController.lastPreviewValue, isNotNull);
-    expect(previewController.lastPreviewValue!.primaryColor, isNot('#ff0000'));
+    expect(
+      previewController.lastPreviewValue!.effectiveValue.primaryColor,
+      isNot('#ff0000'),
+    );
+  });
+
+  testWidgets('switching to override clones shared theme when no override exists',
+      (WidgetTester tester) async {
+    SharedOverrideEditorValue<dp.ThemeData>? latestValue;
+
+    await pumpThemeEditor(
+      tester,
+      value: const SharedOverrideEditorValue<dp.ThemeData>(
+        activeSource: dp.LayoutChoiceActiveSource.shared,
+        sharedValue: dp.ThemeData(
+          displayName: 'Shared Theme',
+          primaryColor: '#112233',
+          secondaryColor: '#223344',
+          accentColor: '#334455',
+          backgroundColor: '#000000',
+        ),
+      ),
+      onChanged: (SharedOverrideEditorValue<dp.ThemeData> nextValue) {
+        latestValue = nextValue;
+      },
+    );
+
+    await tester.tap(find.byKey(const Key('theme-source-override')));
+    await tester.pumpAndSettle();
+
+    expect(latestValue, isNotNull);
+    expect(
+      latestValue!.activeSource,
+      equals(dp.LayoutChoiceActiveSource.overrideValue),
+    );
+    expect(latestValue!.overrideValue, isNotNull);
+    expect(latestValue!.overrideValue!.primaryColor, equals('#112233'));
+  });
+
+  testWidgets('reset clears the saved override and returns to shared mode',
+      (WidgetTester tester) async {
+    SharedOverrideEditorValue<dp.ThemeData>? latestValue;
+
+    await pumpThemeEditor(
+      tester,
+      value: const SharedOverrideEditorValue<dp.ThemeData>(
+        activeSource: dp.LayoutChoiceActiveSource.overrideValue,
+        sharedValue: dp.ThemeData(
+          displayName: 'Shared Theme',
+          primaryColor: '#112233',
+          secondaryColor: '#223344',
+          accentColor: '#334455',
+          backgroundColor: '#000000',
+        ),
+        overrideValue: dp.ThemeData(
+          displayName: 'Override Theme',
+          primaryColor: '#abcdef',
+          secondaryColor: '#bcdef0',
+          accentColor: '#cdef01',
+          backgroundColor: '#101010',
+        ),
+      ),
+      onChanged: (SharedOverrideEditorValue<dp.ThemeData> nextValue) {
+        latestValue = nextValue;
+      },
+    );
+
+    expect(find.byKey(const Key('theme-reset-override')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('theme-reset-override')));
+    await tester.pumpAndSettle();
+
+    expect(latestValue, isNotNull);
+    expect(
+      latestValue!.activeSource,
+      equals(dp.LayoutChoiceActiveSource.shared),
+    );
+    expect(latestValue!.overrideValue, isNull);
   });
 
   testWidgets('standalone picker reports throttled updates during drag',
@@ -255,12 +360,16 @@ void main() {
       (WidgetTester tester) async {
     final _RecordingThemePreviewController previewController =
         _RecordingThemePreviewController();
-    const dp.ThemeData initialTheme = dp.ThemeData(
-      displayName: 'Test Theme',
-      primaryColor: '#ff0000',
-      secondaryColor: '#00ff00',
-      accentColor: '#0000ff',
-      backgroundColor: '#101010',
+    const SharedOverrideEditorValue<dp.ThemeData> initialTheme =
+        SharedOverrideEditorValue<dp.ThemeData>(
+      activeSource: dp.LayoutChoiceActiveSource.shared,
+      sharedValue: dp.ThemeData(
+        displayName: 'Test Theme',
+        primaryColor: '#ff0000',
+        secondaryColor: '#00ff00',
+        accentColor: '#0000ff',
+        backgroundColor: '#101010',
+      ),
     );
 
     await tester.pumpWidget(
@@ -274,6 +383,7 @@ void main() {
                     context: context,
                     initialValue: initialTheme,
                     previewController: previewController,
+                    showSourceSelector: true,
                   );
                 },
                 child: const Text('Open Theme Dialog'),
@@ -290,6 +400,8 @@ void main() {
 
     expect(find.text('Done'), findsOneWidget);
     expect(find.text('Cancel'), findsOneWidget);
+    expect(find.byKey(const Key('theme-source-shared')), findsOneWidget);
+    expect(find.byKey(const Key('theme-source-override')), findsOneWidget);
 
     await tester.tap(find.byKey(const Key('theme-swatch-#2196f3')));
     await tester.pumpAndSettle();
@@ -297,15 +409,21 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(previewController.lastPreviewValue, isNotNull);
-    expect(previewController.lastPreviewValue!.primaryColor, equals(initialTheme.primaryColor));
     expect(
-      previewController.lastPreviewValue!.secondaryColor,
-      equals(initialTheme.secondaryColor),
+      previewController.lastPreviewValue!.effectiveValue.primaryColor,
+      equals(initialTheme.sharedValue.primaryColor),
     );
-    expect(previewController.lastPreviewValue!.accentColor, equals(initialTheme.accentColor));
     expect(
-      previewController.lastPreviewValue!.backgroundColor,
-      equals(initialTheme.backgroundColor),
+      previewController.lastPreviewValue!.effectiveValue.secondaryColor,
+      equals(initialTheme.sharedValue.secondaryColor),
+    );
+    expect(
+      previewController.lastPreviewValue!.effectiveValue.accentColor,
+      equals(initialTheme.sharedValue.accentColor),
+    );
+    expect(
+      previewController.lastPreviewValue!.effectiveValue.backgroundColor,
+      equals(initialTheme.sharedValue.backgroundColor),
     );
     expect(previewController.wasCleared, isTrue);
   });

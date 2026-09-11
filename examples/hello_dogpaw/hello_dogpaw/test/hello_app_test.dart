@@ -4,35 +4,24 @@ import 'package:hello_dogpaw/app.dart';
 import 'package:hello_dogpaw/controllers/hello_controller.dart';
 import 'package:provider/provider.dart';
 
-class StubHelloDogPawClient implements HelloDogPawClient {
-  @override
-  Future<dp.ConnectionResult> connect() async {
-    return dp.ConnectionResult.error('unused in widget test');
-  }
-
-  @override
-  Future<dp.Result<dp.LocalEndpoint>> createEndpoint(dp.EndpointInfo endpoint) async {
-    return dp.Result.error('unused in widget test');
-  }
-
-  @override
-  void disconnect() {}
-}
-
+/// Smoke: the shell paints. Connection to Epiphany is not required to pass.
 void main() {
-  testWidgets('hello app shows intro text and swatch controls', (
-    WidgetTester tester,
-  ) async {
+  testWidgets('hello app shows title and color rows', (WidgetTester tester) async {
     await tester.pumpWidget(
       ChangeNotifierProvider<HelloController>(
-        create: (_) => HelloController(client: StubHelloDogPawClient()),
+        create: (_) => HelloController(
+          entity: dp.DogPawEntity('HelloDogPawSmoke'),
+        ),
         child: const HelloDogPawApp(),
       ),
     );
 
+    // Let the post-frame start() attempt run (it will fail without Epiphany).
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
     expect(find.text('Hello Dog Paw'), findsOneWidget);
     expect(find.text('Active Keys'), findsOneWidget);
     expect(find.text('Pressed Keys'), findsOneWidget);
-    expect(find.textContaining('auto-connects on startup'), findsOneWidget);
   });
 }

@@ -11,6 +11,10 @@ import '../models/editor_preview.dart';
 /// - `initialValue`: Starting layout draft shown to the user.
 /// - `previewController`: Optional host-owned live preview integration.
 /// - `availableTargets`: Host-provided target-picker choices.
+/// - `sharedTheme`: Current shared theme shown to the editor.
+/// - `sharedScale`: Current shared scale shown to the editor.
+/// - `onSharedThemeChanged`: Callback for shared-theme edits.
+/// - `onSharedScaleChanged`: Callback for shared-scale edits.
 /// - `targetVisibility`: Whether the target section is editable, read-only, or hidden.
 /// - `themeVisibility`: Whether the theme section is editable, read-only, or hidden.
 /// - `scaleVisibility`: Whether the scale section is editable, read-only, or hidden.
@@ -30,6 +34,10 @@ import '../models/editor_preview.dart';
 Future<dp.LayoutDraft?> showLayoutEditorDialog({
   required BuildContext context,
   required dp.LayoutDraft initialValue,
+  required dp.ThemeData sharedTheme,
+  required dp.ScaleData sharedScale,
+  required ValueChanged<dp.ThemeData> onSharedThemeChanged,
+  required ValueChanged<dp.ScaleData> onSharedScaleChanged,
   EditorPreviewController<dp.LayoutDraft>? previewController,
   List<LayoutEditorTargetOption> availableTargets =
       const <LayoutEditorTargetOption>[],
@@ -73,6 +81,10 @@ Future<dp.LayoutDraft?> showLayoutEditorDialog({
                           currentValue = nextValue;
                         });
                       },
+                      sharedTheme: sharedTheme,
+                      sharedScale: sharedScale,
+                      onSharedThemeChanged: onSharedThemeChanged,
+                      onSharedScaleChanged: onSharedScaleChanged,
                       previewController: previewController,
                       availableTargets: availableTargets,
                       targetVisibility: targetVisibility,

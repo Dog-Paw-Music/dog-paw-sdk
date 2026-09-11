@@ -29,6 +29,9 @@ enum DataType {
   /// Enumerated value selection
   enum_,
 
+  /// Packed 32-bit color value
+  color,
+
   /// Real-time audio data
   audioStream,
 
@@ -62,14 +65,20 @@ enum DataType {
   /// One current scalar value for one global output lane
   globalOutputValue,
 
-  /// DPP parameter queue message: uint16 param index + reserved + double value
-  dppParamQueue,
+  /// DPP editor message: tagged param/note payload for low-rate editor control
+  dppEditorMessage,
 
   /// User-defined custom type, for use with file backed endpoints (cannot be used wtih queue or continuous endpoints)
   custom,
 
   /// Downsampled stereo audio snapshot: sample_count (uint64) + left[256] + right[256] floats
   scopeBuffer,
+
+  /// Full theme data value
+  theme,
+
+  /// Full musical scale data value
+  scale,
 }
 
 /// Index types for organizing data by different dimensions
@@ -211,7 +220,10 @@ enum EndpointDirection {
   /// Sends data to other endpoints
   output,
 
-  /// Can both send and receive data (for instance, an encoder)
+  /// Can both send and receive data (for instance, an encoder).
+  ///
+  /// STALE: retained for Dart/JSON exhaustiveness only. C++ EndpointManager
+  /// no longer accepts bidirectional endpoints; do not author new ones.
   bidirectional,
 }
 
@@ -255,12 +267,6 @@ enum MappingType {
 
   /// Logarithmic curve mapping
   logarithmic,
-
-  /// Discrete lookup table
-  lookupTable,
-
-  /// Smooth bezier curve
-  bezierCurve,
 
   /// Mathematical expression
   expression,

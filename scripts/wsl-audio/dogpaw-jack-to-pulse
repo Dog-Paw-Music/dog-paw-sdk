@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+"""Bridge stereo JACK input ports to WSLg Pulse via pacat.
+
+Architecture:
+    Runs as a JACK client alongside ``jackd -d dummy``. Audio that reaches this
+    client's input ports is written as interleaved float32 to ``pacat``, which
+    plays through ``PULSE_SERVER`` (typically WSLg's Pulse socket on Windows).
+
+    jack-plumbing should also-connect ``system:playback_*`` to this client's
+    inputs so normal JACK apps hear Windows speakers without special routing.
+"""
+
+from __future__ import annotations
+
+import ctypes as C
+import os
+import signal
+import subprocess
+import sys
+import threading
+
+
+JACK_DEFAULT_AUDIO_TYPE = b"32 bit float mono audio"
+JackNullOption = 0
+JackPortIsInput = 0x1
+JackPortIsOutput = 0x2
+
+CLIENT_NAME = b"dogpaw_pulse"
+PORT_LEFT = b"in_1"
+PORT_RIGHT = b"in_2"
+
+
+def _load_jack() -> C.CDLL:
+    """Load libjack and configure the ctypes signatures used by this bridge.
+
+    Purpose:
+        Avoid a compile-time JACK SDK dependency while still speaking the JACK
+        C API for this WSL speaker bridge.
+    Return value:
+        Loaded ``libjack.so.0`` CDLL with restypes/argtypes set.
+    Requirements/Preconditions:
+        ``libjack.so.0`` must be resolvable (jackd2 / libjack-jackd2-0).
+    Guarantees/Postconditions:
+        Returned object is ready for ``jack_client_open`` and related calls.
+    Invariants:
+        Does not open a JACK client by itself.
+    """
+
+    jack = C.CDLL("libjack.so.0")
+    jack_client_t = C.c_void_p
+    jack_port_t = C.c_void_p
+    jack_nframes_t = C.c_uint32
+
+    jack.jack_client_open.restype = jack_client_t
+    jack.jack_client_open.argtypes = [C.c_char_p, C.c_int, C.POINTER(C.c_int)]
+    jack.jack_set_process_callback.argtypes = [jack_client_t, C.c_void_p, C.c_void_p]
+    jack.jack_port_register.restype = jack_port_t
+    jack.jack_port_register.argtypes = [
+        jack_client_t,
+        C.c_char_p,
+        C.c_char_p,
+        C.c_ulong,
+        C.c_ulong,
+    ]
+    jack.jack_get_sample_rate.restype = jack_nframes_t
+    jack.jack_get_sample_rate.argtypes = [jack_client_t]
+    jack.jack_port_get_buffer.restype = C.c_void_p
+    jack.jack_port_get_buffer.argtypes = [jack_port_t, jack_nframes_t]
+    jack.jack_activate.argtypes = [jack_client_t]
+    jack.jack_deactivate.argtypes = [jack_client_t]
+    jack.jack_client_close.argtypes = [jack_client_t]
+    return jack
+
+
+def main() -> int:
+    """Run the JACK→pacat bridge until SIGINT/SIGTERM.
+
+    Purpose:
+        Keep a long-lived process suitable for a user systemd service.
+    Return value:
+        Process exit code: 0 on clean shutdown, 1 on JACK/pacat setup failure.
+    Requirements/Preconditions:
+        A JACK server must already be running (typically ``jackd -d dummy``).
+        ``pacat`` must be on PATH. ``PULSE_SERVER`` should point at WSLg Pulse
+        when running under WSL (``unix:/mnt/wslg/PulseServer``).
+    Guarantees/Postconditions:
+        On success, JACK ports ``dogpaw_pulse:in_1`` and ``dogpaw_pulse:in_2``
+        accept audio until shutdown. On failure, no JACK client remains open.
+    Invariants:
+        Does not start or stop the JACK server.
+    """
+
+    os.environ.setdefault("PULSE_SERVER", "unix:/mnt/wslg/PulseServer")
+
+    jack = _load_jack()
+    PROCESS_CB = C.CFUNCTYPE(C.c_int, C.c_uint32, C.c_void_p)
+
+    pacat_proc: subprocess.Popen[bytes] | None = None
+    port_l = None
+    port_r = None
+    write_lock = threading.Lock()
+    running = True
+
+    def on_signal(signum: int, _frame: object) -> None:
+        nonlocal running
+        running = False
+
+    signal.signal(signal.SIGINT, on_signal)
+    signal.signal(signal.SIGTERM, on_signal)
+
+    @PROCESS_CB
+    def process(nframes: int, _arg: object) -> int:
+        nonlocal pacat_proc
+        if pacat_proc is None or port_l is None or port_r is None:
+            return 0
+        left_ptr = jack.jack_port_get_buffer(port_l, nframes)
+        right_ptr = jack.jack_port_get_buffer(port_r, nframes)
+        left = C.cast(left_ptr, C.POINTER(C.c_float))
+        right = C.cast(right_ptr, C.POINTER(C.c_float))
+        interleaved = (C.c_float * (nframes * 2))()
+        for i in range(nframes):
+            interleaved[i * 2] = left[i]
+            interleaved[i * 2 + 1] = right[i]
+        try:
+            with write_lock:
+                assert pacat_proc.stdin is not None
+                pacat_proc.stdin.write(bytes(interleaved))
+        except (BrokenPipeError, ValueError):
+            return 0
+        return 0
+
+    status = C.c_int(0)
+    client = jack.jack_client_open(CLIENT_NAME, JackNullOption, C.byref(status))
+    if not client:
+        print(f"dogpaw-jack-to-pulse: jack_client_open failed status={status.value}", file=sys.stderr)
+        return 1
+
+    jack.jack_set_process_callback(client, process, None)
+    port_l = jack.jack_port_register(
+        client, PORT_LEFT, JACK_DEFAULT_AUDIO_TYPE, JackPortIsInput, 0
+    )
+    port_r = jack.jack_port_register(
+        client, PORT_RIGHT, JACK_DEFAULT_AUDIO_TYPE, JackPortIsInput, 0
+    )
+    if not port_l or not port_r:
+        print("dogpaw-jack-to-pulse: failed to register input ports", file=sys.stderr)
+        jack.jack_client_close(client)
+        return 1
+
+    rate = int(jack.jack_get_sample_rate(client))
+    pacat_proc = subprocess.Popen(
+        [
+            "pacat",
+            "--playback",
+            "--raw",
+            f"--rate={rate}",
+            "--format=float32le",
+            "--channels=2",
+            "--latency-msec=100",
+        ],
+        stdin=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    if jack.jack_activate(client) != 0:
+        print("dogpaw-jack-to-pulse: jack_activate failed", file=sys.stderr)
+        pacat_proc.terminate()
+        jack.jack_client_close(client)
+        return 1
+
+    print(
+        f"dogpaw-jack-to-pulse: bridging dogpaw_pulse:in_1/in_2 -> pacat @ {rate} Hz "
+        f"(PULSE_SERVER={os.environ.get('PULSE_SERVER')})",
+        flush=True,
+    )
+
+    while running:
+        signal.pause()
+
+    jack.jack_deactivate(client)
+    jack.jack_client_close(client)
+    if pacat_proc.stdin is not None:
+        try:
+            pacat_proc.stdin.close()
+        except Exception:
+            pass
+    pacat_proc.terminate()
+    try:
+        pacat_proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        pacat_proc.kill()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

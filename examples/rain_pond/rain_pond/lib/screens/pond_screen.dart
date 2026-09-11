@@ -10,6 +10,14 @@ import '../utils/pond_keyboard_notes.dart';
 import '../widgets/pond_canvas.dart';
 import '../widgets/settings_drawer.dart';
 
+// =============================================================================
+// Rain Pond — screen
+//
+// After the first frame: initialize Dog Paw (prefs + connect), then
+// complete() the ConnectionHandle when connect succeeded. QWERTY keys feed the
+// same ripple path as hardware via submitKeyboardNote.
+// =============================================================================
+
 /// Full-screen pond with drawer and keyboard focus for local testing.
 class PondScreen extends StatefulWidget {
   const PondScreen({super.key});
@@ -25,6 +33,7 @@ class _PondScreenState extends State<PondScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _boot());
   }
 
+  /// Boot Dog Paw after Provider is available; complete the connection handle.
   Future<void> _boot() async {
     if (!mounted) {
       return;
@@ -39,24 +48,7 @@ class _PondScreenState extends State<PondScreen> {
     }
   }
 
-  /// Routes Flutter key events into [PondController] when they map to test ripples.
-  ///
-  /// Purpose:
-  ///     Lets Rain Pond run without Dog Paw hardware by turning a small QWERTY
-  ///     key set into synthetic press and release events.
-  /// Parameters:
-  ///     node: Focus node receiving the keyboard event.
-  ///     event: Flutter key transition to evaluate.
-  /// Return value:
-  ///     `KeyEventResult.handled` when Rain Pond consumes the event, otherwise
-  ///     `KeyEventResult.ignored`.
-  /// Requirements:
-  ///     The widget tree must provide a [PondController] above this screen.
-  /// Guarantees:
-  ///     Presses and releases for supported keys are forwarded with stable
-  ///     [RippleKeySource.keyboard] identifiers.
-  /// Invariants:
-  ///     Does not connect to Dog Paw or mutate widget focus state directly.
+  /// Map a small QWERTY set into [PondController.submitKeyboardNote].
   KeyEventResult _onKeyEvent(FocusNode node, KeyEvent event) {
     final PondController pond = context.read<PondController>();
     if (event is KeyRepeatEvent) {

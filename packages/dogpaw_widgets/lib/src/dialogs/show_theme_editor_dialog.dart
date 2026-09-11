@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../editors/theme_editor.dart';
 import '../models/editor_preview.dart';
+import '../models/shared_override_editor_value.dart';
 
 /// Show the reusable theme editor in a modal dialog.
 ///
@@ -10,6 +11,7 @@ import '../models/editor_preview.dart';
 /// - `context`: Build context used to present the dialog.
 /// - `initialValue`: Starting theme value shown to the user.
 /// - `previewController`: Optional host-owned live preview integration.
+/// - `showSourceSelector`: Whether to show the shared/override selector.
 ///
 /// Return value:
 /// - A future resolving to the final theme value when confirmed, or `null` when
@@ -23,15 +25,17 @@ import '../models/editor_preview.dart';
 ///
 /// Invariants:
 /// - The helper does not persist changes on its own.
-Future<dp.ThemeData?> showThemeEditorDialog({
+Future<SharedOverrideEditorValue<dp.ThemeData>?> showThemeEditorDialog({
   required BuildContext context,
-  required dp.ThemeData initialValue,
-  EditorPreviewController<dp.ThemeData>? previewController,
+  required SharedOverrideEditorValue<dp.ThemeData> initialValue,
+  EditorPreviewController<SharedOverrideEditorValue<dp.ThemeData>>?
+      previewController,
+  bool showSourceSelector = false,
 }) async {
-  final dp.ThemeData originalValue = initialValue;
-  dp.ThemeData currentValue = initialValue;
+  final SharedOverrideEditorValue<dp.ThemeData> originalValue = initialValue;
+  SharedOverrideEditorValue<dp.ThemeData> currentValue = initialValue;
 
-  return showDialog<dp.ThemeData>(
+  return showDialog<SharedOverrideEditorValue<dp.ThemeData>>(
     context: context,
     builder: (BuildContext dialogContext) {
       return StatefulBuilder(
@@ -60,12 +64,14 @@ Future<dp.ThemeData?> showThemeEditorDialog({
                     Flexible(
                       child: ThemeEditor(
                         value: currentValue,
-                        onChanged: (dp.ThemeData nextValue) {
+                        onChanged:
+                            (SharedOverrideEditorValue<dp.ThemeData> nextValue) {
                           setDialogState(() {
                             currentValue = nextValue;
                           });
                         },
                         previewController: previewController,
+                        showSourceSelector: showSourceSelector,
                       ),
                     ),
                     const SizedBox(height: 16),
@@ -88,6 +94,7 @@ Future<dp.ThemeData?> showThemeEditorDialog({
                         FilledButton(
                           onPressed: () async {
                             if (previewController != null) {
+                              await previewController.preview(currentValue);
                               await previewController.clear();
                             }
                             if (dialogContext.mounted) {

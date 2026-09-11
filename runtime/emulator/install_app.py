@@ -488,6 +488,9 @@ def install_app(
     extra_binary_paths: list[Path],
     *,
     keep_cache_on_install: bool = False,
+    flutter_sdk_version: str | None = None,
+    host_source_fingerprint: str | None = None,
+    host_build_mode: str | None = None,
 ) -> Path:
     """Install one Dog Paw app into an app registry root.
 
@@ -503,10 +506,19 @@ def install_app(
             installed bundle. Must match `install.extraBinaries`.
         keep_cache_on_install: When `True`, preserves any existing app cache
             instead of clearing it before install replacement.
+        flutter_sdk_version: Optional Flutter SDK version string captured by
+            Flutter install wrappers for later staleness checks.
+        host_source_fingerprint: Optional host-computed Flutter source
+            fingerprint. Must be provided with `host_build_mode`.
+        host_build_mode: Optional Flutter build mode associated with
+            `host_source_fingerprint`. Must be provided with
+            `host_source_fingerprint`.
     Return value:
         Path to the final installed app directory.
     Requirements/Preconditions:
         Exactly one of `binary_path` or `bundle_path` is provided.
+        `host_source_fingerprint` and `host_build_mode` are both set or both
+        omitted. Any provided Flutter metadata string is non-empty.
     Guarantees/Postconditions:
         On success, `<app_root>/<app-name>` is replaced atomically enough for
         local filesystem install workflows. On validation failure, no final app
@@ -517,6 +529,17 @@ def install_app(
     """
     if (binary_path is None) == (bundle_path is None):
         raise ValueError("Provide exactly one of --binary or --bundle")
+    if (host_source_fingerprint is None) != (host_build_mode is None):
+        raise ValueError(
+            "host source fingerprint and host build mode must be provided together"
+        )
+    for field_name, field_value in (
+        ("flutter SDK version", flutter_sdk_version),
+        ("host source fingerprint", host_source_fingerprint),
+        ("host build mode", host_build_mode),
+    ):
+        if field_value == "":
+            raise ValueError(f"{field_name} must be non-empty when provided")
 
     manifest_path = manifest_path.resolve()
     manifest_dir = manifest_path.parent
@@ -563,6 +586,9 @@ def install_app(
             binary_path=binary_path,
             bundle_path=bundle_path,
             extra_binary_paths=extra_binary_paths,
+            flutter_sdk_version=flutter_sdk_version,
+            host_source_fingerprint=host_source_fingerprint,
+            host_build_mode=host_build_mode,
         )
         (staging_dir / METADATA_NAME).write_text(
             json.dumps(metadata, indent=2, sort_keys=True) + "\n",
@@ -591,6 +617,9 @@ def build_metadata(
     binary_path: Path | None,
     bundle_path: Path | None,
     extra_binary_paths: Iterable[Path],
+    flutter_sdk_version: str | None = None,
+    host_source_fingerprint: str | None = None,
+    host_build_mode: str | None = None,
 ) -> dict:
     """Build the generated install metadata document.
 
@@ -606,12 +635,19 @@ def build_metadata(
         bundle_path: Optional prebuilt runtime bundle source directory.
         extra_binary_paths: Additional helper executable source paths included in
             the install bundle.
+        flutter_sdk_version: Optional Flutter SDK version string for Flutter
+            bundle installs.
+        host_source_fingerprint: Optional host-side source fingerprint for
+            Flutter bundle installs.
+        host_build_mode: Optional Flutter build mode associated with
+            `host_source_fingerprint`.
     Return value:
         JSON-serializable metadata dictionary.
     Requirements/Preconditions:
         `install_dir` contains the files that will become the installed app.
     Guarantees/Postconditions:
         Metadata includes sorted installed file paths relative to `install_dir`.
+        Optional Flutter metadata keys are written only when provided.
     Invariants:
         Metadata generation does not modify installed files.
     """
@@ -624,7 +660,7 @@ def build_metadata(
             extra_binary_paths=extra_binary_paths,
         )
     )
-    return {
+    metadata = {
         "schemaVersion": 2,
         "tool": "install_app.py",
         "toolVersion": TOOL_VERSION,
@@ -638,6 +674,12 @@ def build_metadata(
         "installedFiles": iter_installed_files(install_dir),
         "skippedOptionalAssets": sorted(skipped_optional_assets),
     }
+    if flutter_sdk_version is not None:
+        metadata["flutterSdkVersion"] = flutter_sdk_version
+    if host_source_fingerprint is not None and host_build_mode is not None:
+        metadata["hostSourceFingerprint"] = host_source_fingerprint
+        metadata["hostBuildMode"] = host_build_mode
+    return metadata
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -653,6 +695,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         `argv` is a list of strings.
     Guarantees/Postconditions:
         Required argument shape is validated by argparse.
+        `--host-source-fingerprint` and `--host-build-mode` are accepted only as
+        a pair when present.
     Invariants:
         Filesystem state is unchanged.
     """
@@ -668,7 +712,24 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Preserve the app's existing persistent cache instead of clearing it during install.",
     )
-    return parser.parse_args(argv)
+    parser.add_argument(
+        "--flutter-sdk-version",
+        help="Flutter SDK version string to record for Flutter app staleness checks.",
+    )
+    parser.add_argument(
+        "--host-source-fingerprint",
+        help="Host-computed Flutter source fingerprint to record for install-updated checks.",
+    )
+    parser.add_argument(
+        "--host-build-mode",
+        help="Flutter build mode associated with --host-source-fingerprint.",
+    )
+    args = parser.parse_args(argv)
+    if (args.host_source_fingerprint is None) != (args.host_build_mode is None):
+        parser.error(
+            "--host-source-fingerprint and --host-build-mode must be provided together"
+        )
+    return args
 
 
 def main(argv: list[str]) -> int:
@@ -698,6 +759,9 @@ def main(argv: list[str]) -> int:
             args.bundle,
             args.extra_binary,
             keep_cache_on_install=args.keep_cache_on_install,
+            flutter_sdk_version=args.flutter_sdk_version,
+            host_source_fingerprint=args.host_source_fingerprint,
+            host_build_mode=args.host_build_mode,
         )
     except Exception as error:
         print(f"install_app.py: {error}", file=sys.stderr)

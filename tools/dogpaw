@@ -16,7 +16,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path, PurePosixPath
-from typing import Sequence
+from typing import Any, Sequence
 
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[1]
@@ -37,9 +37,17 @@ DOGPAW_PACKAGE_PREBUILT_ROOT = (
     FLUTTER_WORKSPACE_ROOT / "packages" / "dogpaw" / "linux" / "prebuilt"
 )
 DEFAULT_CXX_BUILD_DIR = WORKSPACE_ROOT / "_unsupported_exported_sdk_v1" / "build"
+DEFAULT_NATIVE_BUILD_DIR = WORKSPACE_ROOT / "_unsupported_exported_sdk_v1" / "native-build"
 DEFAULT_EMULATOR_BUILD_DIR = WORKSPACE_ROOT / "_unsupported_exported_sdk_v1" / "emulator-build"
 DEFAULT_EMULATOR_EPIPHANY = WORKSPACE_ROOT / "_unsupported_exported_sdk_v1" / "Epiphany"
-WORKFLOW_AREAS = ("target", "app", "debug", "local", "emulator")
+RPI_CMAKE_SOURCE_DIR = WORKSPACE_ROOT / "_unsupported_exported_sdk_v1"
+VALID_RPI_CMAKE_BUILD_TYPES = (
+    "Debug",
+    "Release",
+    "RelWithDebInfo",
+    "MinSizeRel",
+)
+WORKFLOW_AREAS = ("target", "app", "debug", "local", "emulator", "demo-update", "support")
 TOP_LEVEL_HELP_AREAS = ("local", "emulator")
 SSH_BASE_ARGS = (
     "ssh",
@@ -60,6 +68,10 @@ RSYNC_BASE_ARGS = (
     ".dart_tool",
     "--exclude",
     "build",
+    # Emulator installs may leave host-absolute pubspec_overrides.yaml files that
+    # break remote Pi flutter pub get; Pi builds use checked-in relative paths.
+    "--exclude",
+    "pubspec_overrides.yaml",
 )
 REMOTE_SOURCE_ROOT = PurePosixPath("/home/dppi/.cache/dogpaw/flutter-install")
 REMOTE_APP_ROOT = PurePosixPath("/home/dppi/.local/share/dogpaw/apps")
@@ -70,6 +82,46 @@ DEFAULT_REMOTE_FLUTTER_DEBUG_PORT = "2464"
 
 if str(INSTALL_SUPPORT_TOOLS_ROOT) not in sys.path:
     sys.path.insert(0, str(INSTALL_SUPPORT_TOOLS_ROOT))
+TOOLS_ROOT = WORKSPACE_ROOT / "tools"
+if str(TOOLS_ROOT) not in sys.path:
+    sys.path.insert(0, str(TOOLS_ROOT))
+
+
+def load_service_guard_module():
+    """Import monorepo-only helpers for remote dogpaw.service stop/start.
+
+    Purpose:
+        Defers loading `dogpaw_service_guard` until a Pi deploy workflow needs
+        it so exported SDK v1 can run without shipping that module.
+
+    Parameters:
+        None.
+
+    Return value:
+        The imported `dogpaw_service_guard` module.
+
+    Requirements/Preconditions:
+        Caller is on a monorepo-only path (`EXPORTED_SDK` is false) that already
+        rejected exported-SDK use, or accepts ImportError/RuntimeError when the
+        helper is absent.
+
+    Guarantees/Postconditions:
+        Returns the real module when `tools/dogpaw_service_guard.py` is
+        importable. Raises `RuntimeError` with a clear message when it is not.
+
+    Invariants:
+        Does not mutate process state beyond the normal import side effects of
+        loading `dogpaw_service_guard`.
+    """
+
+    try:
+        import dogpaw_service_guard
+    except ImportError as exc:
+        raise RuntimeError(
+            "dogpaw_service_guard is only available in the development monorepo; "
+            "remote service guarding is not part of exported SDK v1"
+        ) from exc
+    return dogpaw_service_guard
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -203,6 +255,7 @@ def load_repo_only_workspace_helper():
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Could not load repo-only workspace helper: {helper_path}")
     module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -243,9 +296,48 @@ def load_install_support_modules():
         if spec is None or spec.loader is None:
             raise RuntimeError(f"Could not load Dog Paw helper module: {module_path}")
         module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
         spec.loader.exec_module(module)
         loaded_modules.append(module)
     return tuple(loaded_modules)
+
+
+def load_install_manifest_resolver_module():
+    """Load the shared manifest-resolution helper on demand.
+
+    Purpose:
+        Keeps manifest-first install planning available in source checkouts
+        without forcing exported SDK entrypoints to import repo-only helper
+        modules during startup.
+    Parameters:
+        None.
+    Return value:
+        Imported `install_manifest_resolver` helper module.
+    Requirements:
+        `INSTALL_SUPPORT_TOOLS_ROOT` must contain
+        `install_manifest_resolver.py` when a workflow reaches manifest-backed
+        install planning.
+    Guarantees:
+        Raises a clear runtime error when the helper module is unavailable.
+    Invariants:
+        Loads helper code only and does not mutate repository files or CLI
+        state.
+    """
+
+    module_name = "install_manifest_resolver"
+    module_path = INSTALL_SUPPORT_TOOLS_ROOT / f"{module_name}.py"
+    if not module_path.is_file():
+        raise RuntimeError(
+            "Dog Paw manifest-resolution helper is unavailable in this checkout: "
+            f"{module_path}"
+        )
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load Dog Paw helper module: {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def is_help_request(args: Sequence[str]) -> bool:
@@ -354,8 +446,7 @@ def exported_sdk_v1_message(area: str, args: Sequence[str]) -> str:
         "  dogpaw emulator create ...\n"
         "  dogpaw emulator run ...\n"
         "  dogpaw emulator screen ...\n"
-        "  dogpaw emulator install-flutter ...\n"
-        "  dogpaw emulator install-headless ...\n"
+        "  dogpaw emulator install --manifest ...\n"
         "  dogpaw emulator logs ...\n"
         "  dogpaw emulator doctor ..."
     )
@@ -1069,13 +1160,14 @@ def print_app_help() -> None:
         Does not inspect the filesystem or environment.
     """
 
-    print("Usage: dogpaw app <install|install-updated|uninstall> ...")
+    print("Usage: dogpaw app <install|install-updated|uninstall|list> ...")
     print("")
     print("Commands:")
-    print("  install headless   Install or update one or more headless apps on a Pi.")
-    print("  install flutter    Sync one Flutter app source tree to a Pi, build it there, and install it.")
+    print("  install            Install apps and manifest dependencies on a Pi.")
+    print("  install headless   Deprecated alias; use install --manifest.")
     print("  install-updated    Update stale apps and shared deploy globals on a Pi target.")
     print("  uninstall          Remove one installed app record from a Pi target.")
+    print("  list               List installed app registry names on a Pi target.")
 
 
 def print_debug_help() -> None:
@@ -1103,6 +1195,58 @@ def print_debug_help() -> None:
     print("  flutter Sync a Flutter app to a Pi, refresh its installed assets, and open a Dart VM service attach port.")
 
 
+def print_demo_update_help() -> None:
+    """Print concise help for the `demo-update` workflow area.
+
+    Purpose:
+        Documents the update-host tiered refresh commands used by the on-device
+        update agent and operator tooling.
+    Parameters:
+        None.
+    Return value:
+        None.
+    Requirements:
+        None.
+    Guarantees:
+        Writes help text for `run` and `host-doctor` to stdout.
+    Invariants:
+        Does not inspect the filesystem or environment.
+    """
+
+    print("Usage: dogpaw demo-update <run|host-doctor|relay> ...")
+    print("")
+    print("Commands:")
+    print("  run          Run a tiered demo-unit update against one SSH target.")
+    print("  host-doctor  Verify update-host prerequisites for demo-update run.")
+    print("  relay        Host SSH bridge into Docker for device-initiated updates.")
+
+
+def print_support_help() -> None:
+    """Print concise help for the `support` workflow area.
+
+    Purpose:
+        Documents host-side support tooling for live demo-unit investigation.
+    Parameters:
+        None.
+    Return value:
+        None.
+    Requirements:
+        None.
+    Guarantees:
+        Writes help text for `health`, `screenshot`, and `logs` to stdout.
+    Invariants:
+        Does not inspect the filesystem or environment.
+    """
+
+    print("Usage: dogpaw support <health|screenshot|logs|smoke> ...")
+    print("")
+    print("Commands:")
+    print("  health      Gather a remote health report over SSH.")
+    print("  screenshot  Capture the remote Wayland display to PNG file(s) on the host.")
+    print("  logs        Pull a journal and update-metadata bundle from the target.")
+    print("  smoke       Verify post-update stack health (dogpaw, jackd, sway, runtime).")
+
+
 def print_emulator_help() -> None:
     """Print concise help for the `emulator` workflow area.
 
@@ -1126,8 +1270,12 @@ def print_emulator_help() -> None:
     print("Examples:")
     print("  dogpaw emulator run --name alpha")
     print("  dogpaw emulator screen --name alpha")
-    print("  dogpaw emulator install-flutter --name alpha --manifest examples/hello_dogpaw/dogpawapp.json")
-    print("  dogpaw emulator install-headless --name alpha --manifest path/to/dogpawapp.json")
+    print("  dogpaw emulator install --name alpha --manifest examples/hello_dogpaw/dogpawapp.json")
+    print(
+        "  dogpaw emulator install --name alpha "
+        "--manifest examples/hello_dogpaw/dogpawapp.json "
+        "--manifest examples/rain_pond/dogpawapp.json"
+    )
     print("  dogpaw emulator logs --name alpha")
     print("  dogpaw emulator doctor --json")
 
@@ -1159,7 +1307,7 @@ def unimplemented_message(area: str, args: Sequence[str]) -> str:
         f"'dogpaw {attempted}' is not implemented yet.\n"
         f"Currently supported workflows include:\n"
         f"  dogpaw target apply ...\n"
-        f"  dogpaw app install <headless|flutter> ...\n"
+        f"  dogpaw app install --manifest ...\n"
         f"  dogpaw debug <cxx|flutter> ...\n"
         f"  dogpaw emulator ...\n"
         f"See the current workflow plan at: {PLAN_PATH.relative_to(WORKSPACE_ROOT)}"
@@ -1281,45 +1429,7 @@ class FlutterManifestContext:
     flutter_project_dir: Path
 
 
-@dataclass(frozen=True)
-class HostAppManifest:
-    """Resolved host-side manifest facts used by install-updated planning.
-
-    Purpose:
-        Carries just the manifest information needed to classify app scope,
-        decide Flutter versus headless handling, and expand the CMake target
-        union for `install-updated`.
-    Parameters:
-        name: Manifest `name` field used as the installed app identity.
-        manifest_path: Absolute path to the source-tree `dogpawapp.json`.
-        is_flutter: Whether the manifest declares a Flutter app via
-            `flutterApp`.
-        executable: Headless executable target name, or `None` for Flutter apps.
-        extra_binaries: Additional helper binaries declared in
-            `install.extraBinaries`.
-        build_dependencies: Extra CMake targets declared in
-            `buildDependencies`.
-        install_dependencies: Registry app names declared in
-            `installDependencies`.
-    Return value:
-        Immutable manifest summary for one Dog Paw app.
-    Requirements:
-        The source manifest must already have been validated by the builder that
-        constructs this dataclass.
-    Guarantees:
-        Instances are hashable and safe to reuse across planning steps.
-    Invariants:
-        `manifest_path` always refers to one source-tree manifest, not an
-        installed app copy.
-    """
-
-    name: str
-    manifest_path: Path
-    is_flutter: bool
-    executable: str | None
-    extra_binaries: tuple[str, ...]
-    build_dependencies: tuple[str, ...]
-    install_dependencies: tuple[str, ...]
+HostAppManifest = Any
 
 
 @dataclass(frozen=True)
@@ -1461,15 +1571,20 @@ def resolve_flutter_prebuilt_bridge_path(target_arch: str) -> Path:
     Requirements:
         `target_arch` must be one of the supported package subdirectory names.
     Guarantees:
-        Returns the expected package path even when the artifact is currently
+        In the main source checkout, returns the expected CMake build-output path
+        for the selected architecture even when the artifact is currently
         missing, so callers can treat that as part of fingerprint or validation
-        behavior.
+        behavior. In exported SDK mode, returns the packaged prebuilt path.
     Invariants:
         Does not inspect remote state or mutate local files.
     """
 
     if target_arch not in {"x64", "arm64"}:
         raise ValueError(f"unsupported Flutter bridge target architecture: {target_arch}")
+    if not EXPORTED_SDK:
+        if target_arch == "x64":
+            return DEFAULT_EMULATOR_BUILD_DIR / "lib" / "libdogpaw_bridge.so"
+        return DEFAULT_CXX_BUILD_DIR / "lib" / "libdogpaw_bridge.so"
     return (
         DOGPAW_PACKAGE_PREBUILT_ROOT
         / f"linux-{target_arch}"
@@ -1569,10 +1684,8 @@ def parse_string_array_field(payload: dict, field_name: str) -> tuple[str, ...]:
         Does not mutate the payload.
     """
 
-    value = payload.get(field_name, [])
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise ValueError(f"{field_name} must be an array of strings")
-    return tuple(value)
+    install_manifest_resolver = load_install_manifest_resolver_module()
+    return install_manifest_resolver.parse_string_array_field(payload, field_name)
 
 
 def parse_install_extra_binaries(payload: dict) -> tuple[str, ...]:
@@ -1593,15 +1706,8 @@ def parse_install_extra_binaries(payload: dict) -> tuple[str, ...]:
         Only validates the metadata shape; it does not inspect build outputs.
     """
 
-    install = payload.get("install", {})
-    if install is None:
-        return ()
-    if not isinstance(install, dict):
-        raise ValueError("install field must be an object")
-    value = install.get("extraBinaries", [])
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise ValueError("install.extraBinaries must be an array of strings")
-    return tuple(value)
+    install_manifest_resolver = load_install_manifest_resolver_module()
+    return install_manifest_resolver.parse_install_extra_binaries(payload)
 
 
 def host_manifest_from_path(manifest_path: Path) -> HostAppManifest:
@@ -1623,22 +1729,8 @@ def host_manifest_from_path(manifest_path: Path) -> HostAppManifest:
         Does not copy, stage, or mutate manifest files.
     """
 
-    payload = load_manifest_payload(manifest_path.resolve())
-    name = require_manifest_string_field(manifest_path, payload, "name")
-    flutter_app = payload.get("flutterApp")
-    is_flutter = isinstance(flutter_app, str) and flutter_app != ""
-    executable = None
-    if not is_flutter:
-        executable = require_manifest_string_field(manifest_path, payload, "executable")
-    return HostAppManifest(
-        name=name,
-        manifest_path=manifest_path.resolve(),
-        is_flutter=is_flutter,
-        executable=executable,
-        extra_binaries=parse_install_extra_binaries(payload),
-        build_dependencies=parse_string_array_field(payload, "buildDependencies"),
-        install_dependencies=parse_string_array_field(payload, "installDependencies"),
-    )
+    install_manifest_resolver = load_install_manifest_resolver_module()
+    return install_manifest_resolver.manifest_from_path(manifest_path)
 
 
 def expand_manifests_with_install_dependencies(
@@ -1666,34 +1758,11 @@ def expand_manifests_with_install_dependencies(
         Does not mutate manifests or the host manifest index.
     """
 
-    index = dict(host_manifest_index)
-    for manifest in seed_manifests:
-        index.setdefault(manifest.name, manifest)
-
-    ordered: list[HostAppManifest] = []
-    seen_names: set[str] = set()
-    visiting: set[str] = set()
-
-    def visit(manifest: HostAppManifest) -> None:
-        if manifest.name in seen_names:
-            return
-        if manifest.name in visiting:
-            return
-        visiting.add(manifest.name)
-        for dependency_name in manifest.install_dependencies:
-            dependency = index.get(dependency_name)
-            if dependency is None:
-                raise ValueError(
-                    f"install dependency has no host manifest: {dependency_name}"
-                )
-            visit(dependency)
-        visiting.discard(manifest.name)
-        seen_names.add(manifest.name)
-        ordered.append(manifest)
-
-    for manifest in seed_manifests:
-        visit(manifest)
-    return tuple(ordered)
+    install_manifest_resolver = load_install_manifest_resolver_module()
+    return install_manifest_resolver.expand_manifests_with_install_dependencies(
+        seed_manifests,
+        host_manifest_index,
+    )
 
 
 def collect_install_updated_seed_manifests(
@@ -1891,12 +1960,8 @@ def build_host_manifest_index(manifest_paths: Sequence[Path]) -> dict[str, HostA
         Only reads local manifest files.
     """
 
-    index: dict[str, HostAppManifest] = {}
-    for manifest_path in manifest_paths:
-        manifest = host_manifest_from_path(manifest_path)
-        if manifest.name not in index:
-            index[manifest.name] = manifest
-    return index
+    install_manifest_resolver = load_install_manifest_resolver_module()
+    return install_manifest_resolver.build_manifest_index(manifest_paths)
 
 
 def build_host_manifest_index_from_workspace() -> dict[str, HostAppManifest]:
@@ -1963,8 +2028,9 @@ def compute_deploy_globals_fingerprint(hardware_profile: str) -> str:
 
     Purpose:
         Lets install-updated decide whether runtime-global deploy artifacts such
-        as startup scripts, generated hardware-profile output, images, and
-        `dogpawDataItems` need to be resynced to the target.
+        as startup scripts, generated hardware-profile output, images,
+        `dogpawDataItems`, and the on-device update agent need to be resynced to
+        the target.
     Parameters:
         hardware_profile: Hardware profile name used to generate the runtime
             `hardware_profile.sh`.
@@ -1975,7 +2041,8 @@ def compute_deploy_globals_fingerprint(hardware_profile: str) -> str:
         `generate_hardware_profile.sh`.
     Guarantees:
         Includes the generated hardware-profile shell file plus the supported
-        runtime-global resource directories and launch scripts.
+        runtime-global resource directories, launch scripts, and update-agent
+        payload paths.
     Invariants:
         Leaves repository files unchanged; temporary files are cleaned up before
         return.
@@ -2002,7 +2069,11 @@ def compute_deploy_globals_fingerprint(hardware_profile: str) -> str:
             WORKSPACE_ROOT,
             generated_path,
         )
-        _, fingerprint = install_fingerprint.fingerprint_source_inputs(source_inputs)
+        generated_profile_text = generated_path.read_text(encoding="utf-8")
+        _, fingerprint = install_fingerprint.fingerprint_source_inputs_with_text(
+            source_inputs[1:],
+            {"generated/hardware_profile.sh": generated_profile_text},
+        )
     return fingerprint
 
 
@@ -2213,26 +2284,8 @@ def build_targets_for_manifests(manifests: Sequence[HostAppManifest]) -> tuple[s
         Does not inspect build directories or remote targets.
     """
 
-    targets: list[str] = []
-    seen: set[str] = set()
-
-    def append_target(name: str) -> None:
-        if name != "" and name not in seen:
-            targets.append(name)
-            seen.add(name)
-
-    has_flutter = any(manifest.is_flutter for manifest in manifests)
-    for manifest in manifests:
-        if manifest.executable is not None:
-            append_target(manifest.executable)
-        for extra_binary in manifest.extra_binaries:
-            append_target(extra_binary)
-        for dependency in manifest.build_dependencies:
-            append_target(dependency)
-    if has_flutter:
-        append_target("dogpaw_bridge")
-    append_target("Epiphany")
-    return tuple(targets)
+    install_manifest_resolver = load_install_manifest_resolver_module()
+    return install_manifest_resolver.build_targets_for_manifests(manifests)
 
 
 def plan_install_updated(
@@ -2418,7 +2471,9 @@ def build_flutter_source_sync_commands(
         `target` must be a non-empty SSH host string.
     Guarantees:
         Sync set includes shared `packages/`, the selected app tree, and the
-        install helper scripts needed by the remote build.
+        install helper scripts needed by the remote build. Host-local
+        `pubspec_overrides.yaml` files are excluded so emulator-written absolute
+        SDK paths cannot poison remote Flutter dependency resolution.
     Invariants:
         The returned list does not depend on current network state.
     """
@@ -2663,6 +2718,11 @@ def build_debug_flutter_parser() -> argparse.ArgumentParser:
         "--build-mode",
         default="debug",
         help="Flutter Linux build mode used to refresh the installed app layout before launch.",
+    )
+    parser.add_argument(
+        "--keep-cache-on-install",
+        action="store_true",
+        help="Preserve the app's existing persistent cache instead of clearing it during install.",
     )
     parser.add_argument(
         "--start-paused",
@@ -2954,31 +3014,50 @@ def build_remote_flutter_stop_command(
     )
 
 
-def build_flutter_install_parser() -> argparse.ArgumentParser:
-    """Build the parser for `tools/dogpaw app install flutter`.
+def build_app_install_parser() -> argparse.ArgumentParser:
+    """Build the parser for `tools/dogpaw app install`.
 
     Purpose:
-        Defines the host-side remote Flutter install contract while keeping the
-        top-level dispatcher small and testable.
+        Defines the unified Pi app install command that accepts Dog Paw manifests
+        and lets manifest structure choose the headless or Flutter install path.
     Parameters:
         None.
     Return value:
-        Configured parser for the Flutter remote install flow.
+        Configured parser for the unified install workflow.
     Requirements:
         None.
     Guarantees:
-        Required arguments and repository-root defaults are encoded in one
-        parser instance.
+        Includes the option union needed by current headless and Flutter install
+        flows.
     Invariants:
-        Parser construction performs no filesystem or network I/O.
+        Parser construction performs no filesystem, network, or process I/O.
     """
 
     parser = argparse.ArgumentParser(
-        prog="dogpaw app install flutter",
-        description="Sync one Flutter app to a Pi, build it there, and install it into the Dog Paw app registry.",
+        prog="dogpaw app install",
+        description="Install Dog Paw apps and their manifest dependencies on a Pi target.",
     )
-    parser.add_argument("--manifest", required=True, help="Path to the Flutter app dogpawapp.json.")
+    parser.add_argument(
+        "--manifest",
+        action="append",
+        required=True,
+        help="Path to a Dog Paw app dogpawapp.json. May be repeated.",
+    )
     parser.add_argument("--target", help="Remote SSH target. Defaults to local_config.sh --target.")
+    parser.add_argument(
+        "--hardware-profile",
+        help="Target hardware profile forwarded to headless installs when required.",
+    )
+    parser.add_argument(
+        "--build-dir",
+        "-b",
+        default=str(DEFAULT_CXX_BUILD_DIR),
+        help="CMake build directory for native/headless app payloads.",
+    )
+    parser.add_argument(
+        "--binary",
+        help="Explicit binary for a single headless app install with no other headless dependencies.",
+    )
     parser.add_argument(
         "--remote-source-root",
         default=str(REMOTE_SOURCE_ROOT),
@@ -2994,18 +3073,87 @@ def build_flutter_install_parser() -> argparse.ArgumentParser:
         default=str(REMOTE_FLUTTER_ROOT),
         help="Remote Flutter SDK root whose bin directory will be added to PATH.",
     )
-    parser.add_argument(
-        "--build-mode",
-        default="release",
-        help="Flutter Linux build mode.",
-    )
+    parser.add_argument("--build-mode", default="release", help="Flutter Linux build mode.")
     parser.add_argument(
         "--keep-cache-on-install",
         action="store_true",
-        help="Preserve the app's existing persistent cache instead of clearing it during install.",
+        help="Forward cache-preservation behavior to app install helpers.",
     )
-    parser.add_argument("--dry-run", action="store_true", help="Print sync/build commands without executing them.")
+    parser.add_argument("--dry-run", action="store_true", help="Print commands without executing them.")
+    load_service_guard_module().add_service_guard_arguments(parser)
     return parser
+
+
+def run_remote_flutter_install(
+    *,
+    context: FlutterManifestContext,
+    target: str,
+    remote_source_root: PurePosixPath,
+    remote_app_root: PurePosixPath,
+    remote_flutter_root: PurePosixPath,
+    build_mode: str,
+    keep_cache_on_install: bool,
+    dry_run: bool,
+) -> int:
+    """Sync, build, and install one Flutter app on a Pi target.
+
+    Purpose:
+        Implements the host-side remote Flutter install flow used by the
+        unified `dogpaw app install --manifest ...` command.
+    Parameters:
+        context: Resolved Flutter manifest context describing the app tree and
+            manifest-backed install metadata.
+        target: Resolved remote SSH target in `user@host` form.
+        remote_source_root: Remote temporary Flutter workspace source root used
+            for synced builds.
+        remote_app_root: Remote Dog Paw installed-app root.
+        remote_flutter_root: Remote Flutter SDK root whose `bin/` directory is
+            added to `PATH` for remote build steps.
+        build_mode: Flutter Linux build mode to pass through to the install
+            helper.
+        keep_cache_on_install: Whether to preserve the app cache instead of
+            clearing it during install.
+        dry_run: When true, print commands instead of executing them.
+    Return value:
+        Exit code from the dry-run print path or the first failing sync/build
+        command.
+    Requirements:
+        `context` must describe a valid Flutter app manifest, `target` must be
+        non-empty, and `build_mode` must be valid for `flutter build linux`.
+    Guarantees:
+        The sync set includes only shared `packages/`, the specific app tree,
+        and the install scripts needed for the remote build.
+    Invariants:
+        Dry-run mode does not create, modify, or delete local or remote files.
+    """
+
+    host_source_fingerprint = compute_flutter_host_source_fingerprint(
+        context,
+        build_mode,
+        target_arch="arm64",
+    )
+    commands = build_flutter_source_sync_commands(
+        context,
+        target,
+        remote_source_root,
+        remote_app_root,
+    )
+    commands.append(
+        [
+            *SSH_BASE_ARGS,
+            target,
+            build_remote_flutter_install_command(
+                context,
+                remote_source_root,
+                remote_app_root,
+                remote_flutter_root,
+                build_mode,
+                host_source_fingerprint,
+                keep_cache_on_install,
+            ),
+        ]
+    )
+    return run_commands(commands, dry_run)
 
 
 def dispatch_target(args: Sequence[str]) -> int:
@@ -3042,7 +3190,260 @@ def dispatch_target(args: Sequence[str]) -> int:
         args[1:],
         {"--identity-file"},
     )
-    return run_external([str(BOOTSTRAP_TOOL), *apply_args])
+    service_guard = load_service_guard_module()
+    try:
+        apply_args, guard_config = service_guard.strip_service_guard_cli_args(apply_args)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    dry_run = "--dry-run" in apply_args
+    print_host_setup = "--print-host-setup" in apply_args
+    target = service_guard.resolve_bootstrap_ssh_target(apply_args)
+    skip_guard = not guard_config.enabled or print_host_setup or target is None
+
+    if not skip_guard:
+        stop_exit = service_guard.run_service_guard_stop(
+            target,
+            SSH_BASE_ARGS,
+            guard_config,
+            dry_run=dry_run,
+            run_command=run_external,
+            print_command=lambda command: print(shell_join(command)),
+        )
+        if stop_exit != 0 and not dry_run:
+            return stop_exit
+
+    bootstrap_exit = 0
+    start_exit = 0
+    try:
+        bootstrap_exit = run_external([str(BOOTSTRAP_TOOL), *apply_args])
+    finally:
+        if not skip_guard:
+            start_exit = service_guard.run_service_guard_start(
+                target,
+                SSH_BASE_ARGS,
+                guard_config,
+                dry_run=dry_run,
+                run_command=run_external,
+                print_command=lambda command: print(shell_join(command)),
+            )
+
+    if bootstrap_exit != 0:
+        return bootstrap_exit
+    if start_exit != 0:
+        return start_exit
+    return 0
+
+
+def resolved_install_manifests(manifest_args: Sequence[str]) -> tuple[HostAppManifest, ...]:
+    """Resolve user-selected manifests and their install dependencies.
+
+    Purpose:
+        Gives install commands one shared dependency expansion point before they
+        choose Pi or emulator execution details.
+    Parameters:
+        manifest_args: Manifest path strings from the command line.
+    Return value:
+        Dependency-expanded manifests in install order.
+    Requirements:
+        Each path must resolve to a valid Dog Paw app manifest.
+    Guarantees:
+        Dependencies are ordered before dependents and resolved by manifest name.
+    Invariants:
+        Does not build, copy, sync, or install app payloads.
+    """
+
+    host_manifest_index = build_host_manifest_index_from_workspace()
+    seed_paths = [resolve_local_cli_path(manifest_arg) for manifest_arg in manifest_args]
+    seed_manifests = tuple(host_manifest_from_path(manifest_path) for manifest_path in seed_paths)
+    for manifest in seed_manifests:
+        host_manifest_index[manifest.name] = manifest
+    return expand_manifests_with_install_dependencies(seed_manifests, host_manifest_index)
+
+
+def headless_deploy_args_for_install(
+    parsed: argparse.Namespace,
+    headless_manifests: Sequence[HostAppManifest],
+) -> list[str]:
+    """Build delegated headless deploy arguments for resolved manifests.
+
+    Purpose:
+        Converts the unified install parser output into the existing remote
+        headless deployment helper contract.
+    Parameters:
+        parsed: Parsed unified install options.
+        headless_manifests: Headless manifests in install order.
+    Return value:
+        Argument list for `deploy_headless_apps.sh`.
+    Requirements:
+        `headless_manifests` must contain only headless app manifests.
+    Guarantees:
+        Repeats `--manifest` in dependency-before-dependent order.
+    Invariants:
+        Does not execute the deploy helper.
+    """
+
+    deploy_args: list[str] = []
+    if parsed.dry_run:
+        deploy_args.append("--dry-run")
+    if parsed.target is not None:
+        deploy_args.extend(["--target", parsed.target])
+    if parsed.hardware_profile is not None:
+        deploy_args.extend(["--hardware-profile", parsed.hardware_profile])
+    deploy_args.extend(["--build-dir", str(parsed.build_dir)])
+    if parsed.keep_cache_on_install:
+        deploy_args.append("--keep-cache-on-install")
+    if parsed.binary is not None:
+        deploy_args.extend(["--binary", parsed.binary])
+    for manifest in headless_manifests:
+        deploy_args.extend(["--manifest", str(manifest.manifest_path)])
+    return deploy_args
+
+
+def run_flutter_installs_for_manifests(
+    parsed: argparse.Namespace,
+    target: str,
+    flutter_manifests: Sequence[HostAppManifest],
+) -> int:
+    """Run remote Flutter installs for resolved manifests.
+
+    Purpose:
+        Reuses the existing single-Flutter-app installer while letting unified
+        install feed it dependency-expanded manifests.
+    Parameters:
+        parsed: Parsed unified install options.
+        target: Resolved SSH target.
+        flutter_manifests: Flutter manifests in install order.
+    Return value:
+        Zero when every install succeeds, otherwise the first failing exit code.
+    Requirements:
+        `flutter_manifests` must contain only Flutter app manifests.
+    Guarantees:
+        Installs Flutter apps one at a time in the provided order.
+    Invariants:
+        Does not alter `parsed` or manifest metadata.
+    """
+
+    remote_source_root = PurePosixPath(parsed.remote_source_root)
+    remote_app_root = PurePosixPath(parsed.remote_app_root)
+    remote_flutter_root = PurePosixPath(parsed.remote_flutter_root)
+    for manifest in flutter_manifests:
+        context = resolve_flutter_manifest_context(manifest.manifest_path)
+        result = run_remote_flutter_install(
+            context=context,
+            target=target,
+            remote_source_root=remote_source_root,
+            remote_app_root=remote_app_root,
+            remote_flutter_root=remote_flutter_root,
+            build_mode=str(parsed.build_mode),
+            keep_cache_on_install=parsed.keep_cache_on_install,
+            dry_run=parsed.dry_run,
+        )
+        if result != 0:
+            return result
+    return 0
+
+
+def dispatch_app_install(args: Sequence[str]) -> int:
+    """Dispatch `tools/dogpaw app install`.
+
+    Purpose:
+        Installs one or more Dog Paw apps plus transitive install dependencies
+        using manifest structure to choose headless or Flutter execution.
+    Parameters:
+        args: Remaining arguments after `app install`.
+    Return value:
+        Exit code from the dry-run path or first failing build/install command.
+    Requirements:
+        Each `--manifest` must point at a valid Dog Paw app manifest.
+    Guarantees:
+        Dependencies are installed before dependents, and split legacy app kinds
+        are no longer required at the command surface. When C++ targets are
+        built from a known default ARM or native CMake build directory, CMake is
+        reconfigured from `DOGPAW_RPI_CMAKE_BUILD_TYPE` before `cmake --build`.
+    Invariants:
+        Dry-run mode does not create, modify, or delete local or remote files.
+    """
+
+    parser = build_app_install_parser()
+    parsed = parser.parse_args(
+        rewrite_local_path_option_values(
+            args,
+            {"--manifest", "--build-dir", "-b", "--binary"},
+        )
+    )
+    try:
+        scoped_manifests = resolved_install_manifests(parsed.manifest)
+    except ValueError as exc:
+        parser.error(str(exc))
+        raise AssertionError("unreachable") from exc
+
+    headless_manifests = tuple(manifest for manifest in scoped_manifests if not manifest.is_flutter)
+    flutter_manifests = tuple(manifest for manifest in scoped_manifests if manifest.is_flutter)
+    if parsed.binary is not None and len(headless_manifests) != 1:
+        parser.error("--binary is only supported when the resolved install set has one headless app")
+
+    service_guard = load_service_guard_module()
+    guard_config = service_guard.service_guard_config_from_namespace(parsed)
+    has_remote_install = bool(headless_manifests or flutter_manifests)
+    skip_guard = not guard_config.enabled or not has_remote_install
+    target = resolve_target(parsed.target) if has_remote_install else None
+
+    build_dir = resolve_local_cli_path(parsed.build_dir)
+    build_targets = build_targets_for_manifests(scoped_manifests)
+    if build_targets:
+        try:
+            build_commands = build_cxx_install_build_commands(build_dir, build_targets)
+        except ValueError as exc:
+            parser.error(str(exc))
+            raise AssertionError("unreachable") from exc
+        if run_commands(build_commands, parsed.dry_run) != 0:
+            return 1
+
+    if not skip_guard:
+        assert target is not None
+        stop_exit = service_guard.run_service_guard_stop(
+            target,
+            SSH_BASE_ARGS,
+            guard_config,
+            dry_run=parsed.dry_run,
+            run_command=run_external,
+            print_command=lambda command: print(shell_join(command)),
+        )
+        if stop_exit != 0 and not parsed.dry_run:
+            return stop_exit
+
+    install_exit = 0
+    start_exit = 0
+    try:
+        if headless_manifests:
+            install_exit = run_external(
+                [
+                    str(DEPLOY_HEADLESS_APPS_TOOL),
+                    *headless_deploy_args_for_install(parsed, headless_manifests),
+                ]
+            )
+        if install_exit == 0 and flutter_manifests:
+            assert target is not None
+            install_exit = run_flutter_installs_for_manifests(parsed, target, flutter_manifests)
+    finally:
+        if not skip_guard:
+            assert target is not None
+            start_exit = service_guard.run_service_guard_start(
+                target,
+                SSH_BASE_ARGS,
+                guard_config,
+                dry_run=parsed.dry_run,
+                run_command=run_external,
+                print_command=lambda command: print(shell_join(command)),
+            )
+
+    if install_exit != 0:
+        return install_exit
+    if start_exit != 0:
+        return start_exit
+    return 0
 
 
 def dispatch_app_install_headless(args: Sequence[str]) -> int:
@@ -3065,144 +3466,12 @@ def dispatch_app_install_headless(args: Sequence[str]) -> int:
         When no `--manifest` values are present, arguments pass through unchanged.
     """
 
-    delegated_args = rewrite_local_path_option_values(
-        args,
-        {"--build-dir", "-b", "--manifest"},
+    print(
+        "Warning: 'dogpaw app install headless' is deprecated; use "
+        "'dogpaw app install --manifest PATH' instead.",
+        file=sys.stderr,
     )
-    manifest_paths = extract_manifest_option_values(delegated_args)
-    if not manifest_paths:
-        return run_external([str(DEPLOY_HEADLESS_APPS_TOOL), *delegated_args])
-
-    host_manifest_index = build_host_manifest_index_from_workspace()
-    seed_paths = [Path(manifest_path).resolve() for manifest_path in manifest_paths]
-    for manifest_path in seed_paths:
-        manifest = host_manifest_from_path(manifest_path)
-        host_manifest_index.setdefault(manifest.name, manifest)
-    seed_manifests = tuple(host_manifest_from_path(manifest_path) for manifest_path in seed_paths)
-    try:
-        scoped_manifests = expand_manifests_with_install_dependencies(
-            seed_manifests,
-            host_manifest_index,
-        )
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-
-    headless_manifests = tuple(
-        manifest for manifest in scoped_manifests if not manifest.is_flutter
-    )
-    flutter_manifests = tuple(
-        manifest for manifest in scoped_manifests if manifest.is_flutter
-    )
-    build_dir_text = resolve_option_from_args(
-        delegated_args,
-        {"--build-dir", "-b"},
-        str(DEFAULT_CXX_BUILD_DIR),
-    )
-    build_dir = resolve_local_cli_path(build_dir_text or str(DEFAULT_CXX_BUILD_DIR))
-    build_targets = build_targets_for_manifests(scoped_manifests)
-    dry_run = "--dry-run" in delegated_args
-    keep_cache_on_install = "--keep-cache-on-install" in delegated_args
-    if build_targets:
-        build_command = ["cmake", "--build", str(build_dir)]
-        for target_name in build_targets:
-            build_command.extend(["--target", target_name])
-        if run_commands([build_command], dry_run) != 0:
-            return 1
-
-    if headless_manifests:
-        deploy_args = replace_manifest_option_values(
-            delegated_args,
-            [str(manifest.manifest_path) for manifest in headless_manifests],
-        )
-        deploy_result = run_external([str(DEPLOY_HEADLESS_APPS_TOOL), *deploy_args])
-        if deploy_result != 0:
-            return deploy_result
-
-    target = resolve_option_from_args(delegated_args, {"--target", "-t"}, None)
-    if target is None:
-        target = resolve_target(None)
-    for manifest in flutter_manifests:
-        flutter_command = [
-            str(DOGPAW_TOOL_PATH),
-            "app",
-            "install",
-            "flutter",
-            "--target",
-            target,
-            "--manifest",
-            str(manifest.manifest_path),
-        ]
-        if dry_run:
-            flutter_command.append("--dry-run")
-        if keep_cache_on_install:
-            flutter_command.append("--keep-cache-on-install")
-        flutter_result = run_external(flutter_command)
-        if flutter_result != 0:
-            return flutter_result
-    return 0
-
-
-def dispatch_app_install_flutter(args: Sequence[str]) -> int:
-    """Dispatch `tools/dogpaw app install flutter`.
-
-    Purpose:
-        Implements a host-side remote Flutter install flow by syncing the
-        selected app plus shared Flutter workspace packages/tools to the target
-        Pi, then invoking the existing remote build-and-install script there.
-    Parameters:
-        args: Remaining arguments after `app install flutter`.
-    Return value:
-        Exit code from the dry-run print path or the first failing sync/build
-        command.
-    Requirements:
-        Manifest path must exist and live under `FLUTTER_WORKSPACE_ROOT`.
-    Guarantees:
-        The sync set includes only shared `packages/`, the specific app tree,
-        and the install scripts needed for the remote build.
-    Invariants:
-        Dry-run mode does not create, modify, or delete local or remote files.
-    """
-
-    parser = build_flutter_install_parser()
-    parsed = parser.parse_args(list(args))
-    try:
-        context = resolve_flutter_manifest_context(parsed.manifest)
-    except ValueError as exc:
-        parser.error(str(exc))
-        raise AssertionError("unreachable") from exc
-
-    target = resolve_target(parsed.target)
-    remote_source_root = PurePosixPath(parsed.remote_source_root)
-    remote_app_root = PurePosixPath(parsed.remote_app_root)
-    remote_flutter_root = PurePosixPath(parsed.remote_flutter_root)
-    host_source_fingerprint = compute_flutter_host_source_fingerprint(
-        context,
-        parsed.build_mode,
-        target_arch="arm64",
-    )
-    commands = build_flutter_source_sync_commands(
-        context,
-        target,
-        remote_source_root,
-        remote_app_root,
-    )
-    commands.append(
-        [
-            *SSH_BASE_ARGS,
-            target,
-            build_remote_flutter_install_command(
-                context,
-                remote_source_root,
-                remote_app_root,
-                remote_flutter_root,
-                parsed.build_mode,
-                host_source_fingerprint,
-                parsed.keep_cache_on_install,
-            ),
-        ]
-    )
-    return run_commands(commands, parsed.dry_run)
+    return dispatch_app_install(args)
 
 
 def dispatch_debug_flutter(args: Sequence[str]) -> int:
@@ -3323,6 +3592,7 @@ def dispatch_debug_flutter(args: Sequence[str]) -> int:
                 remote_flutter_root,
                 parsed.build_mode,
                 host_source_fingerprint,
+                parsed.keep_cache_on_install,
             ),
         ]
     )
@@ -3413,13 +3683,22 @@ def build_app_install_updated_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--startup-plan",
         default=str(repo_layout.install_updated_default_startup_plan(WORKSPACE_ROOT)),
-        help="Startup plan JSON path used with --include-startup-plan.",
+        help="Startup plan JSON path used for default startup-plan scope expansion.",
     )
-    parser.add_argument(
+    startup_plan_scope_group = parser.add_mutually_exclusive_group()
+    startup_plan_scope_group.add_argument(
         "--include-startup-plan",
+        dest="include_startup_plan",
         action="store_true",
-        help="Also consider apps named in the startup plan even when not yet installed.",
+        help="Consider apps named in the startup plan even when not yet installed.",
     )
+    startup_plan_scope_group.add_argument(
+        "--no-include-startup-plan",
+        dest="include_startup_plan",
+        action="store_false",
+        help="Limit scope to already installed apps and ignore startup-plan-only apps.",
+    )
+    parser.set_defaults(include_startup_plan=True)
     parser.add_argument(
         "--remote-app-root",
         default=str(REMOTE_APP_ROOT),
@@ -3441,6 +3720,7 @@ def build_app_install_updated_parser() -> argparse.ArgumentParser:
         help="Preserve app cache instead of clearing it during reinstall of stale apps.",
     )
     parser.add_argument("--dry-run", action="store_true", help="Print planned commands without executing them.")
+    load_service_guard_module().add_service_guard_arguments(parser)
     return parser
 
 
@@ -3484,6 +3764,80 @@ def build_app_uninstall_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--dry-run", action="store_true", help="Print the remote remove command without executing it.")
     return parser
+
+
+def build_app_list_parser() -> argparse.ArgumentParser:
+    """Build the parser for `tools/dogpaw app list`.
+
+    Purpose:
+        Defines the read-only installed-app listing workflow so users can
+        discover registry names for uninstall and other app commands.
+    Parameters:
+        None.
+    Return value:
+        Configured parser for the list workflow.
+    Requirements:
+        None.
+    Guarantees:
+        Accepts the same `--target` / `--remote-app-root` identity shape as
+        uninstall, plus optional `--json` for machine-readable inventory.
+    Invariants:
+        Parser construction performs no filesystem or network I/O.
+    """
+
+    parser = argparse.ArgumentParser(
+        prog="dogpaw app list",
+        description="List installed Dog Paw app registry names on a Pi target.",
+    )
+    parser.add_argument("--target", help="Remote SSH target. Defaults to local_config.sh --target.")
+    parser.add_argument(
+        "--remote-app-root",
+        default=str(REMOTE_APP_ROOT),
+        help="Remote Dog Paw installed-app root.",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the full remote installed-app inventory as JSON.",
+    )
+    return parser
+
+
+def format_app_list_entries(
+    remote_apps: Sequence[dict[str, object]],
+) -> tuple[list[str], list[str]]:
+    """Split remote inventory into registry names and unnamed install dirs.
+
+    Purpose:
+        Gives `dogpaw app list` one shared projection of inventory records into
+        copy/paste-friendly registry names plus orphan install paths that lack a
+        recoverable name.
+    Parameters:
+        remote_apps: Inventory dictionaries from `read_remote_app_inventory`.
+    Return value:
+        `(names, unnamed_dirs)` where `names` are non-empty registry names in
+        inventory order and `unnamed_dirs` are install directory paths for
+        records with no recoverable `appName`.
+    Requirements:
+        Each inventory record should use the `appName` / `installDir` keys
+        produced by `read_remote_app_inventory`.
+    Guarantees:
+        Preserves inventory order. Does not mutate `remote_apps`.
+    Invariants:
+        Performs no I/O and does not interpret metadata beyond `appName`.
+    """
+
+    names: list[str] = []
+    unnamed_dirs: list[str] = []
+    for remote_app in remote_apps:
+        app_name_value = remote_app.get("appName")
+        if isinstance(app_name_value, str) and app_name_value != "":
+            names.append(app_name_value)
+            continue
+        install_dir_value = remote_app.get("installDir")
+        if isinstance(install_dir_value, str) and install_dir_value != "":
+            unnamed_dirs.append(install_dir_value)
+    return names, unnamed_dirs
 
 
 def resolve_uninstall_app_name(app_name: str | None, manifest_arg: str | None) -> str:
@@ -3555,6 +3909,218 @@ def resolve_hardware_profile(explicit_profile: str | None) -> str:
     return "p8_2"
 
 
+def read_local_config_value(key: str) -> str | None:
+    """Read one resolved value from `local_config.sh --get`.
+
+    Purpose:
+        Lets install workflows share the same persisted developer preferences as
+        VS Code CMake tasks without re-parsing `.dogpaw.local.env`.
+    Parameters:
+        key: Supported `local_config.sh --get` key such as
+            `DOGPAW_RPI_CMAKE_BUILD_TYPE`.
+    Return value:
+        Stripped value string, or `None` when the helper is missing or fails.
+    Requirements:
+        `key` must be a key accepted by `local_config.sh --get`.
+    Guarantees:
+        Does not mutate local config files.
+    Invariants:
+        Empty stdout is treated as missing (`None`).
+    """
+
+    if not (LOCAL_CONFIG_TOOL.is_file() and LOCAL_CONFIG_TOOL.stat().st_mode & 0o111):
+        return None
+    completed = subprocess.run(
+        [str(LOCAL_CONFIG_TOOL), "--get", key],
+        cwd=WORKSPACE_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return None
+    resolved = completed.stdout.strip()
+    if resolved == "":
+        return None
+    return resolved
+
+
+def resolve_rpi_cmake_build_type() -> str:
+    """Resolve the preferred RPi `CMAKE_BUILD_TYPE` for install builds.
+
+    Purpose:
+        Aligns `dogpaw app install` / `install-updated` CMake configure steps with
+        the `DOGPAW_RPI_CMAKE_BUILD_TYPE` preference used by configure-arm.
+    Parameters:
+        None.
+    Return value:
+        One of `VALID_RPI_CMAKE_BUILD_TYPES`, defaulting to `Debug`.
+    Requirements:
+        None.
+    Guarantees:
+        Raises `ValueError` when a configured value is not a supported CMake
+        build type.
+    Invariants:
+        Does not reconfigure CMake or mutate local config files.
+    """
+
+    resolved = read_local_config_value("DOGPAW_RPI_CMAKE_BUILD_TYPE")
+    if resolved is None:
+        return "Debug"
+    if resolved not in VALID_RPI_CMAKE_BUILD_TYPES:
+        raise ValueError(
+            "Unsupported DOGPAW_RPI_CMAKE_BUILD_TYPE "
+            f"{resolved!r}; expected one of {', '.join(VALID_RPI_CMAKE_BUILD_TYPES)}"
+        )
+    return resolved
+
+
+def resolve_rpi_queue_age_diagnostics_for_cmake() -> str:
+    """Resolve queue-age diagnostics as a CMake ON/OFF cache value.
+
+    Purpose:
+        Mirrors configure-arm's `DOGPAW_QUEUE_AGE_DIAGNOSTICS` handling so install
+        reconfigure steps stay consistent with VS Code CMake tasks.
+    Parameters:
+        None.
+    Return value:
+        `ON` or `OFF`.
+    Requirements:
+        None.
+    Guarantees:
+        Defaults to `OFF` when unset; raises `ValueError` for unrecognized values.
+    Invariants:
+        Does not mutate local config files.
+    """
+
+    resolved = read_local_config_value("DOGPAW_QUEUE_AGE_DIAGNOSTICS")
+    if resolved is None:
+        return "OFF"
+    normalized = resolved.strip().lower()
+    if normalized in {"1", "on", "true", "yes"}:
+        return "ON"
+    if normalized in {"0", "off", "false", "no"}:
+        return "OFF"
+    raise ValueError(
+        "Unsupported DOGPAW_QUEUE_AGE_DIAGNOSTICS "
+        f"{resolved!r}; expected a boolean value"
+    )
+
+
+def resolve_rpi_cmake_configure_preset(build_dir: Path) -> str | None:
+    """Map one local CMake build directory to an RPi configure preset name.
+
+    Purpose:
+        Lets install flows choose `rpi-arm-*` or `rpi-native-*` presets from the
+        selected `--build-dir`, matching CMakePresets.json binaryDir layout.
+    Parameters:
+        build_dir: Absolute or relative local CMake build directory.
+    Return value:
+        Preset name such as `rpi-arm-RelWithDebInfo`, or `None` when `build_dir`
+        is not one of the known RPi build trees.
+    Requirements:
+        None.
+    Guarantees:
+        Uses `resolve_rpi_cmake_build_type()` for the build-type suffix.
+    Invariants:
+        Does not invoke CMake.
+    """
+
+    resolved_build_dir = build_dir.resolve()
+    build_type = resolve_rpi_cmake_build_type()
+    if resolved_build_dir == DEFAULT_CXX_BUILD_DIR.resolve():
+        return f"rpi-arm-{build_type}"
+    if resolved_build_dir == DEFAULT_NATIVE_BUILD_DIR.resolve():
+        return f"rpi-native-{build_type}"
+    return None
+
+
+def build_rpi_cmake_configure_command(build_dir: Path) -> list[str] | None:
+    """Build the CMake configure command for one known RPi build tree.
+
+    Purpose:
+        Encodes the configure-arm / configure-native contract so install builds
+        apply `DOGPAW_RPI_CMAKE_BUILD_TYPE` before `cmake --build`.
+    Parameters:
+        build_dir: Local CMake build directory selected for the install.
+    Return value:
+        Configure command vector, or `None` when `build_dir` is not a known RPi
+        build tree.
+    Requirements:
+        When a preset is resolved, `RPI_CMAKE_SOURCE_DIR` must contain
+        `CMakePresets.json`.
+    Guarantees:
+        Uses `cmake -S <rpi>` so the command works from any invocation cwd.
+    Invariants:
+        Does not execute CMake.
+    """
+
+    preset = resolve_rpi_cmake_configure_preset(build_dir)
+    if preset is None:
+        return None
+    queue_age_diagnostics = resolve_rpi_queue_age_diagnostics_for_cmake()
+    return [
+        "cmake",
+        "-S",
+        str(RPI_CMAKE_SOURCE_DIR.resolve()),
+        "--preset",
+        preset,
+        "-UHARDWARE_PROFILE",
+        "-UDOGPAW_DPQUEUE_TRANSPORT_TIMESTAMPS",
+        f"-DDOGPAW_QUEUE_AGE_DIAGNOSTICS={queue_age_diagnostics}",
+    ]
+
+
+def build_cxx_install_build_commands(
+    build_dir: Path,
+    build_targets: Sequence[str],
+) -> list[list[str]]:
+    """Build ordered CMake configure + build commands for C++ install flows.
+
+    Purpose:
+        Gives `dogpaw app install` and `dogpaw app install-updated` one shared
+        path that always reconfigures known RPi build trees from local prefs
+        before building requested targets.
+    Parameters:
+        build_dir: Local CMake build directory for headless/Epiphany outputs.
+        build_targets: Ordered CMake target names to build. Empty means no
+            commands.
+    Return value:
+        Ordered command vectors: optional configure command, then one build
+        command when targets are present.
+    Requirements:
+        `build_targets` entries must be non-empty CMake target names.
+    Guarantees:
+        Known default ARM and native CMake build trees always get a configure
+        step first. Unknown `--build-dir` values skip configure and emit a
+        stderr warning so custom override workflows still build.
+    Invariants:
+        Does not execute commands or mutate the filesystem.
+    """
+
+    if not build_targets:
+        return []
+
+    commands: list[list[str]] = []
+    configure_command = build_rpi_cmake_configure_command(build_dir)
+    if configure_command is not None:
+        commands.append(configure_command)
+    else:
+        print(
+            "Warning: Skipping CMake configure for unrecognized --build-dir "
+            f"{build_dir}; DOGPAW_RPI_CMAKE_BUILD_TYPE will not be applied. "
+            f"Use {DEFAULT_CXX_BUILD_DIR} or {DEFAULT_NATIVE_BUILD_DIR}.",
+            file=sys.stderr,
+        )
+
+    build_command = ["cmake", "--build", str(build_dir)]
+    for target_name in build_targets:
+        build_command.extend(["--target", target_name])
+    commands.append(build_command)
+    return commands
+
+
 def build_remote_write_json_command(path: PurePosixPath, payload: dict[str, object]) -> str:
     """Build one remote command that writes a JSON object to a file.
 
@@ -3601,8 +4167,9 @@ def dispatch_app_install_updated(args: Sequence[str]) -> int:
         The caller runs from a workspace with valid Dog Paw manifests and has SSH
         access to the selected target.
     Guarantees:
-        Dry-run mode prints the planned commands. Real execution runs the build,
-        prune, deploy, and metadata-update steps in order.
+        Dry-run mode prints the planned commands. Real execution reconfigures the
+        selected known RPi CMake tree from `DOGPAW_RPI_CMAKE_BUILD_TYPE`, then
+        runs the build, prune, deploy, and metadata-update steps in order.
     Invariants:
         Unknown installed apps warn and skip; they are never pruned silently.
     """
@@ -3651,12 +4218,11 @@ def dispatch_app_install_updated(args: Sequence[str]) -> int:
         parser.error(str(exc))
         raise AssertionError("unreachable") from exc
     build_targets = build_targets_for_manifests(scoped_manifests)
-    build_commands: list[list[str]] = []
-    if build_targets:
-        build_command = ["cmake", "--build", str(build_dir)]
-        for target_name in build_targets:
-            build_command.extend(["--target", target_name])
-        build_commands.append(build_command)
+    try:
+        build_commands = build_cxx_install_build_commands(build_dir, build_targets)
+    except ValueError as exc:
+        parser.error(str(exc))
+        raise AssertionError("unreachable") from exc
     if run_commands(build_commands, parsed.dry_run) != 0:
         return 1
 
@@ -3738,7 +4304,6 @@ def dispatch_app_install_updated(args: Sequence[str]) -> int:
             str(DOGPAW_TOOL_PATH),
             "app",
             "install",
-            "flutter",
             "--target",
             target,
             "--manifest",
@@ -3765,7 +4330,15 @@ def dispatch_app_install_updated(args: Sequence[str]) -> int:
         epiphany_command.append("--skip-missing")
     commands.append(epiphany_command)
 
-    return run_commands(commands, parsed.dry_run)
+    service_guard = load_service_guard_module()
+    guard_config = service_guard.service_guard_config_from_namespace(parsed)
+    wrapped_commands = service_guard.wrap_commands_with_service_guard(
+        commands,
+        target=target,
+        ssh_prefix=SSH_BASE_ARGS,
+        config=guard_config,
+    )
+    return run_commands(wrapped_commands, parsed.dry_run)
 
 
 def dispatch_app_uninstall(args: Sequence[str]) -> int:
@@ -3820,6 +4393,49 @@ def dispatch_app_uninstall(args: Sequence[str]) -> int:
     return run_commands([command], parsed.dry_run)
 
 
+def dispatch_app_list(args: Sequence[str]) -> int:
+    """Dispatch `tools/dogpaw app list`.
+
+    Purpose:
+        Prints installed Dog Paw app registry names from one target so users can
+        discover the exact `--appName` values used by uninstall and related
+        workflows.
+    Parameters:
+        args: Remaining arguments after `app list`.
+    Return value:
+        `0` after printing the list or JSON inventory.
+    Requirements:
+        SSH access to the selected target works.
+    Guarantees:
+        Default mode prints one registry name per stdout line. `--json` prints
+        the full inventory payload. Records without a recoverable name are
+        reported on stderr and do not appear as empty stdout lines.
+    Invariants:
+        Does not mutate remote installed apps.
+    """
+
+    parser = build_app_list_parser()
+    parsed = parser.parse_args(args)
+    target = resolve_target(parsed.target)
+    remote_app_root = PurePosixPath(parsed.remote_app_root)
+    remote_apps = read_remote_app_inventory(target, remote_app_root)
+
+    if parsed.json:
+        print(json.dumps({"apps": remote_apps}, indent=2, sort_keys=True))
+        return 0
+
+    names, unnamed_dirs = format_app_list_entries(remote_apps)
+    for unnamed_dir in unnamed_dirs:
+        print(
+            "Warning: installed app with no recoverable registry name at "
+            f"{unnamed_dir}",
+            file=sys.stderr,
+        )
+    for name in names:
+        print(name)
+    return 0
+
+
 def dispatch_app(args: Sequence[str]) -> int:
     """Dispatch the `app` workflow area.
 
@@ -3833,8 +4449,8 @@ def dispatch_app(args: Sequence[str]) -> int:
     Requirements:
         None.
     Guarantees:
-        `app install ...`, `app install-updated ...`, and `app uninstall ...`
-        are routed to the appropriate implementations.
+        `app install ...`, `app install-updated ...`, `app uninstall ...`, and
+        `app list ...` are routed to the appropriate implementations.
     Invariants:
         Unsupported app subcommands do not silently fall through.
     """
@@ -3850,19 +4466,23 @@ def dispatch_app(args: Sequence[str]) -> int:
             return dispatch_app_install_updated(args[1:])
         if args[0] == "uninstall":
             return dispatch_app_uninstall(args[1:])
+        if args[0] == "list":
+            return dispatch_app_list(args[1:])
         print(f"Unsupported app command: {args[0]}", file=sys.stderr)
         print_app_help()
         return 2
-    if len(args) == 1:
-        print("Usage: dogpaw app install <headless|flutter> [options]", file=sys.stderr)
+    if len(args) > 1 and args[1] == "flutter":
+        print(
+            "The split Flutter install command has been replaced. Use "
+            "dogpaw app install --manifest PATH instead.",
+            file=sys.stderr,
+        )
         return 2
+    if len(args) == 1 or args[1] != "headless":
+        return dispatch_app_install(args[1:])
     if args[1] == "headless":
         return dispatch_app_install_headless(args[2:])
-    if args[1] == "flutter":
-        return dispatch_app_install_flutter(args[2:])
-    print(f"Unsupported app install target: {args[1]}", file=sys.stderr)
-    print("Usage: dogpaw app install <headless|flutter> [options]", file=sys.stderr)
-    return 2
+    raise AssertionError("unreachable")
 
 
 def dispatch_debug_cxx(args: Sequence[str]) -> int:
@@ -4057,6 +4677,122 @@ def dispatch_emulator(args: Sequence[str]) -> int:
     return run_external([sys.executable, str(EMULATOR_TOOL), *delegated_args])
 
 
+def dispatch_demo_update(args: Sequence[str]) -> int:
+    """Dispatch the `demo-update` workflow area.
+
+    Purpose:
+        Routes update-host tiered refresh and readiness commands to the
+        `dogpaw_demo_update` package while keeping `tools/dogpaw` manageable.
+    Parameters:
+        args: Remaining command-line arguments after `demo-update`.
+    Return value:
+        Exit code from the selected demo-update workflow, or `2` for invalid usage.
+    Requirements:
+        Caller runs from the main development checkout unless tests inject context.
+    Guarantees:
+        `demo-update run` and `demo-update host-doctor` delegate to the package
+        implementations.
+    Invariants:
+        Unsupported demo-update subcommands do not silently fall through.
+    """
+
+    if is_help_request(args):
+        print_demo_update_help()
+        return 0
+    if len(args) == 0:
+        print_demo_update_help()
+        return 2
+    if EXPORTED_SDK:
+        print(exported_sdk_v1_message("demo-update", args), file=sys.stderr)
+        return 2
+
+    from dogpaw_demo_update.host_doctor import run_host_doctor
+    from dogpaw_demo_update.relay import run_relay_dispatch
+    from dogpaw_demo_update.run import build_demo_update_context, run_demo_update
+
+    repo_layout = load_repo_only_workspace_helper()
+    build_dir = repo_layout.install_updated_default_build_dir(WORKSPACE_ROOT)
+
+    if args[0] == "relay":
+        return run_relay_dispatch(args[1:], workspace_root=WORKSPACE_ROOT)
+    if args[0] == "host-doctor":
+        return run_host_doctor(
+            args[1:],
+            workspace_root=WORKSPACE_ROOT,
+            dogpaw_tool=DOGPAW_TOOL_PATH,
+            hardware_profile_resolver=resolve_hardware_profile,
+        )
+    if args[0] == "run":
+        context = build_demo_update_context(
+            workspace_root=WORKSPACE_ROOT,
+            dogpaw_tool=DOGPAW_TOOL_PATH,
+            deploy_globals_tool=DEPLOY_HEADLESS_APPS_TOOL,
+            build_dir=build_dir,
+            remote_script_dir=PurePosixPath("/home/dppi/scripts/dogpaw"),
+            read_remote_hardware_profile=read_remote_target_hardware_profile,
+            install_updated=lambda install_args: dispatch_app_install_updated(
+                list(install_args)
+            ),
+        )
+        return run_demo_update(
+            args[1:],
+            context=context,
+            hardware_profile_resolver=resolve_hardware_profile,
+        )
+
+    print(f"Unsupported demo-update command: {args[0]}", file=sys.stderr)
+    print_demo_update_help()
+    return 2
+
+
+def dispatch_support(args: Sequence[str]) -> int:
+    """Dispatch the `support` workflow area.
+
+    Purpose:
+        Routes host-side health, screenshot, and logs tooling to the
+        `dogpaw_support` package while keeping `tools/dogpaw` manageable.
+    Parameters:
+        args: Remaining command-line arguments after `support`.
+    Return value:
+        Exit code from the selected support workflow, or `2` for invalid usage.
+    Requirements:
+        Caller runs from the main development checkout unless tests inject context.
+    Guarantees:
+        `support health`, `support screenshot`, and `support logs` delegate to
+        the package implementations.
+    Invariants:
+        Unsupported support subcommands do not silently fall through.
+    """
+
+    if is_help_request(args):
+        print_support_help()
+        return 0
+    if len(args) == 0:
+        print_support_help()
+        return 2
+    if EXPORTED_SDK:
+        print(exported_sdk_v1_message("support", args), file=sys.stderr)
+        return 2
+
+    from dogpaw_support.health import run_health
+    from dogpaw_support.logs import run_logs
+    from dogpaw_support.screenshot import run_screenshot
+    from dogpaw_support.smoke import run_smoke
+
+    if args[0] == "health":
+        return run_health(args[1:], dogpaw_tool=DOGPAW_TOOL_PATH)
+    if args[0] == "screenshot":
+        return run_screenshot(args[1:])
+    if args[0] == "logs":
+        return run_logs(args[1:])
+    if args[0] == "smoke":
+        return run_smoke(args[1:], dogpaw_tool=DOGPAW_TOOL_PATH)
+
+    print(f"Unsupported support command: {args[0]}", file=sys.stderr)
+    print_support_help()
+    return 2
+
+
 def dispatch(area: str, args: Sequence[str]) -> int:
     """Dispatch one top-level workflow area.
 
@@ -4085,6 +4821,10 @@ def dispatch(area: str, args: Sequence[str]) -> int:
         return dispatch_debug(args)
     if area == "emulator":
         return dispatch_emulator(args)
+    if area == "demo-update":
+        return dispatch_demo_update(args)
+    if area == "support":
+        return dispatch_support(args)
     if EXPORTED_SDK and area == "local":
         print(exported_sdk_v1_message(area, args), file=sys.stderr)
         return 2

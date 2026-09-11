@@ -325,7 +325,7 @@ class IntegrationTestFixture {
     final String resolvedDataDir =
         _configuration.dataDir ??
             Platform.environment['DOGPAW_DATA_DIR'] ??
-            '/tmp/dogpaw_test_data';
+            '/tmp/dogpaw_test_data_$pid';
     final String resolvedAppRoot =
         _configuration.appRootPath ??
             Platform.environment['DOGPAW_APP_DIR'] ??

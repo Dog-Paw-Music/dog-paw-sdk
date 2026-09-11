@@ -10,6 +10,7 @@ class JsonFields {
   static const String RESOLVED = "resolved";
   static const String INCLUDE_RESOLVED = "includeResolved";
   static const String INCLUDE_SPEC = "includeSpec";
+  static const String SHARED_MEMORY = "sharedMemory";
   static const String REQUEST_ID = "requestId";
   static const String SERVER_REQUEST_ID = "serverRequestId";
   static const String MESSAGE = "message";
@@ -23,6 +24,8 @@ class JsonFields {
   static const String ENTITY_LIFECYCLE_DISCONNECTED = "entity_disconnected";
   static const String SOURCE_ENTITY = "sourceEntity";
   static const String NOTIFICATION_TYPE = "type";
+  static const String PROBE_NAME = "probeName";
+  static const String LABEL = "label";
   static const String TYPE = "type";
   static const String NAMESPACE_SELECTOR = "namespaceSelector";
 
@@ -37,6 +40,8 @@ class JsonFields {
   static const String APP_NAME = "name";
   static const String RUNTIME_APP_NAME = "appName";
   static const String DISPLAY_NAME = "displayName";
+  static const String OWNER_DISPLAY_NAME = "ownerDisplayName";
+  static const String ID = "id";
   static const String ICON = "icon";
   static const String VISIBLE = "visible";
   static const String FLUTTER_APP = "flutterApp";
@@ -99,6 +104,8 @@ class JsonFields {
   // Layout
   static const String KEY_INTENTS = "keyIntents";
   static const String KEY_COLORS = "keyColors";
+  static const String BEND_MODE = "bendMode";
+  static const String BEND_RANGE_SEMITONES = "bendRangeSemitones";
   static const String SCOPE = "scope";
   static const String TARGET_KEY = "targetKey";
   static const String LAYOUTS = "layouts";
@@ -110,6 +117,13 @@ class JsonFields {
   static const String INDEX = "index";
   static const String NEW_INDEX = "newIndex";
   static const String ADD_TO_LAYOUT_STACK = "addToLayoutStack";
+  static const String THEME_CHOICE = "themeChoice";
+  static const String SCALE_CHOICE = "scaleChoice";
+  static const String ACTIVE_SOURCE = "activeSource";
+  static const String ACTIVE_SOURCE_SHARED = "shared";
+  static const String ACTIVE_SOURCE_OVERRIDE = "override";
+  static const String OVERRIDE_THEME = "overrideTheme";
+  static const String OVERRIDE_SCALE = "overrideScale";
   static const String THEME_REF = "themeRef";
   static const String SCALE_REF = "scaleRef";
   static const String WORKSPACE = "workspace";
@@ -167,25 +181,52 @@ class JsonFields {
   static const String JACK_BINDING_MODE = "jackBindingMode";
   static const String FLAGS = "flags";
   static const String GROUP_KEY = "groupKey";
+  static const String DISPLAY = "display";
+  static const String TOP_LEVEL_CATEGORY = "topLevelCategory";
+  static const String CATEGORY_PATH = "categoryPath";
+  static const String HIDE_FROM_PICKER = "hideFromPicker";
   static const String SHIM_TARGET_REF = "shimTargetRef";
+  static const String MESSAGE_QUEUE_PAYLOAD_CONTRACT =
+      "messageQueuePayloadContract";
+  static const String CONTINUOUS_FIRST_PEER_POLICY =
+      "continuousFirstPeerPolicy";
   static const String FILE_PATH = "filePath";
 
   // Connection management
   static const String CONNECTION = "connection";
   static const String CONNECTIONS = "connections";
   static const String TARGET = "target";
-  static const String CONNECTION_REQUEST_ITEM = "connectionRequest";
-  static const String CONNECTION_REQUESTS = "connectionRequests";
-  static const String FOLLOW_REQUEST_ITEM = "followRequest";
-  static const String FOLLOW_REQUESTS = "followRequests";
+  static const String CONNECTION_RULE_ITEM = "connectionRule";
+  static const String CONNECTION_RULES = "connectionRules";
+  static const String FOLLOW_RULE_ITEM = "followRule";
+  static const String FOLLOW_RULES = "followRules";
   static const String CONNECTION_ID = "connectionId";
   static const String CONNECTION_NAME = "connectionName";
   static const String SOURCE_REF = "sourceRef";
   static const String DESTINATION_REF = "destinationRef";
+  static const String SOURCE_SELECTOR = "sourceSelector";
+  static const String DESTINATION_SELECTOR = "destinationSelector";
   static const String FOLLOWER_REF = "followerRef";
   static const String LEADER_CRITERIA = "leaderCriteria";
   static const String MAPPING = "mapping";
   static const String INDEX_CONVERSION = "indexConversion";
+  static const String FIELD_PRIORITIES = "fieldPriorities";
+  static const String EXTENSIONS = "extensions";
+  static const String FIELD_ATTRIBUTION = "fieldAttribution";
+  static const String CONTRIBUTING_RATIONALES = "contributingRationales";
+  static const String RATIONALE_KEY = "rationaleKey";
+  static const String RATIONALE_TYPE = "rationaleType";
+  static const String OWNING_ENTITY = "owningEntity";
+  static const String UPDATE_POLICY = "updatePolicy";
+  static const String DELETE_POLICY = "deletePolicy";
+  static const String POLICY_OWNER_ONLY = "ownerOnly";
+  static const String POLICY_ANY_ENTITY = "anyEntity";
+  static const String POLICY_IMMUTABLE = "immutable";
+  static const String BAG = "bag";
+  static const String SOURCE_LABEL = "sourceLabel";
+  static const String SOURCE_ENTITY_LABEL = "sourceEntityLabel";
+  static const String DESTINATION_LABEL = "destinationLabel";
+  static const String DESTINATION_ENTITY_LABEL = "destinationEntityLabel";
   static const String PRIORITY = "priority";
   static const String ENABLED = "enabled";
   static const String METADATA = "metadata";
@@ -195,11 +236,48 @@ class JsonFields {
   static const String CONSTRAINTS = "constraints";
   static const String UNITS = "units";
   static const String DEFAULT_VALUE = "defaultValue";
-  static const String ENUM_VALUES = "enumValues";
+  static const String ENUM_OPTIONS = "enumOptions";
   static const String CUSTOM_SCHEMA = "customSchema";
   static const String BASE_TYPE = "baseType";
   static const String INDEX_TYPE = "indexType";
   static const String INDEX_SPEC = "indexSpec";
+  static const String INITIAL_VALUE = "initialValue";
+  static const String ACTION = "action";
+  static const String ACTION_PAYLOAD = "actionPayload";
+  static const String MATCHED_OUTPUT = "matchedOutput";
+  static const String STATEFUL_INPUT = "statefulInput";
+  static const String RETAINED_VALUE = "retainedValue";
+  static const String SENDER_INFO = "senderInfo";
+  static const String SOURCE_ENDPOINT_REF = "sourceEndpointRef";
+  static const String STATEFUL_BEHAVIOR = "behavior";
+  static const String STATEFUL_CONSUMPTION_MODE = "consumptionMode";
+  static const String MESSAGE_QUEUE_PAYLOAD_ENDPOINT_DATA = "endpoint_data";
+  static const String MESSAGE_QUEUE_PAYLOAD_STATEFUL_FLOAT_ACTION =
+      "stateful_float_action";
+  static const String MESSAGE_QUEUE_PAYLOAD_STATEFUL_INT_ACTION =
+      "stateful_int_action";
+  static const String MESSAGE_QUEUE_PAYLOAD_STATEFUL_TOGGLE_ACTION =
+      "stateful_toggle_action";
+  static const String MESSAGE_QUEUE_PAYLOAD_STATEFUL_ENUM_ACTION =
+      "stateful_enum_action";
+  static const String MESSAGE_QUEUE_PAYLOAD_STATEFUL_COLOR_ACTION =
+      "stateful_color_action";
+  static const String MESSAGE_QUEUE_PAYLOAD_STATEFUL_THEME_ACTION =
+      "stateful_theme_action";
+  static const String MESSAGE_QUEUE_PAYLOAD_STATEFUL_SCALE_ACTION =
+      "stateful_scale_action";
+  static const String STATEFUL_BEHAVIOR_AUTO_REDUCED = "auto_reduced";
+  static const String STATEFUL_BEHAVIOR_OWNER_MANAGED = "owner_managed";
+  static const String STATEFUL_CONSUMPTION_CALLBACK_ONLY = "callback_only";
+  static const String STATEFUL_CONSUMPTION_RETAINED_STATE_ONLY =
+      "retained_state_only";
+  static const String STATEFUL_CONSUMPTION_CALLBACK_AND_RETAINED_STATE =
+      "callback_and_retained_state";
+  static const String STATEFUL_ACTION_SET_VALUE = "set_value";
+  static const String STATEFUL_ACTION_ADD = "add";
+  static const String STATEFUL_ACTION_TOGGLE = "toggle";
+  static const String STATEFUL_ACTION_SET_ID = "set_id";
+  static const String STATEFUL_ACTION_STEP = "step";
 
   // Mapping and conversion
   static const String MAPPING_TYPE = "mappingType";
@@ -210,6 +288,12 @@ class JsonFields {
   static const String STRATEGY = "strategy";
   static const String CONVERTER = "converter";
   static const String PARAMETERS = "parameters";
+  static const String PROJECTION_HINTS = "projectionHints";
+  static const String POLARITY = "polarity";
+  static const String ACTIVITY = "activity";
+  static const String ACTIVE_THRESHOLD = "activeThreshold";
+  static const String IDLE_VALUE = "idleValue";
+  static const String STRATEGIES = "strategies";
 
   // Search criteria
   static const String CRITERIA = "criteria";
@@ -240,6 +324,12 @@ class JsonFields {
   static const String JACK_BINDING_MODE_ADOPT_EXISTING_PORT =
       "adopt_existing_port";
 
+  // CONTINUOUS first-peer idle policies
+  static const String CONTINUOUS_FIRST_PEER_POLICY_INVALIDATE_UNTIL_NEXT_WRITE =
+      "invalidate_until_next_write";
+  static const String CONTINUOUS_FIRST_PEER_POLICY_KEEP_LAST_VALID =
+      "keep_last_valid";
+
   // Endpoint directions
   static const String DIRECTION_INPUT = "input";
   static const String DIRECTION_OUTPUT = "output";
@@ -261,6 +351,9 @@ class JsonFields {
   static const String DATA_TYPE_TOGGLE = "toggle";
   static const String DATA_TYPE_MOMENTARY = "momentary";
   static const String DATA_TYPE_ENUM = "enum";
+  static const String DATA_TYPE_COLOR = "color";
+  static const String DATA_TYPE_THEME = "theme";
+  static const String DATA_TYPE_SCALE = "scale";
   static const String DATA_TYPE_AUDIO_STREAM = "audio_stream";
   static const String DATA_TYPE_KEY_PRESS = "key_press";
   static const String DATA_TYPE_NEAR_PRESS = "near_press";
@@ -272,7 +365,7 @@ class JsonFields {
   static const String DATA_TYPE_VOICE_MESSAGE = "voice_message";
   static const String DATA_TYPE_VOICE_OUTPUT_VALUE = "voice_output_value";
   static const String DATA_TYPE_GLOBAL_OUTPUT_VALUE = "global_output_value";
-  static const String DATA_TYPE_DPP_PARAM_QUEUE = "dpp_param_queue";
+  static const String DATA_TYPE_DPP_EDITOR_MESSAGE = "dpp_editor_message";
   static const String DATA_TYPE_CUSTOM = "custom";
   static const String DATA_TYPE_SCOPE_BUFFER = "scope_buffer";
 
@@ -287,12 +380,23 @@ class JsonFields {
   static const String CONVERSION_UNIFORM = "uniform";
   static const String CONVERSION_LINEAR = "linear";
   static const String CONVERSION_MAX_VALUE = "max_value";
+  static const String CONVERSION_MIN_VALUE = "min_value";
+  static const String CONVERSION_MAX_ABS = "max_abs";
   static const String CONVERSION_AVERAGE_VALUE = "average_value";
   static const String CONVERSION_WEIGHTED_AVERAGE = "weighted_average";
   static const String CONVERSION_FIRST_ACTIVE = "first_active";
+  static const String CONVERSION_LAST_ACTIVE = "last_active";
   static const String CONVERSION_KEY_TO_VOICE = "key_to_voice";
   static const String CONVERSION_VOICE_TO_KEY = "voice_to_key";
   static const String CONVERSION_CUSTOM_CONVERTER = "custom_converter";
+
+  // Projection hints
+  static const String PROJECTION_POLARITY_UNIPOLAR = "unipolar";
+  static const String PROJECTION_POLARITY_BIPOLAR = "bipolar";
+  static const String PROJECTION_ACTIVITY_ABOVE_THRESHOLD = "above_threshold";
+  static const String PROJECTION_ACTIVITY_BELOW_THRESHOLD = "below_threshold";
+  static const String PROJECTION_ACTIVITY_ABS_ABOVE_THRESHOLD =
+      "abs_above_threshold";
 
   // Data references
   static const String CURRENT = "current";
@@ -441,9 +545,6 @@ class Topics {
   static const String THEME_SUBSCRIBE = "theme/subscribe";
   static const String THEME_UNSUBSCRIBE = "theme/unsubscribe";
   static const String THEME_NOTIFICATION = "theme/notification";
-  static const String THEME_SET_CURRENT = "theme/set_current";
-  static const String THEME_READ_CURRENT = "theme/get_current";
-  static const String THEME_REMOVE_CURRENT = "theme/remove_current";
 
   // Scale
   static const String SCALE_SET = "scale/set";
@@ -455,9 +556,6 @@ class Topics {
   static const String SCALE_SUBSCRIBE = "scale/subscribe";
   static const String SCALE_UNSUBSCRIBE = "scale/unsubscribe";
   static const String SCALE_NOTIFICATION = "scale/notification";
-  static const String SCALE_SET_CURRENT = "scale/set_current";
-  static const String SCALE_READ_CURRENT = "scale/get_current";
-  static const String SCALE_REMOVE_CURRENT = "scale/remove_current";
 
   // Connection management
   static const String ENDPOINT_SET = "endpoint/set";
@@ -478,28 +576,27 @@ class Topics {
   static const String CONNECTION_UNSUBSCRIBE = "connection/unsubscribe";
   static const String CONNECTION_NOTIFICATION = "connection/notification";
 
-  static const String CONNECTION_REQUEST_SET = "connection_request/set";
-  static const String CONNECTION_REQUEST_CREATE = "connection_request/create";
-  static const String CONNECTION_REQUEST_READ = "connection_request/read";
-  static const String CONNECTION_REQUEST_UPDATE = "connection_request/update";
-  static const String CONNECTION_REQUEST_DELETE = "connection_request/delete";
-  static const String CONNECTION_REQUEST_LIST = "connection_request/list";
-  static const String FOLLOW_REQUEST_SET = "follow_request/set";
-  static const String FOLLOW_REQUEST_CREATE = "follow_request/create";
-  static const String FOLLOW_REQUEST_READ = "follow_request/read";
-  static const String FOLLOW_REQUEST_UPDATE = "follow_request/update";
-  static const String FOLLOW_REQUEST_DELETE = "follow_request/delete";
-  static const String FOLLOW_REQUEST_LIST = "follow_request/list";
-  static const String CONNECTION_REQUEST_SUBSCRIBE =
-      "connection_request/subscribe";
-  static const String CONNECTION_REQUEST_UNSUBSCRIBE =
-      "connection_request/unsubscribe";
-  static const String CONNECTION_REQUEST_NOTIFICATION =
-      "connection_request/notification";
+  static const String CONNECTION_RULE_SET = "connection_rule/set";
+  static const String CONNECTION_RULE_CREATE = "connection_rule/create";
+  static const String CONNECTION_RULE_READ = "connection_rule/read";
+  static const String CONNECTION_RULE_UPDATE = "connection_rule/update";
+  static const String CONNECTION_RULE_DELETE = "connection_rule/delete";
+  static const String CONNECTION_RULE_LIST = "connection_rule/list";
+  static const String FOLLOW_RULE_SET = "follow_rule/set";
+  static const String FOLLOW_RULE_CREATE = "follow_rule/create";
+  static const String FOLLOW_RULE_READ = "follow_rule/read";
+  static const String FOLLOW_RULE_UPDATE = "follow_rule/update";
+  static const String FOLLOW_RULE_DELETE = "follow_rule/delete";
+  static const String FOLLOW_RULE_LIST = "follow_rule/list";
+  static const String CONNECTION_RULE_SUBSCRIBE = "connection_rule/subscribe";
+  static const String CONNECTION_RULE_UNSUBSCRIBE =
+      "connection_rule/unsubscribe";
+  static const String CONNECTION_RULE_NOTIFICATION =
+      "connection_rule/notification";
 
   static const String CONNECTION_VALIDATION_REQUEST =
       "connection/validation_request";
-  static const String CONNECTION_REQUEST = "connection/request";
+  static const String CONNECTION_RULE = "connection/rule";
 
   // Key state
   static const String KEY_STATE_SET = "key/state/set";

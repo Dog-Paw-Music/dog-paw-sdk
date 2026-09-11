@@ -6,6 +6,7 @@
 #endif
 
 #include "DPQueue.hpp"
+#include "EndpointData.hpp"
 #include "MidiMessage.hpp"
 #include "dataTypes/DppParamQueueMsg.hpp"
 #include "dataTypes/NoteControlMsg.hpp"
@@ -61,6 +62,8 @@ size_t calculate_data_size(int data_type_idx) {
     return sizeof(bool);
   case DPPB_TYPE_ENUM:
     return sizeof(int);
+  case DPPB_TYPE_COLOR:
+    return sizeof(uint32_t);
   case DPPB_TYPE_NOTE_CONTROL:
     return sizeof(NoteCtrlMsg);
   case DPPB_TYPE_MIDI_MESSAGE:
@@ -81,10 +84,14 @@ size_t calculate_data_size(int data_type_idx) {
     return sizeof(GlobalOutputValue);
   case DPPB_TYPE_KEY_PRESS:
     return sizeof(KeyMsg);
-  case DPPB_TYPE_DPP_PARAM_QUEUE:
-    return sizeof(DppParamQueueMsg);
+  case DPPB_TYPE_DPP_EDITOR_MESSAGE:
+    return sizeof(DppEditorMessage);
   case DPPB_TYPE_SCOPE_BUFFER:
     return sizeof(ScopeBufferPayload);
+  case DPPB_TYPE_THEME:
+    return sizeof(dogpaw::ThemeDataWire);
+  case DPPB_TYPE_SCALE:
+    return sizeof(dogpaw::ScaleDataWire);
   default:
     return 0;
   }
@@ -344,8 +351,8 @@ void *dppb_producer_create(const char *queue_name, const char *socket_name, int 
     case DPPB_TYPE_GLOBAL_OUTPUT_VALUE:
       impl = create_producer_impl<GlobalOutputValue>(qn, sn, index_type_idx);
       break;
-    case DPPB_TYPE_DPP_PARAM_QUEUE:
-      impl = create_producer_impl<DppParamQueueMsg>(qn, sn, index_type_idx);
+    case DPPB_TYPE_DPP_EDITOR_MESSAGE:
+      impl = create_producer_impl<DppEditorMessage>(qn, sn, index_type_idx);
       break;
     case DPPB_TYPE_SCOPE_BUFFER:
       impl = create_producer_impl<ScopeBufferPayload>(qn, sn, index_type_idx);
@@ -451,8 +458,8 @@ void *dppb_consumer_create(const char *queue_name, const char *socket_name, int 
     case DPPB_TYPE_GLOBAL_OUTPUT_VALUE:
       impl = create_consumer_impl<GlobalOutputValue>(qn, sn, index_type_idx);
       break;
-    case DPPB_TYPE_DPP_PARAM_QUEUE:
-      impl = create_consumer_impl<DppParamQueueMsg>(qn, sn, index_type_idx);
+    case DPPB_TYPE_DPP_EDITOR_MESSAGE:
+      impl = create_consumer_impl<DppEditorMessage>(qn, sn, index_type_idx);
       break;
     case DPPB_TYPE_SCOPE_BUFFER:
       impl = create_consumer_impl<ScopeBufferPayload>(qn, sn, index_type_idx);

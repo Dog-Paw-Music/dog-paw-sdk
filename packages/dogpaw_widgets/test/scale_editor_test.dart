@@ -5,12 +5,15 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _RecordingScalePreviewController
-    implements EditorPreviewController<dp.ScaleData> {
-  dp.ScaleData? lastPreviewValue;
+    implements
+        EditorPreviewController<SharedOverrideEditorValue<dp.ScaleData>> {
+  SharedOverrideEditorValue<dp.ScaleData>? lastPreviewValue;
   bool wasCleared = false;
 
   @override
-  Future<void> preview(dp.ScaleData value) async {
+  Future<void> preview(
+    SharedOverrideEditorValue<dp.ScaleData> value,
+  ) async {
     lastPreviewValue = value;
   }
 
@@ -18,6 +21,15 @@ class _RecordingScalePreviewController
   Future<void> clear() async {
     wasCleared = true;
   }
+}
+
+SharedOverrideEditorValue<dp.ScaleData> _sharedScaleEditorValue(
+  dp.ScaleData scale,
+) {
+  return SharedOverrideEditorValue<dp.ScaleData>(
+    activeSource: dp.LayoutChoiceActiveSource.shared,
+    sharedValue: scale,
+  );
 }
 
 void main() {
@@ -81,9 +93,10 @@ void main() {
 
   Future<void> pumpScaleEditor(
     WidgetTester tester, {
-    required dp.ScaleData value,
-    required ValueChanged<dp.ScaleData> onChanged,
+    required SharedOverrideEditorValue<dp.ScaleData> value,
+    required ValueChanged<SharedOverrideEditorValue<dp.ScaleData>> onChanged,
     double width = 1200,
+    bool showSourceSelector = false,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -93,6 +106,7 @@ void main() {
             child: ScaleEditor(
               value: value,
               onChanged: onChanged,
+              showSourceSelector: showSourceSelector,
             ),
           ),
         ),
@@ -105,13 +119,19 @@ void main() {
       (WidgetTester tester) async {
     await pumpScaleEditor(
       tester,
-      value: dp.ScaleCatalog.scaleDataForName(
-        scaleName: 'Major',
-        rootNote: 0,
+      value: SharedOverrideEditorValue<dp.ScaleData>(
+        activeSource: dp.LayoutChoiceActiveSource.shared,
+        sharedValue: dp.ScaleCatalog.scaleDataForName(
+          scaleName: 'Major',
+          rootNote: 0,
+        ),
       ),
       onChanged: (_) {},
+      showSourceSelector: true,
     );
 
+    expect(find.byKey(const Key('scale-source-shared')), findsOneWidget);
+    expect(find.byKey(const Key('scale-source-override')), findsOneWidget);
     expect(find.byKey(const Key('scale-root-note-C')), findsOneWidget);
     expect(find.byKey(const Key('scale-root-note-Db')), findsOneWidget);
     expect(find.byKey(const Key('scale-root-note-D')), findsOneWidget);
@@ -135,15 +155,18 @@ void main() {
 
   testWidgets('root note selection transposes the current scale',
       (WidgetTester tester) async {
-    dp.ScaleData? latestValue;
+    SharedOverrideEditorValue<dp.ScaleData>? latestValue;
 
     await pumpScaleEditor(
       tester,
-      value: dp.ScaleCatalog.scaleDataForName(
-        scaleName: 'Major',
-        rootNote: 0,
+      value: SharedOverrideEditorValue<dp.ScaleData>(
+        activeSource: dp.LayoutChoiceActiveSource.shared,
+        sharedValue: dp.ScaleCatalog.scaleDataForName(
+          scaleName: 'Major',
+          rootNote: 0,
+        ),
       ),
-      onChanged: (dp.ScaleData nextValue) {
+      onChanged: (SharedOverrideEditorValue<dp.ScaleData> nextValue) {
         latestValue = nextValue;
       },
     );
@@ -153,21 +176,24 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(latestValue, isNotNull);
-    expect(latestValue!.rootNote, equals(1));
-    expect(dp.ScaleCatalog.detectScaleName(latestValue!), equals('Major'));
+    expect(latestValue!.sharedValue.rootNote, equals(1));
+    expect(dp.ScaleCatalog.detectScaleName(latestValue!.sharedValue), equals('Major'));
   });
 
   testWidgets('named scale selection applies a new scale pattern',
       (WidgetTester tester) async {
-    dp.ScaleData? latestValue;
+    SharedOverrideEditorValue<dp.ScaleData>? latestValue;
 
     await pumpScaleEditor(
       tester,
-      value: dp.ScaleCatalog.scaleDataForName(
-        scaleName: 'Major',
-        rootNote: 0,
+      value: SharedOverrideEditorValue<dp.ScaleData>(
+        activeSource: dp.LayoutChoiceActiveSource.shared,
+        sharedValue: dp.ScaleCatalog.scaleDataForName(
+          scaleName: 'Major',
+          rootNote: 0,
+        ),
       ),
-      onChanged: (dp.ScaleData nextValue) {
+      onChanged: (SharedOverrideEditorValue<dp.ScaleData> nextValue) {
         latestValue = nextValue;
       },
     );
@@ -176,17 +202,17 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(latestValue, isNotNull);
-    expect(dp.ScaleCatalog.detectScaleName(latestValue!), equals('Minor'));
+    expect(dp.ScaleCatalog.detectScaleName(latestValue!.sharedValue), equals('Minor'));
   });
 
   testWidgets('root row uses square selected note and wider unselected notes',
       (WidgetTester tester) async {
     await pumpScaleEditor(
       tester,
-      value: dp.ScaleCatalog.scaleDataForName(
+      value: _sharedScaleEditorValue(dp.ScaleCatalog.scaleDataForName(
         scaleName: 'Major',
         rootNote: 0,
-      ),
+      )),
       onChanged: (_) {},
     );
 
@@ -209,10 +235,11 @@ void main() {
 
   testWidgets('root row animates horizontal note movement during selection',
       (WidgetTester tester) async {
-    dp.ScaleData currentValue = dp.ScaleCatalog.scaleDataForName(
+    SharedOverrideEditorValue<dp.ScaleData> currentValue =
+        _sharedScaleEditorValue(dp.ScaleCatalog.scaleDataForName(
       scaleName: 'Major',
       rootNote: 0,
-    );
+    ));
 
     await tester.pumpWidget(
       MaterialApp(
@@ -226,11 +253,12 @@ void main() {
                 width: 1200,
                 child: ScaleEditor(
                   value: currentValue,
-                  onChanged: (dp.ScaleData nextValue) {
+                  onChanged: (SharedOverrideEditorValue<dp.ScaleData> nextValue) {
                     setState(() {
                       currentValue = nextValue;
                     });
                   },
+                  showSourceSelector: false,
                 ),
               );
             },
@@ -258,10 +286,10 @@ void main() {
       (WidgetTester tester) async {
     await pumpScaleEditor(
       tester,
-      value: dp.ScaleCatalog.scaleDataForName(
+      value: _sharedScaleEditorValue(dp.ScaleCatalog.scaleDataForName(
         scaleName: 'Major',
         rootNote: 0,
-      ),
+      )),
       onChanged: (_) {},
     );
 
@@ -297,10 +325,10 @@ void main() {
     await pumpScaleEditor(
       tester,
       width: 1120,
-      value: dp.ScaleCatalog.scaleDataForName(
+      value: _sharedScaleEditorValue(dp.ScaleCatalog.scaleDataForName(
         scaleName: 'Major',
         rootNote: 0,
-      ),
+      )),
       onChanged: (_) {},
     );
 
@@ -328,10 +356,10 @@ void main() {
     await pumpScaleEditor(
       tester,
       width: 1120,
-      value: dp.ScaleCatalog.scaleDataForName(
+      value: _sharedScaleEditorValue(dp.ScaleCatalog.scaleDataForName(
         scaleName: 'Major',
         rootNote: 0,
-      ),
+      )),
       onChanged: (_) {},
     );
 
@@ -356,10 +384,10 @@ void main() {
     await pumpScaleEditor(
       tester,
       width: 1120,
-      value: dp.ScaleCatalog.scaleDataForName(
+      value: _sharedScaleEditorValue(dp.ScaleCatalog.scaleDataForName(
         scaleName: 'Diminished (Half-Whole)',
         rootNote: 0,
-      ),
+      )),
       onChanged: (_) {},
     );
 
@@ -388,10 +416,10 @@ void main() {
     await pumpScaleEditor(
       tester,
       width: 1120,
-      value: dp.ScaleCatalog.scaleDataForName(
+      value: _sharedScaleEditorValue(dp.ScaleCatalog.scaleDataForName(
         scaleName: 'Major',
         rootNote: 0,
-      ),
+      )),
       onChanged: (_) {},
     );
 
@@ -435,10 +463,10 @@ void main() {
       (WidgetTester tester) async {
     await pumpScaleEditor(
       tester,
-      value: dp.ScaleCatalog.scaleDataForName(
+      value: _sharedScaleEditorValue(dp.ScaleCatalog.scaleDataForName(
         scaleName: 'Major',
         rootNote: 0,
-      ),
+      )),
       onChanged: (_) {},
     );
 
@@ -454,9 +482,9 @@ void main() {
 
     await pumpScaleEditor(
       tester,
-      value: currentValue,
-      onChanged: (dp.ScaleData nextValue) {
-        currentValue = nextValue;
+      value: _sharedScaleEditorValue(currentValue),
+      onChanged: (SharedOverrideEditorValue<dp.ScaleData> nextValue) {
+        currentValue = nextValue.effectiveValue;
       },
     );
 
@@ -479,10 +507,10 @@ void main() {
       (WidgetTester tester) async {
     await pumpScaleEditor(
       tester,
-      value: dp.ScaleCatalog.scaleDataForName(
+      value: _sharedScaleEditorValue(dp.ScaleCatalog.scaleDataForName(
         scaleName: 'Major',
         rootNote: 0,
-      ),
+      )),
       onChanged: (_) {},
     );
 
@@ -514,10 +542,11 @@ void main() {
       (WidgetTester tester) async {
     final _RecordingScalePreviewController previewController =
         _RecordingScalePreviewController();
-    final dp.ScaleData initialScale = dp.ScaleCatalog.scaleDataForName(
+    final SharedOverrideEditorValue<dp.ScaleData> initialScale =
+        _sharedScaleEditorValue(dp.ScaleCatalog.scaleDataForName(
       scaleName: 'Major',
       rootNote: 0,
-    );
+    ));
 
     await tester.binding.setSurfaceSize(const Size(1600, 1000));
     addTearDown(() async {
@@ -557,7 +586,10 @@ void main() {
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
 
-    expect(previewController.lastPreviewValue, equals(initialScale));
+    expect(
+      previewController.lastPreviewValue?.effectiveValue,
+      equals(initialScale.sharedValue),
+    );
     expect(previewController.wasCleared, isTrue);
   });
 
@@ -580,10 +612,10 @@ void main() {
                 onPressed: () {
                   showScaleEditorDialog(
                     context: context,
-                    initialValue: dp.ScaleCatalog.scaleDataForName(
+                    initialValue: _sharedScaleEditorValue(dp.ScaleCatalog.scaleDataForName(
                       scaleName: 'Major',
                       rootNote: 0,
-                    ),
+                    )),
                     previewController: previewController,
                   );
                 },
@@ -623,10 +655,10 @@ void main() {
                 onPressed: () {
                   showScaleEditorDialog(
                     context: context,
-                    initialValue: dp.ScaleCatalog.scaleDataForName(
+                    initialValue: _sharedScaleEditorValue(dp.ScaleCatalog.scaleDataForName(
                       scaleName: 'Major',
                       rootNote: 0,
-                    ),
+                    )),
                   );
                 },
                 child: const Text('Open Scale Dialog'),
@@ -663,10 +695,10 @@ void main() {
                 onPressed: () {
                   showScaleEditorDialog(
                     context: context,
-                    initialValue: dp.ScaleCatalog.scaleDataForName(
+                    initialValue: _sharedScaleEditorValue(dp.ScaleCatalog.scaleDataForName(
                       scaleName: 'Major',
                       rootNote: 0,
-                    ),
+                    )),
                   );
                 },
                 child: const Text('Open Scale Dialog'),
@@ -714,11 +746,12 @@ void main() {
               width: 1200,
               height: 572,
               child: ScaleEditor(
-                value: dp.ScaleCatalog.scaleDataForName(
+                value: _sharedScaleEditorValue(dp.ScaleCatalog.scaleDataForName(
                   scaleName: 'Major',
                   rootNote: 0,
-                ),
+                )),
                 onChanged: (_) {},
+                showSourceSelector: false,
               ),
             ),
           ),

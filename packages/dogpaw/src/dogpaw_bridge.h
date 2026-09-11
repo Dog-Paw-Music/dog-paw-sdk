@@ -49,6 +49,7 @@ enum {
   DPPB_TYPE_TOGGLE,
   DPPB_TYPE_MOMENTARY,
   DPPB_TYPE_ENUM,
+  DPPB_TYPE_COLOR,
   DPPB_TYPE_AUDIO_STREAM,
   DPPB_TYPE_KEY_PRESS,
   DPPB_TYPE_NEAR_PRESS,
@@ -60,9 +61,11 @@ enum {
   DPPB_TYPE_VOICE_MESSAGE,
   DPPB_TYPE_VOICE_OUTPUT_VALUE,
   DPPB_TYPE_GLOBAL_OUTPUT_VALUE,
-  DPPB_TYPE_DPP_PARAM_QUEUE,
+  DPPB_TYPE_DPP_EDITOR_MESSAGE,
   DPPB_TYPE_CUSTOM,
-  DPPB_TYPE_SCOPE_BUFFER
+  DPPB_TYPE_SCOPE_BUFFER,
+  DPPB_TYPE_THEME,
+  DPPB_TYPE_SCALE
 };
 
 // Index types matching C++ IndexType enum
@@ -501,6 +504,42 @@ bool dppb_dpe_complete_preset_request(void* handle,
                                       const char* error_message);
 
 /**
+ * @brief Launch the native dispatcher-order probe used by bridge integration
+ * tests.
+ *
+ * Purpose:
+ * Starts a bridge-local synthetic event scenario that integration tests use to
+ * distinguish direct multi-threaded Dart posting from a single dispatcher
+ * queue.
+ *
+ * @param handle Opaque bridge handle returned by `dppb_dpe_create()`.
+ * @return `true` if the probe worker threads were launched successfully,
+ *   otherwise `false`.
+ *
+ * @pre `handle` is a live bridge handle with an event port already registered.
+ * @post On success, synthetic debug-probe events will be posted back to Dart.
+ * @invariant This helper is intended only for bridge integration tests.
+ */
+bool dppb_dpe_debug_run_dispatcher_order_probe(void* handle);
+
+/**
+ * @brief Run the native shutdown-drain probe used by bridge integration tests.
+ *
+ * Purpose:
+ * Exercises native bridge shutdown while a synthetic event should already
+ * belong to the bridge, letting integration tests verify whether teardown
+ * drains accepted work before returning.
+ *
+ * @param handle Opaque bridge handle returned by `dppb_dpe_create()`.
+ * @return `true` if the probe ran successfully, otherwise `false`.
+ *
+ * @pre `handle` is a live bridge handle with an event port already registered.
+ * @post On success, the bridge shutdown path has completed before return.
+ * @invariant This helper is intended only for bridge integration tests.
+ */
+bool dppb_dpe_debug_run_shutdown_drain_probe(void* handle);
+
+/**
  * @brief Launch an asynchronous native-backed `saveGlobalState()` request.
  *
  * Purpose:
@@ -675,6 +714,11 @@ bool dppb_dpe_list_running_entities_async(void* handle, int64_t request_id);
  * @param app_name UTF-8 app template name.
  * @param launch_metadata_json Optional UTF-8 JSON object to pass as launch
  *   metadata. Pass `nullptr` or an empty string to launch without metadata.
+ * @param launch_args_json Optional UTF-8 JSON array of strings appended after
+ *   `--no-term` and manifest `args`. Pass `nullptr` or an empty string for none.
+ * @param display_name Optional UTF-8 human-facing display name for the runtime
+ *   entity. Pass `nullptr` or an empty string to omit and use the template
+ *   manifest display name (with Epiphany collision suffixes when needed).
  * @return `true` if the worker thread was launched, otherwise `false`.
  *
  * On success, the `result` payload contains `entityName` with the runtime
@@ -684,7 +728,9 @@ bool dppb_dpe_list_running_entities_async(void* handle, int64_t request_id);
 bool dppb_dpe_launch_app_async(void* handle,
                                int64_t request_id,
                                const char* app_name,
-                               const char* launch_metadata_json);
+                               const char* launch_metadata_json,
+                               const char* launch_args_json,
+                               const char* display_name);
 
 /**
  * @brief Launch an asynchronous native-backed `stopApp()` request.
@@ -845,79 +891,6 @@ bool dppb_dpe_delete_theme_async(
     const char* namespace_selector_json);
 
 /**
- * @brief Launch an asynchronous native-backed `setCurrentTheme()` request.
- *
- * Purpose:
- * Pushes one theme onto the current-theme stack through the wrapped C++
- * `setCurrentTheme()` API and posts the success/error result back to Dart.
- *
- * @param handle Opaque bridge handle returned by `dppb_dpe_create()`.
- * @param request_id Dart-side bridge request id used to resolve the matching
- *   Dart completer.
- * @param name Theme name to set current.
- * @param namespace_selector_json JSON string encoding a Dog Paw namespace
- *   selector.
- * @return `true` if the worker thread was launched, otherwise `false`.
- *
- * @pre `handle` is a live bridge handle with an event port already registered.
- * @pre `name` points to a valid theme name string.
- * @pre `namespace_selector_json` contains valid namespace-selector JSON.
- * @post On success, one async set-current-theme result will be posted to Dart.
- * @invariant The calling Dart isolate is not blocked waiting for the Epiphany
- *   response.
- */
-bool dppb_dpe_set_current_theme_async(
-    void* handle,
-    int64_t request_id,
-    const char* name,
-    const char* namespace_selector_json);
-
-/**
- * @brief Launch an asynchronous native-backed `readCurrentTheme()` request.
- *
- * Purpose:
- * Reads the top of the current-theme stack through the wrapped C++
- * `readCurrentTheme()` API and posts the typed result back to Dart.
- *
- * @param handle Opaque bridge handle returned by `dppb_dpe_create()`.
- * @param request_id Dart-side bridge request id used to resolve the matching
- *   Dart completer.
- * @param include_resolved Whether resolved data should be requested.
- * @param include_spec Whether spec data should be requested.
- * @return `true` if the worker thread was launched, otherwise `false`.
- *
- * @pre `handle` is a live bridge handle with an event port already registered.
- * @post On success, one async read-current-theme result will be posted to Dart.
- * @invariant The calling Dart isolate is not blocked waiting for the Epiphany
- *   response.
- */
-bool dppb_dpe_read_current_theme_async(
-    void* handle,
-    int64_t request_id,
-    bool include_resolved,
-    bool include_spec);
-
-/**
- * @brief Launch an asynchronous native-backed `removeCurrentTheme()` request.
- *
- * Purpose:
- * Pops the current-theme stack through the wrapped C++ `removeCurrentTheme()`
- * API and posts the success/error result back to Dart.
- *
- * @param handle Opaque bridge handle returned by `dppb_dpe_create()`.
- * @param request_id Dart-side bridge request id used to resolve the matching
- *   Dart completer.
- * @return `true` if the worker thread was launched, otherwise `false`.
- *
- * @pre `handle` is a live bridge handle with an event port already registered.
- * @post On success, one async remove-current-theme result will be posted to
- *   Dart.
- * @invariant The calling Dart isolate is not blocked waiting for the Epiphany
- *   response.
- */
-bool dppb_dpe_remove_current_theme_async(void* handle, int64_t request_id);
-
-/**
  * @brief Launch an asynchronous native-backed `listThemes()` request.
  *
  * Purpose:
@@ -1013,62 +986,6 @@ bool dppb_dpe_unsubscribe_themes_async(
     int64_t request_id,
     const char* name,
     const char* namespace_selector_json);
-
-/**
- * @brief Launch an asynchronous native-backed `subscribeToCurrentTheme()`
- * request.
- *
- * Purpose:
- * Registers a native current-theme subscription through the wrapped C++
- * `subscribeToCurrentTheme()` API and posts the success/error result back to
- * Dart. Subsequent current-theme notifications are posted separately on the
- * same event port.
- *
- * @param handle Opaque bridge handle returned by `dppb_dpe_create()`.
- * @param request_id Dart-side bridge request id used to resolve the matching
- *   Dart completer.
- * @param include_resolved Whether resolved data should be requested.
- * @param include_spec Whether spec data should be requested.
- * @param send_immediately Whether the current theme should be emitted
- *   immediately after subscribing.
- * @return `true` if the worker thread was launched, otherwise `false`.
- *
- * @pre `handle` is a live bridge handle with an event port already registered.
- * @post On success, one async subscribe-current-theme result will be posted to
- *   Dart.
- * @post Later native current-theme notifications may be posted until
- *   unsubscribed or destroyed.
- * @invariant The calling Dart isolate is not blocked waiting for the Epiphany
- *   response.
- */
-bool dppb_dpe_subscribe_current_theme_async(
-    void* handle,
-    int64_t request_id,
-    bool include_resolved,
-    bool include_spec,
-    bool send_immediately);
-
-/**
- * @brief Launch an asynchronous native-backed `unsubscribeFromCurrentTheme()`
- * request.
- *
- * Purpose:
- * Removes a native current-theme subscription through the wrapped C++
- * `unsubscribeFromCurrentTheme()` API and posts the success/error result back
- * to Dart.
- *
- * @param handle Opaque bridge handle returned by `dppb_dpe_create()`.
- * @param request_id Dart-side bridge request id used to resolve the matching
- *   Dart completer.
- * @return `true` if the worker thread was launched, otherwise `false`.
- *
- * @pre `handle` is a live bridge handle with an event port already registered.
- * @post On success, one async unsubscribe-current-theme result will be posted
- *   to Dart.
- * @invariant The calling Dart isolate is not blocked waiting for the Epiphany
- *   response.
- */
-bool dppb_dpe_unsubscribe_current_theme_async(void* handle, int64_t request_id);
 
 /**
  * @brief Launch an asynchronous native-backed `setScale()` request.
@@ -1194,79 +1111,6 @@ bool dppb_dpe_delete_scale_async(
     int64_t request_id,
     const char* name,
     const char* namespace_selector_json);
-
-/**
- * @brief Launch an asynchronous native-backed `setCurrentScale()` request.
- *
- * Purpose:
- * Pushes one scale onto the current-scale stack through the wrapped C++
- * `setCurrentScale()` API and posts the success/error result back to Dart.
- *
- * @param handle Opaque bridge handle returned by `dppb_dpe_create()`.
- * @param request_id Dart-side bridge request id used to resolve the matching
- *   Dart completer.
- * @param name Scale name to set current.
- * @param namespace_selector_json JSON string encoding a Dog Paw namespace
- *   selector.
- * @return `true` if the worker thread was launched, otherwise `false`.
- *
- * @pre `handle` is a live bridge handle with an event port already registered.
- * @pre `name` points to a valid scale name string.
- * @pre `namespace_selector_json` contains valid namespace-selector JSON.
- * @post On success, one async set-current-scale result will be posted to Dart.
- * @invariant The calling Dart isolate is not blocked waiting for the Epiphany
- *   response.
- */
-bool dppb_dpe_set_current_scale_async(
-    void* handle,
-    int64_t request_id,
-    const char* name,
-    const char* namespace_selector_json);
-
-/**
- * @brief Launch an asynchronous native-backed `readCurrentScale()` request.
- *
- * Purpose:
- * Reads the top of the current-scale stack through the wrapped C++
- * `readCurrentScale()` API and posts the typed result back to Dart.
- *
- * @param handle Opaque bridge handle returned by `dppb_dpe_create()`.
- * @param request_id Dart-side bridge request id used to resolve the matching
- *   Dart completer.
- * @param include_resolved Whether resolved data should be requested.
- * @param include_spec Whether spec data should be requested.
- * @return `true` if the worker thread was launched, otherwise `false`.
- *
- * @pre `handle` is a live bridge handle with an event port already registered.
- * @post On success, one async read-current-scale result will be posted to Dart.
- * @invariant The calling Dart isolate is not blocked waiting for the Epiphany
- *   response.
- */
-bool dppb_dpe_read_current_scale_async(
-    void* handle,
-    int64_t request_id,
-    bool include_resolved,
-    bool include_spec);
-
-/**
- * @brief Launch an asynchronous native-backed `removeCurrentScale()` request.
- *
- * Purpose:
- * Pops the current-scale stack through the wrapped C++ `removeCurrentScale()`
- * API and posts the success/error result back to Dart.
- *
- * @param handle Opaque bridge handle returned by `dppb_dpe_create()`.
- * @param request_id Dart-side bridge request id used to resolve the matching
- *   Dart completer.
- * @return `true` if the worker thread was launched, otherwise `false`.
- *
- * @pre `handle` is a live bridge handle with an event port already registered.
- * @post On success, one async remove-current-scale result will be posted to
- *   Dart.
- * @invariant The calling Dart isolate is not blocked waiting for the Epiphany
- *   response.
- */
-bool dppb_dpe_remove_current_scale_async(void* handle, int64_t request_id);
 
 /**
  * @brief Launch an asynchronous native-backed `listScales()` request.
@@ -1736,6 +1580,30 @@ bool dppb_dpe_delete_endpoint_async(void* handle,
                                     const char* name);
 
 /**
+ * @brief Launch an asynchronous native-backed `listMyEndpoints()` request.
+ *
+ * Purpose:
+ * Lists endpoints owned by the current bridge entity while preserving the
+ * caller's spec/resolved inclusion flags.
+ *
+ * @param handle Opaque bridge handle returned by `dppb_dpe_create()`.
+ * @param request_id Dart-side bridge request id used to resolve the completer.
+ * @param include_resolved Whether resolved endpoint data should be returned.
+ * @param include_spec Whether authored endpoint spec data should be returned.
+ * @return `true` if the list worker thread was launched, otherwise `false`.
+ *
+ * @pre `handle` is a live bridge handle with an event port already registered.
+ * @post On success, the final endpoint-list result arrives asynchronously via
+ *   the event port.
+ * @invariant The calling Dart isolate is not blocked waiting for the Epiphany
+ *   response.
+ */
+bool dppb_dpe_list_endpoints_async(void* handle,
+                                   int64_t request_id,
+                                   bool include_resolved,
+                                   bool include_spec);
+
+/**
  * @brief Launch an asynchronous native-backed `searchEndpoints()` request.
  *
  * Purpose:
@@ -1912,6 +1780,97 @@ int32_t dppb_dpe_local_endpoint_get_connection_name(
     int32_t max_size);
 
 /**
+ * @brief Read the current peer count for one native-owned CONTINUOUS or
+ * MESSAGE_QUEUE local endpoint.
+ *
+ * Purpose:
+ * Exposes the unified `Endpoint::getPeerCount()` surface (SPARSE_ENDPOINT
+ * idle/scale plan, Phase 1) so Dart can gate expensive publish work on
+ * whether any peer is currently attached, without maintaining its own
+ * reader/consumer bookkeeping.
+ *
+ * @param handle Opaque bridge handle returned by `dppb_dpe_create()`.
+ * @param endpoint_name Owned endpoint name in the current entity namespace.
+ * @return Non-negative peer count on success, or `-1` on error (including
+ * when the endpoint's category does not define a peer count).
+ *
+ * @pre `handle` is a live bridge handle.
+ * @pre `endpoint_name` points to a valid null-terminated UTF-8 string.
+ * @post Endpoint state is unchanged.
+ * @invariant Returned count reflects native runtime state at the time of the
+ * call; OUTPUT CONTINUOUS/MESSAGE_QUEUE counts may lag true attach/detach by
+ * up to one maintenance-thread interval (see `SharedData.hpp`).
+ */
+int32_t dppb_dpe_local_endpoint_get_peer_count(
+    void* handle,
+    const char* endpoint_name);
+
+/**
+ * @brief Set the runtime `ContinuousFirstPeerPolicy` override for one
+ * native-owned CONTINUOUS local endpoint.
+ *
+ * Purpose:
+ * Lets Dart apps switch a live CONTINUOUS output between
+ * `InvalidateUntilNextWrite` and `KeepLastValid` idle behavior without
+ * recreating the endpoint, mirroring
+ * `Endpoint::setContinuousFirstPeerPolicy()`.
+ *
+ * @param handle Opaque bridge handle returned by `dppb_dpe_create()`.
+ * @param endpoint_name Owned endpoint name in the current entity namespace.
+ * @param policy Policy identifier: `"invalidate_until_next_write"` or
+ *   `"keep_last_valid"`.
+ * @return `true` on success, `false` if the endpoint is not CONTINUOUS or
+ * `policy` is unrecognized.
+ *
+ * @pre `handle` is a live bridge handle.
+ * @pre `endpoint_name` and `policy` point to valid null-terminated UTF-8
+ * strings.
+ * @post On success, subsequent peerless writes on this endpoint follow the
+ * new policy immediately; the override wins over the endpoint's spec-time
+ * default until changed again.
+ * @invariant This call never changes the endpoint's category or direction.
+ */
+bool dppb_dpe_local_endpoint_set_continuous_first_peer_policy(
+    void* handle,
+    const char* endpoint_name,
+    const char* policy);
+
+/**
+ * @brief Read the effective `ContinuousFirstPeerPolicy` for one native-owned
+ * CONTINUOUS local endpoint.
+ *
+ * Purpose:
+ * Mirrors `Endpoint::getContinuousFirstPeerPolicy()`, returning the runtime
+ * override when one has been set via
+ * `dppb_dpe_local_endpoint_set_continuous_first_peer_policy()`, otherwise the
+ * endpoint's spec-time default.
+ *
+ * @param handle Opaque bridge handle returned by `dppb_dpe_create()`.
+ * @param endpoint_name Owned endpoint name in the current entity namespace.
+ * @param out_policy Writable UTF-8 buffer, or null to query the required
+ *   size.
+ * @param max_size Capacity of `out_policy` in bytes including the
+ *   terminator.
+ * @return Required byte count including the terminator on success, or `-1`
+ * on error (including when the endpoint is not CONTINUOUS).
+ *
+ * @pre `handle` is a live bridge handle.
+ * @pre `endpoint_name` points to a valid null-terminated UTF-8 string.
+ * @pre When `out_policy` is non-null, it points to at least `max_size`
+ * writable bytes.
+ * @post When `out_policy` is non-null and large enough, it contains a
+ * null-terminated UTF-8 policy identifier matching
+ * `dppb_dpe_local_endpoint_set_continuous_first_peer_policy()`'s accepted
+ * values.
+ * @invariant Endpoint state is unchanged.
+ */
+int32_t dppb_dpe_local_endpoint_get_continuous_first_peer_policy(
+    void* handle,
+    const char* endpoint_name,
+    char* out_policy,
+    int32_t max_size);
+
+/**
  * @brief Query the current payload shape for one realized native input
  * connection.
  *
@@ -1971,6 +1930,73 @@ int32_t dppb_dpe_local_endpoint_poll_connection(
     const char* connection_name,
     void* out_data,
     int32_t max_size);
+
+/**
+ * @brief Read one native-owned local endpoint's retained-state snapshot as
+ * JSON.
+ *
+ * Purpose:
+ * Gives Dart direct access to the native endpoint runtime's retained-state
+ * snapshot without rebuilding that state in the wrapper layer.
+ *
+ * @param handle Opaque bridge handle returned by `dppb_dpe_create()`.
+ * @param endpoint_name Owned endpoint name in the current entity namespace.
+ * @param out_json Writable UTF-8 buffer that receives snapshot JSON, or null to
+ *   query the required size.
+ * @param max_size Capacity of `out_json` in bytes including the terminator.
+ * @return Required byte count including the terminator on success, or `-1` on
+ *   error.
+ *
+ * @pre `handle` is a live bridge handle.
+ * @pre `endpoint_name` points to a valid null-terminated UTF-8 string.
+ * @pre When `out_json` is non-null, it points to at least `max_size` writable
+ * bytes.
+ * @post When `out_json` is non-null and large enough, it contains one
+ * null-terminated UTF-8 JSON object matching `EndpointRetainedStateSnapshot`.
+ * @invariant Endpoint metadata and runtime state are unchanged by this read.
+ */
+int32_t dppb_dpe_local_endpoint_get_retained_state_json(
+    void* handle,
+    const char* endpoint_name,
+    char* out_json,
+    int32_t max_size);
+
+/**
+ * @brief Adopt one retained-state snapshot into a native-owned local stateful
+ * input endpoint.
+ *
+ * Purpose:
+ * Exposes the wrapped C++ `Endpoint::adoptRetainedStateSnapshot()` primitive so
+ * the Dart facade can commit accepted state through the same native runtime
+ * path used by C++ owners.
+ *
+ * @param handle Opaque bridge handle returned by `dppb_dpe_create()`.
+ * @param endpoint_name Owned endpoint name in the current entity namespace.
+ * @param snapshot_json UTF-8 JSON object matching
+ *   `EndpointRetainedStateSnapshot`.
+ * @param publish_matched_output Whether a linked matched output should publish
+ *   the committed state immediately.
+ * @param sender_info_json Optional UTF-8 JSON object describing
+ *   `EndpointSenderInfo`, or null/empty when no sender identity should be
+ *   attached.
+ * @return `true` when the snapshot was adopted successfully, otherwise `false`.
+ *
+ * @pre `handle` is a live bridge handle.
+ * @pre `endpoint_name` and `snapshot_json` point to valid null-terminated UTF-8
+ * strings.
+ * @pre When `sender_info_json` is non-null and non-empty, it encodes an object
+ * with `name` and `target` fields compatible with the native sender contract.
+ * @post On success, the endpoint's retained state matches `snapshot_json`.
+ * @post When `publish_matched_output` is `true`, a linked matched output
+ * publishes the committed state through the normal native path.
+ * @invariant This function does not mutate authored endpoint metadata.
+ */
+bool dppb_dpe_local_endpoint_adopt_retained_state_json(
+    void* handle,
+    const char* endpoint_name,
+    const char* snapshot_json,
+    bool publish_matched_output,
+    const char* sender_info_json);
 
 /**
  * @brief Read the current bytes for one realized native file-backed input
@@ -2039,38 +2065,38 @@ int32_t dppb_dpe_local_endpoint_poll_file_backed(
     int32_t max_size);
 
 /**
- * @brief Launch an asynchronous native-backed `createConnectionRequest()`
+ * @brief Launch an asynchronous native-backed `createConnectionRule()`
  * request.
  *
  * Purpose:
- * Forwards JSON to the wrapped C++ `createConnectionRequest()` and posts the
+ * Forwards JSON to the wrapped C++ `createConnectionRule()` and posts the
  * operation result to Dart.
  */
-bool dppb_dpe_create_connection_request_async(void* handle,
-                                              int64_t request_id,
-                                              const char* connection_request_json);
-
-/**
- * @brief Launch an asynchronous native-backed `setConnectionRequest()`
- * request.
- */
-bool dppb_dpe_set_connection_request_async(void* handle,
+bool dppb_dpe_create_connection_rule_async(void* handle,
                                            int64_t request_id,
-                                           const char* connection_request_json);
+                                           const char* connection_rule_json);
 
 /**
- * @brief Launch an asynchronous native-backed `updateConnectionRequest()`
+ * @brief Launch an asynchronous native-backed `setConnectionRule()`
  * request.
  */
-bool dppb_dpe_update_connection_request_async(void* handle,
-                                              int64_t request_id,
-                                              const char* connection_request_json);
+bool dppb_dpe_set_connection_rule_async(void* handle,
+                                        int64_t request_id,
+                                        const char* connection_rule_json);
 
 /**
- * @brief Launch an asynchronous native-backed `readConnectionRequest()`
+ * @brief Launch an asynchronous native-backed `updateConnectionRule()`
  * request.
  */
-bool dppb_dpe_read_connection_request_async(
+bool dppb_dpe_update_connection_rule_async(void* handle,
+                                           int64_t request_id,
+                                           const char* connection_rule_json);
+
+/**
+ * @brief Launch an asynchronous native-backed `readConnectionRule()`
+ * request.
+ */
+bool dppb_dpe_read_connection_rule_async(
     void* handle,
     int64_t request_id,
     const char* name,
@@ -2079,20 +2105,20 @@ bool dppb_dpe_read_connection_request_async(
     bool include_spec);
 
 /**
- * @brief Launch an asynchronous native-backed `deleteConnectionRequest()`
+ * @brief Launch an asynchronous native-backed `deleteConnectionRule()`
  * request.
  */
-bool dppb_dpe_delete_connection_request_async(
+bool dppb_dpe_delete_connection_rule_async(
     void* handle,
     int64_t request_id,
     const char* name,
     const char* namespace_selector_json);
 
 /**
- * @brief Launch an asynchronous native-backed `listConnectionRequests()`
+ * @brief Launch an asynchronous native-backed `listConnectionRules()`
  * request.
  */
-bool dppb_dpe_list_connection_requests_async(
+bool dppb_dpe_list_connection_rules_async(
     void* handle,
     int64_t request_id,
     const char* namespace_selector_json,
@@ -2100,32 +2126,32 @@ bool dppb_dpe_list_connection_requests_async(
     bool include_spec);
 
 /**
- * @brief Launch an asynchronous native-backed `createFollowRequest()`
+ * @brief Launch an asynchronous native-backed `createFollowRule()`
  * request.
  */
-bool dppb_dpe_create_follow_request_async(void* handle,
-                                          int64_t request_id,
-                                          const char* follow_request_json);
-
-/**
- * @brief Launch an asynchronous native-backed `setFollowRequest()` request.
- */
-bool dppb_dpe_set_follow_request_async(void* handle,
+bool dppb_dpe_create_follow_rule_async(void* handle,
                                        int64_t request_id,
-                                       const char* follow_request_json);
+                                       const char* follow_rule_json);
 
 /**
- * @brief Launch an asynchronous native-backed `updateFollowRequest()`
+ * @brief Launch an asynchronous native-backed `setFollowRule()` request.
+ */
+bool dppb_dpe_set_follow_rule_async(void* handle,
+                                    int64_t request_id,
+                                    const char* follow_rule_json);
+
+/**
+ * @brief Launch an asynchronous native-backed `updateFollowRule()`
  * request.
  */
-bool dppb_dpe_update_follow_request_async(void* handle,
-                                          int64_t request_id,
-                                          const char* follow_request_json);
+bool dppb_dpe_update_follow_rule_async(void* handle,
+                                       int64_t request_id,
+                                       const char* follow_rule_json);
 
 /**
- * @brief Launch an asynchronous native-backed `readFollowRequest()` request.
+ * @brief Launch an asynchronous native-backed `readFollowRule()` request.
  */
-bool dppb_dpe_read_follow_request_async(
+bool dppb_dpe_read_follow_rule_async(
     void* handle,
     int64_t request_id,
     const char* name,
@@ -2134,18 +2160,18 @@ bool dppb_dpe_read_follow_request_async(
     bool include_spec);
 
 /**
- * @brief Launch an asynchronous native-backed `deleteFollowRequest()`
+ * @brief Launch an asynchronous native-backed `deleteFollowRule()`
  * request.
  */
-bool dppb_dpe_delete_follow_request_async(void* handle,
-                                          int64_t request_id,
-                                          const char* name,
-                                          const char* namespace_selector_json);
+bool dppb_dpe_delete_follow_rule_async(void* handle,
+                                       int64_t request_id,
+                                       const char* name,
+                                       const char* namespace_selector_json);
 
 /**
- * @brief Launch an asynchronous native-backed `listFollowRequests()` request.
+ * @brief Launch an asynchronous native-backed `listFollowRules()` request.
  */
-bool dppb_dpe_list_follow_requests_async(
+bool dppb_dpe_list_follow_rules_async(
     void* handle,
     int64_t request_id,
     const char* namespace_selector_json,
@@ -2176,6 +2202,72 @@ bool dppb_dpe_list_connections_async(void* handle,
                                      int64_t request_id,
                                      bool include_resolved,
                                      bool include_spec);
+
+/**
+ * @brief Launch an asynchronous native-backed `subscribeToConnections()`
+ * request.
+ *
+ * Purpose:
+ * Registers a realized-connection subscription through the wrapped C++
+ * `subscribeToConnections()` API and posts both the subscription result and
+ * later connection notifications back to Dart on the bridge event port. The
+ * wrapped C++ API uses global namespace semantics on the wire (realized
+ * connections are never entity-scoped), so no namespace selector parameter is
+ * exposed here.
+ *
+ * @param handle Opaque bridge handle returned by `dppb_dpe_create()`.
+ * @param request_id Dart-side bridge request id used to resolve the matching
+ *   Dart completer.
+ * @param name Optional realized connection name to watch, or null for all
+ *   realized connections.
+ * @param include_resolved Whether resolved data (effective metadata,
+ *   attribution, contributing rationales) should be requested.
+ * @param include_spec Whether spec data (stored contributor rationale bags)
+ *   should be requested.
+ * @param send_immediately Whether matching current connections should be
+ *   emitted immediately after subscribing.
+ * @return `true` if the worker thread was launched, otherwise `false`.
+ *
+ * @pre `handle` is a live bridge handle with an event port already registered.
+ * @post On success, one async subscribe-connections result will be posted to
+ *   Dart.
+ * @post Later native connection notifications may be posted until
+ *   unsubscribed or destroyed.
+ * @invariant The calling Dart isolate is not blocked waiting for the Epiphany
+ *   response.
+ */
+bool dppb_dpe_subscribe_connections_async(
+    void* handle,
+    int64_t request_id,
+    const char* name,
+    bool include_resolved,
+    bool include_spec,
+    bool send_immediately);
+
+/**
+ * @brief Launch an asynchronous native-backed `unsubscribeFromConnections()`
+ * request.
+ *
+ * Purpose:
+ * Removes a realized-connection subscription through the wrapped C++
+ * DogPawEntity and posts the success/error result back to Dart.
+ *
+ * @param handle Opaque bridge handle returned by `dppb_dpe_create()`.
+ * @param request_id Dart-side bridge request id used to resolve the matching
+ *   Dart completer.
+ * @param name Optional realized connection name to stop watching, or null for
+ *   all realized connections.
+ * @return `true` if the worker thread was launched, otherwise `false`.
+ *
+ * @pre `handle` is a live bridge handle with an event port already registered.
+ * @post On success, one async unsubscribe-connections result will be posted
+ *   to Dart.
+ * @invariant The calling Dart isolate is not blocked waiting for the Epiphany
+ *   response.
+ */
+bool dppb_dpe_unsubscribe_connections_async(void* handle,
+                                            int64_t request_id,
+                                            const char* name);
 
 /**
  * @brief Launch an asynchronous native-backed `subscribeToScales()` request.
@@ -2243,62 +2335,6 @@ bool dppb_dpe_unsubscribe_scales_async(
     int64_t request_id,
     const char* name,
     const char* namespace_selector_json);
-
-/**
- * @brief Launch an asynchronous native-backed `subscribeToCurrentScale()`
- * request.
- *
- * Purpose:
- * Registers a native current-scale subscription through the wrapped C++
- * `subscribeToCurrentScale()` API and posts the success/error result back to
- * Dart. Subsequent current-scale notifications are posted separately on the
- * same event port.
- *
- * @param handle Opaque bridge handle returned by `dppb_dpe_create()`.
- * @param request_id Dart-side bridge request id used to resolve the matching
- *   Dart completer.
- * @param include_resolved Whether resolved data should be requested.
- * @param include_spec Whether spec data should be requested.
- * @param send_immediately Whether the current scale should be emitted
- *   immediately after subscribing.
- * @return `true` if the worker thread was launched, otherwise `false`.
- *
- * @pre `handle` is a live bridge handle with an event port already registered.
- * @post On success, one async subscribe-current-scale result will be posted to
- *   Dart.
- * @post Later native current-scale notifications may be posted until
- *   unsubscribed or destroyed.
- * @invariant The calling Dart isolate is not blocked waiting for the Epiphany
- *   response.
- */
-bool dppb_dpe_subscribe_current_scale_async(
-    void* handle,
-    int64_t request_id,
-    bool include_resolved,
-    bool include_spec,
-    bool send_immediately);
-
-/**
- * @brief Launch an asynchronous native-backed `unsubscribeFromCurrentScale()`
- * request.
- *
- * Purpose:
- * Removes a native current-scale subscription through the wrapped C++
- * `unsubscribeFromCurrentScale()` API and posts the success/error result back
- * to Dart.
- *
- * @param handle Opaque bridge handle returned by `dppb_dpe_create()`.
- * @param request_id Dart-side bridge request id used to resolve the matching
- *   Dart completer.
- * @return `true` if the worker thread was launched, otherwise `false`.
- *
- * @pre `handle` is a live bridge handle with an event port already registered.
- * @post On success, one async unsubscribe-current-scale result will be posted
- *   to Dart.
- * @invariant The calling Dart isolate is not blocked waiting for the Epiphany
- *   response.
- */
-bool dppb_dpe_unsubscribe_current_scale_async(void* handle, int64_t request_id);
 
 /**
  * @brief Launch an asynchronous native-backed `subscribeToLayouts()` request.

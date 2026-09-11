@@ -55,11 +55,34 @@ class NamerService {
     return _keyToNoteVal[_KeyPosition(col, row)];
   }
 
-  /// Get all key positions (as (col, row) tuples) that map to a given MIDI note value
-  List<(int, int)> getKeysForNote(int noteVal) {
+  /// Find every physical key whose layout MIDI note matches [noteOrPitchClass].
+  ///
+  /// Purpose:
+  ///     Reverse-lookup for Show Me and chord highlighting. The chord builder
+  ///     selects pitch classes (`0..11`); the layout stores full MIDI notes.
+  ///
+  /// Parameters:
+  /// - [noteOrPitchClass]: Either a pitch class in `0..11`, or a full MIDI note
+  ///   (`0..127`). Matching is always by pitch class (`value % 12`).
+  ///
+  /// Return value:
+  /// - All `(col, row)` keys whose mapped MIDI note shares that pitch class.
+  ///   Empty when the layout has no matching keys.
+  ///
+  /// Requirements/Preconditions:
+  /// - Layout subscription should already have populated `_keyToNoteVal`
+  ///   (otherwise the result is empty).
+  ///
+  /// Guarantees/Postconditions:
+  /// - Returns every octave that matches; does not prefer a single octave.
+  ///
+  /// Invariants:
+  /// - Does not mutate `_keyToNoteVal` or send LED messages.
+  List<(int, int)> getKeysForNote(int noteOrPitchClass) {
+    final int pitchClass = noteOrPitchClass % 12;
     return _keyToNoteVal.entries
-        .where((entry) => entry.value == noteVal)
-        .map((entry) => (entry.key.col, entry.key.row))
+        .where((MapEntry<_KeyPosition, int> entry) => entry.value % 12 == pitchClass)
+        .map((MapEntry<_KeyPosition, int> entry) => (entry.key.col, entry.key.row))
         .toList();
   }
 
@@ -111,7 +134,7 @@ class NamerService {
       dataType: const dp.DataTypeSpec(dp.DataType.keyPress),
       category: dp.EndpointCategory.messageQueue,
       connectionPolicy: dp.ConnectionPolicy(
-        autoConnectCriteria: keyInputCriteria,
+        endpointConnectionRule: keyInputCriteria,
       ),
     );
 
@@ -132,7 +155,7 @@ class NamerService {
   Future<void> _setupLEDOutputEndpoint() async {
     final ledOutputCriteria = dp.SearchCriteria.andCombination([
       dp.SearchCriteria.fromCondition('direction', 'equals', 'input'),
-      dp.SearchCriteria.fromCondition('name', 'equals', 'led_message_input'),
+      dp.SearchCriteria.fromCondition('name', 'equals', 'led_overlay_input'),
       dp.SearchCriteria.fromCondition('sourceEntity', 'equals', 'LEDComms'),
       dp.SearchCriteria.fromCondition('baseType', 'equals', 'led_message'),
     ]);
@@ -144,7 +167,7 @@ class NamerService {
       dataType: const dp.DataTypeSpec(dp.DataType.ledMessage),
       category: dp.EndpointCategory.messageQueue,
       connectionPolicy: dp.ConnectionPolicy(
-        autoConnectCriteria: ledOutputCriteria,
+        endpointConnectionRule: ledOutputCriteria,
       ),
     );
 
@@ -282,11 +305,29 @@ class NamerService {
 
   /// Send retained key highlight messages for the selected notes.
   ///
-  /// Highlights are owned by the app and can later be removed with
-  /// [clearHighlights].
+  /// Purpose:
+  ///     Light every physical key that plays a selected pitch class (Show Me).
+  ///
+  /// Parameters:
+  /// - [noteValues]: Pitch classes (`0..11`) from the chord builder, or full
+  ///   MIDI notes; both are matched by pitch class via [getKeysForNote].
+  ///
+  /// Return value:
+  /// - None.
+  ///
+  /// Requirements/Preconditions:
+  /// - LED output endpoint should exist; layout should be populated for
+  ///   non-empty highlights.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Replaces the previous Namer-owned highlight set with keys for all
+  ///   matching pitch classes across octaves.
+  ///
+  /// Invariants:
+  /// - Does not change chord selection or layout maps.
   void highlightNotes(Set<int> noteValues) {
     final Set<(int, int)> desiredKeys = <(int, int)>{};
-    for (final noteVal in noteValues) {
+    for (final int noteVal in noteValues) {
       desiredKeys.addAll(getKeysForNote(noteVal));
     }
     _sendLedMessages(

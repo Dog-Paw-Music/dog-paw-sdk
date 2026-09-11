@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../dialogs/show_scale_editor_dialog.dart';
 import '../dialogs/show_theme_editor_dialog.dart';
 import '../models/editor_preview.dart';
+import '../models/shared_override_editor_value.dart';
 
 /// Visibility mode for one optional layout-editor field section.
 enum LayoutEditorFieldVisibility {
@@ -88,6 +89,18 @@ class LayoutEditor extends StatelessWidget {
   /// Optional host-owned live preview integration.
   final EditorPreviewController<dp.LayoutDraft>? previewController;
 
+  /// Current shared theme supplied by the host app.
+  final dp.ThemeData sharedTheme;
+
+  /// Current shared scale supplied by the host app.
+  final dp.ScaleData sharedScale;
+
+  /// Callback that receives shared-theme edits emitted from the embedded theme editor.
+  final ValueChanged<dp.ThemeData> onSharedThemeChanged;
+
+  /// Callback that receives shared-scale edits emitted from the embedded scale editor.
+  final ValueChanged<dp.ScaleData> onSharedScaleChanged;
+
   /// Target-picker choices supplied by the host.
   final List<LayoutEditorTargetOption> availableTargets;
 
@@ -105,6 +118,10 @@ class LayoutEditor extends StatelessWidget {
   /// Parameters:
   /// - `value`: current layout draft to present.
   /// - `onChanged`: callback receiving the next full layout draft.
+  /// - `sharedTheme`: current host-owned shared theme shown to the editor.
+  /// - `sharedScale`: current host-owned shared scale shown to the editor.
+  /// - `onSharedThemeChanged`: callback for shared-theme edits.
+  /// - `onSharedScaleChanged`: callback for shared-scale edits.
   /// - `previewController`: optional host-owned preview integration.
   /// - `availableTargets`: picker choices for editable targeted layouts.
   /// - `targetVisibility`: whether the target section is editable, read-only, or hidden.
@@ -127,6 +144,10 @@ class LayoutEditor extends StatelessWidget {
     super.key,
     required this.value,
     required this.onChanged,
+    required this.sharedTheme,
+    required this.sharedScale,
+    required this.onSharedThemeChanged,
+    required this.onSharedScaleChanged,
     this.previewController,
     this.availableTargets = const <LayoutEditorTargetOption>[],
     this.targetVisibility = LayoutEditorFieldVisibility.editable,
@@ -256,76 +277,126 @@ class LayoutEditor extends StatelessWidget {
   }
 
   /// Purpose:
-  /// Open the inline theme editor dialog when the draft uses an inline theme.
+  /// Build the generic theme-editor value from the current layout draft and
+  /// host-owned shared theme.
   ///
   /// Parameters:
-  /// - `context`: build context used to present the dialog.
+  /// - None.
   ///
   /// Return value:
-  /// - A future that completes once the dialog is dismissed.
+  /// - Shared/override editor value for the reusable theme editor.
   ///
   /// Requirements/Preconditions:
-  /// - `context` must be able to present dialogs.
-  /// - `value.themeChoice.inlineTheme` should be non-null.
+  /// - `sharedTheme` should reflect the current host-owned shared theme.
   ///
   /// Guarantees/Postconditions:
-  /// - Confirming the dialog replaces the inline theme inside the draft.
+  /// - The returned value preserves any dormant override stored in the draft.
   ///
   /// Invariants:
-  /// - Theme editing remains host-controlled through `LayoutDraft`.
-  Future<void> _editInlineTheme(BuildContext context) async {
-    final dp.ThemeData? inlineTheme = value.themeChoice.inlineTheme;
-    if (inlineTheme == null) {
-      return;
-    }
-    final dp.ThemeData? nextTheme = await showThemeEditorDialog(
-      context: context,
-      initialValue: inlineTheme,
-      previewController: _themePreviewController(),
+  /// - This helper is pure.
+  SharedOverrideEditorValue<dp.ThemeData> _themeEditorValue() {
+    return SharedOverrideEditorValue<dp.ThemeData>(
+      activeSource: value.themeChoice.activeSource,
+      sharedValue: sharedTheme,
+      overrideValue: value.themeChoice.overrideTheme,
     );
-    if (nextTheme != null) {
-      _emitValue(
-        value.copyWith(
-          themeChoice: dp.LayoutThemeChoice.inline(nextTheme),
-        ),
-      );
+  }
+
+  /// Purpose:
+  /// Build the generic scale-editor value from the current layout draft and
+  /// host-owned shared scale.
+  ///
+  /// Parameters:
+  /// - None.
+  ///
+  /// Return value:
+  /// - Shared/override editor value for the reusable scale editor.
+  ///
+  /// Requirements/Preconditions:
+  /// - `sharedScale` should reflect the current host-owned shared scale.
+  ///
+  /// Guarantees/Postconditions:
+  /// - The returned value preserves any dormant override stored in the draft.
+  ///
+  /// Invariants:
+  /// - This helper is pure.
+  SharedOverrideEditorValue<dp.ScaleData> _scaleEditorValue() {
+    return SharedOverrideEditorValue<dp.ScaleData>(
+      activeSource: value.scaleChoice.activeSource,
+      sharedValue: sharedScale,
+      overrideValue: value.scaleChoice.overrideScale,
+    );
+  }
+
+  /// Purpose:
+  /// Convert one reusable theme-editor result back into the stored layout draft
+  /// choice contract while forwarding shared edits to the host.
+  ///
+  /// Parameters:
+  /// - `nextValue`: reusable editor value returned by the theme editor.
+  ///
+  /// Return value:
+  /// - None.
+  ///
+  /// Requirements/Preconditions:
+  /// - `nextValue` should describe a valid theme editor state.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Shared theme edits are forwarded through `onSharedThemeChanged`.
+  /// - Layout override metadata is updated through `_emitValue`.
+  ///
+  /// Invariants:
+  /// - Theme persistence remains host-controlled.
+  void _applyThemeEditorValue(SharedOverrideEditorValue<dp.ThemeData> nextValue) {
+    if (nextValue.sharedValue != sharedTheme) {
+      onSharedThemeChanged(nextValue.sharedValue);
+    }
+    final dp.LayoutThemeChoice nextChoice =
+        nextValue.activeSource == dp.LayoutChoiceActiveSource.overrideValue
+            ? dp.LayoutThemeChoice.overrideValue(
+                nextValue.overrideValue ?? nextValue.sharedValue,
+              )
+            : dp.LayoutThemeChoice.shared(
+                overrideTheme: nextValue.overrideValue,
+              );
+    if (nextChoice != value.themeChoice) {
+      _emitValue(value.copyWith(themeChoice: nextChoice));
     }
   }
 
   /// Purpose:
-  /// Open the inline scale editor dialog when the draft uses an inline scale.
+  /// Convert one reusable scale-editor result back into the stored layout draft
+  /// choice contract while forwarding shared edits to the host.
   ///
   /// Parameters:
-  /// - `context`: build context used to present the dialog.
+  /// - `nextValue`: reusable editor value returned by the scale editor.
   ///
   /// Return value:
-  /// - A future that completes once the dialog is dismissed.
+  /// - None.
   ///
   /// Requirements/Preconditions:
-  /// - `context` must be able to present dialogs.
-  /// - `value.scaleChoice.inlineScale` should be non-null.
+  /// - `nextValue` should describe a valid scale editor state.
   ///
   /// Guarantees/Postconditions:
-  /// - Confirming the dialog replaces the inline scale inside the draft.
+  /// - Shared scale edits are forwarded through `onSharedScaleChanged`.
+  /// - Layout override metadata is updated through `_emitValue`.
   ///
   /// Invariants:
-  /// - Scale editing remains host-controlled through `LayoutDraft`.
-  Future<void> _editInlineScale(BuildContext context) async {
-    final dp.ScaleData? inlineScale = value.scaleChoice.inlineScale;
-    if (inlineScale == null) {
-      return;
+  /// - Scale persistence remains host-controlled.
+  void _applyScaleEditorValue(SharedOverrideEditorValue<dp.ScaleData> nextValue) {
+    if (nextValue.sharedValue != sharedScale) {
+      onSharedScaleChanged(nextValue.sharedValue);
     }
-    final dp.ScaleData? nextScale = await showScaleEditorDialog(
-      context: context,
-      initialValue: inlineScale,
-      previewController: _scalePreviewController(),
-    );
-    if (nextScale != null) {
-      _emitValue(
-        value.copyWith(
-          scaleChoice: dp.LayoutScaleChoice.inline(nextScale),
-        ),
-      );
+    final dp.LayoutScaleChoice nextChoice =
+        nextValue.activeSource == dp.LayoutChoiceActiveSource.overrideValue
+            ? dp.LayoutScaleChoice.overrideValue(
+                nextValue.overrideValue ?? nextValue.sharedValue,
+              )
+            : dp.LayoutScaleChoice.shared(
+                overrideScale: nextValue.overrideValue,
+              );
+    if (nextChoice != value.scaleChoice) {
+      _emitValue(value.copyWith(scaleChoice: nextChoice));
     }
   }
 
@@ -345,25 +416,27 @@ class LayoutEditor extends StatelessWidget {
   ///     should wrap inline theme previews.
   ///
   /// Guarantees/Postconditions:
-  ///   - Previewing a theme sends a full layout draft with only the inline theme
-  ///     replaced.
+  ///   - Previewing a theme preserves the editor's shared/override active source
+  ///     and forwards shared-value edits through `onSharedThemeChanged`.
   ///
   /// Invariants:
   ///   - Preview clear delegates to the outer layout preview controller.
-  EditorPreviewController<dp.ThemeData>? _themePreviewController() {
+  EditorPreviewController<SharedOverrideEditorValue<dp.ThemeData>>?
+      _themePreviewController() {
     final EditorPreviewController<dp.LayoutDraft>? controller = previewController;
     if (controller == null) {
       return null;
     }
     return _LayoutThemePreviewController(
       baseDraft: value,
+      onSharedThemeChanged: onSharedThemeChanged,
       layoutPreviewController: controller,
     );
   }
 
   /// Purpose:
-  ///   Adapt the layout-level preview controller to the inline scale editor's
-  ///   scale-only preview interface.
+  ///   Adapt the layout-level preview controller to the shared/override scale
+  ///   editor's preview interface.
   ///
   /// Parameters:
   ///   - None.
@@ -374,21 +447,23 @@ class LayoutEditor extends StatelessWidget {
   ///
   /// Requirements/Preconditions:
   ///   - The current draft should already represent the full layout state that
-  ///     should wrap inline scale previews.
+  ///     should wrap scale previews.
   ///
   /// Guarantees/Postconditions:
-  ///   - Previewing a scale sends a full layout draft with only the inline scale
-  ///     replaced.
+  ///   - Previewing a scale preserves the editor's shared/override active source
+  ///     and forwards shared-value edits through `onSharedScaleChanged`.
   ///
   /// Invariants:
   ///   - Preview clear delegates to the outer layout preview controller.
-  EditorPreviewController<dp.ScaleData>? _scalePreviewController() {
+  EditorPreviewController<SharedOverrideEditorValue<dp.ScaleData>>?
+      _scalePreviewController() {
     final EditorPreviewController<dp.LayoutDraft>? controller = previewController;
     if (controller == null) {
       return null;
     }
     return _LayoutScalePreviewController(
       baseDraft: value,
+      onSharedScaleChanged: onSharedScaleChanged,
       layoutPreviewController: controller,
     );
   }
@@ -775,25 +850,36 @@ class LayoutEditor extends StatelessWidget {
   ///
   /// Guarantees/Postconditions:
   /// - Editable mode opens the theme choice flow.
+  /// - The card shows both the active source and a compact preview summary.
   ///
   /// Invariants:
   /// - Theme data remains host-controlled.
   Widget _buildThemeTopCard(BuildContext context) {
     final bool usesInlineTheme =
-        value.themeChoice.mode == dp.LayoutDraftReferenceMode.inline;
+        value.themeChoice.activeSource == dp.LayoutChoiceActiveSource.overrideValue;
+    final dp.ThemeData previewTheme = usesInlineTheme
+        ? (value.themeChoice.overrideTheme ?? sharedTheme)
+        : sharedTheme;
     return _buildTopCard(
       key: const Key('layout-theme-card'),
       title: 'Theme',
-      child: _buildChoiceButton(
-        key: const Key('layout-theme-button'),
-        label: usesInlineTheme ? 'CUSTOM' : 'CURRENT',
-        selected: usesInlineTheme,
-        onPressed: themeVisibility == LayoutEditorFieldVisibility.readOnly
-            ? null
-            : () {
-                _openThemeChoicePicker(context);
-              },
-        compact: true,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          _buildChoiceButton(
+            key: const Key('layout-theme-button'),
+            label: usesInlineTheme ? 'OVERRIDE' : 'SHARED',
+            selected: usesInlineTheme,
+            onPressed: themeVisibility == LayoutEditorFieldVisibility.readOnly
+                ? null
+                : () {
+                    _openThemeEditor(context);
+                  },
+            compact: true,
+          ),
+          const SizedBox(height: 8),
+          _buildThemeTopSummary(previewTheme),
+        ],
       ),
     );
   }
@@ -812,27 +898,173 @@ class LayoutEditor extends StatelessWidget {
   ///
   /// Guarantees/Postconditions:
   /// - Editable mode opens the scale choice flow.
+  /// - The card shows both the active source and a compact preview summary.
   ///
   /// Invariants:
   /// - Scale data remains host-controlled.
   Widget _buildScaleTopCard(BuildContext context) {
     final bool usesInlineScale =
-        value.scaleChoice.mode == dp.LayoutDraftReferenceMode.inline;
+        value.scaleChoice.activeSource == dp.LayoutChoiceActiveSource.overrideValue;
+    final dp.ScaleData previewScale = usesInlineScale
+        ? (value.scaleChoice.overrideScale ?? sharedScale)
+        : sharedScale;
     return _buildTopCard(
       key: const Key('layout-scale-card'),
       title: 'Scale',
-      child: _buildChoiceButton(
-        key: const Key('layout-scale-button'),
-        label: usesInlineScale ? 'CUSTOM' : 'CURRENT',
-        selected: usesInlineScale,
-        onPressed: scaleVisibility == LayoutEditorFieldVisibility.readOnly
-            ? null
-            : () {
-                _openScaleChoicePicker(context);
-              },
-        compact: true,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          _buildChoiceButton(
+            key: const Key('layout-scale-button'),
+            label: usesInlineScale ? 'OVERRIDE' : 'SHARED',
+            selected: usesInlineScale,
+            onPressed: scaleVisibility == LayoutEditorFieldVisibility.readOnly
+                ? null
+                : () {
+                    _openScaleEditor(context);
+                  },
+            compact: true,
+          ),
+          const SizedBox(height: 8),
+          _buildScaleTopSummary(previewScale),
+        ],
       ),
     );
+  }
+
+  /// Purpose:
+  /// Build the compact swatch summary shown under the theme source button.
+  ///
+  /// Parameters:
+  /// - `themeData`: active theme whose four role colors should be previewed.
+  ///
+  /// Return value:
+  /// - Non-interactive row of four compact color swatches.
+  ///
+  /// Requirements/Preconditions:
+  /// - `themeData` should contain valid hex color strings.
+  ///
+  /// Guarantees/Postconditions:
+  /// - The row always shows the four active theme role colors in a stable order.
+  ///
+  /// Invariants:
+  /// - This helper is pure.
+  Widget _buildThemeTopSummary(dp.ThemeData themeData) {
+    final List<String> colors = <String>[
+      themeData.primaryColor,
+      themeData.secondaryColor,
+      themeData.accentColor,
+      themeData.backgroundColor,
+    ];
+    return Row(
+      key: const Key('layout-theme-preview-swatches'),
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: List<Widget>.generate(colors.length, (int index) {
+        return Padding(
+          padding: EdgeInsets.only(right: index == colors.length - 1 ? 0 : 8),
+          child: DecoratedBox(
+            key: Key('layout-theme-swatch-$index'),
+            decoration: BoxDecoration(
+              color: _colorFromHex(colors[index]),
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: const Color(0xFF5A5A5A),
+              ),
+            ),
+            child: const SizedBox(width: 16, height: 16),
+          ),
+        );
+      }),
+    );
+  }
+
+  /// Purpose:
+  /// Build the compact scale summary shown under the scale source button.
+  ///
+  /// Parameters:
+  /// - `scaleData`: active scale whose label should be summarized.
+  ///
+  /// Return value:
+  /// - Centered compact scale summary label.
+  ///
+  /// Requirements/Preconditions:
+  /// - None.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Prefers `displayName` when present, otherwise falls back to a detected
+  ///   named-scale label.
+  ///
+  /// Invariants:
+  /// - This helper is pure.
+  Widget _buildScaleTopSummary(dp.ScaleData scaleData) {
+    final String summaryText = _scaleSummaryText(scaleData);
+    return Text(
+      summaryText,
+      key: const Key('layout-scale-summary'),
+      textAlign: TextAlign.center,
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+      style: const TextStyle(
+        fontSize: 14,
+        fontWeight: FontWeight.w600,
+        color: Color(0xFFD7D7D7),
+      ),
+    );
+  }
+
+  /// Purpose:
+  /// Convert one stored scale value into the compact summary label used by the
+  /// top-row scale card.
+  ///
+  /// Parameters:
+  /// - `scaleData`: scale value to summarize.
+  ///
+  /// Return value:
+  /// - Display name when present, otherwise a detected named-scale label.
+  ///
+  /// Requirements/Preconditions:
+  /// - None.
+  ///
+  /// Guarantees/Postconditions:
+  /// - The returned string is non-empty.
+  ///
+  /// Invariants:
+  /// - This helper is pure.
+  String _scaleSummaryText(dp.ScaleData scaleData) {
+    final String? displayName = scaleData.displayName?.trim();
+    if (displayName != null && displayName.isNotEmpty) {
+      return displayName;
+    }
+    return dp.ScaleCatalog.detectScaleName(scaleData);
+  }
+
+  /// Purpose:
+  /// Convert one `#rrggbb` theme color string into a Flutter `Color`.
+  ///
+  /// Parameters:
+  /// - `hexColor`: hex color string with or without a leading `#`.
+  ///
+  /// Return value:
+  /// - Opaque Flutter color for the supplied RGB value.
+  ///
+  /// Requirements/Preconditions:
+  /// - `hexColor` should be a six-digit RGB hex string.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Invalid input falls back to opaque black instead of throwing.
+  ///
+  /// Invariants:
+  /// - This helper is pure.
+  Color _colorFromHex(String hexColor) {
+    final String normalized = hexColor.replaceFirst('#', '');
+    if (normalized.length != 6) {
+      return const Color(0xFF000000);
+    }
+    final int? parsedValue = int.tryParse(normalized, radix: 16);
+    if (parsedValue == null) {
+      return const Color(0xFF000000);
+    }
+    return Color(0xFF000000 | parsedValue);
   }
 
   /// Purpose:
@@ -1062,127 +1294,64 @@ class LayoutEditor extends StatelessWidget {
   }
 
   /// Purpose:
-  /// Open the theme choice flow used by the compact top-row card.
+  /// Open the theme editor dialog directly from the compact top-row card.
   ///
   /// Parameters:
   /// - `context`: build context used to present dialogs.
   ///
   /// Return value:
-  /// - A future that completes once the flow finishes.
+  /// - A future that completes once the dialog closes.
   ///
   /// Requirements/Preconditions:
   /// - `context` must be able to present dialogs.
   ///
   /// Guarantees/Postconditions:
-  /// - Choosing `CURRENT` switches to the current theme reference.
-  /// - Choosing `CUSTOM` opens the inline theme editor.
+  /// - Confirming the dialog updates both the shared theme callback and the
+  ///   stored layout override metadata.
   ///
   /// Invariants:
   /// - Theme storage remains host-controlled.
-  Future<void> _openThemeChoicePicker(BuildContext context) async {
-    final bool usesInlineTheme =
-        value.themeChoice.mode == dp.LayoutDraftReferenceMode.inline;
-    final String? result = await _showReferenceChoiceDialog(
+  Future<void> _openThemeEditor(BuildContext context) async {
+    final SharedOverrideEditorValue<dp.ThemeData>? nextValue =
+        await showThemeEditorDialog(
       context: context,
-      title: 'Theme',
-      currentButtonKey: const Key('layout-theme-option-current'),
-      customButtonKey: const Key('layout-theme-option-custom'),
-      rowKey: const Key('layout-theme-choice-row'),
-      usesCustomChoice: usesInlineTheme,
-    );
-
-    if (result == 'current') {
-      _emitValue(
-        value.copyWith(
-          themeChoice: const dp.LayoutThemeChoice.current(),
-        ),
-      );
-      return;
-    }
-    if (result != 'custom') {
-      return;
-    }
-
-    final dp.ThemeData initialTheme = value.themeChoice.inlineTheme ??
-        const dp.ThemeData(
-          displayName: 'Inline Theme',
-          primaryColor: '#ff6f61',
-          secondaryColor: '#4fc3f7',
-          accentColor: '#ffd54f',
-          backgroundColor: '#1b1c1d',
-        );
-    final dp.ThemeData? nextTheme = await showThemeEditorDialog(
-      context: context,
-      initialValue: initialTheme,
+      initialValue: _themeEditorValue(),
       previewController: _themePreviewController(),
+      showSourceSelector: true,
     );
-    if (nextTheme != null) {
-      _emitValue(
-        value.copyWith(
-          themeChoice: dp.LayoutThemeChoice.inline(nextTheme),
-        ),
-      );
+    if (nextValue != null) {
+      _applyThemeEditorValue(nextValue);
     }
   }
 
   /// Purpose:
-  /// Open the scale choice flow used by the compact top-row card.
+  /// Open the scale editor dialog directly from the compact top-row card.
   ///
   /// Parameters:
   /// - `context`: build context used to present dialogs.
   ///
   /// Return value:
-  /// - A future that completes once the flow finishes.
+  /// - A future that completes once the dialog closes.
   ///
   /// Requirements/Preconditions:
   /// - `context` must be able to present dialogs.
   ///
   /// Guarantees/Postconditions:
-  /// - Choosing `CURRENT` switches to the current scale reference.
-  /// - Choosing `CUSTOM` opens the inline scale editor.
+  /// - Confirming the dialog updates both the shared scale callback and the
+  ///   stored layout override metadata.
   ///
   /// Invariants:
   /// - Scale storage remains host-controlled.
-  Future<void> _openScaleChoicePicker(BuildContext context) async {
-    final bool usesInlineScale =
-        value.scaleChoice.mode == dp.LayoutDraftReferenceMode.inline;
-    final String? result = await _showReferenceChoiceDialog(
+  Future<void> _openScaleEditor(BuildContext context) async {
+    final SharedOverrideEditorValue<dp.ScaleData>? nextValue =
+        await showScaleEditorDialog(
       context: context,
-      title: 'Scale',
-      currentButtonKey: const Key('layout-scale-option-current'),
-      customButtonKey: const Key('layout-scale-option-custom'),
-      rowKey: const Key('layout-scale-choice-row'),
-      usesCustomChoice: usesInlineScale,
-    );
-
-    if (result == 'current') {
-      _emitValue(
-        value.copyWith(
-          scaleChoice: const dp.LayoutScaleChoice.current(),
-        ),
-      );
-      return;
-    }
-    if (result != 'custom') {
-      return;
-    }
-
-    final dp.ScaleData initialScale = value.scaleChoice.inlineScale ??
-        dp.ScaleCatalog.scaleDataForName(
-          scaleName: 'Major',
-          rootNote: 0,
-        );
-    final dp.ScaleData? nextScale = await showScaleEditorDialog(
-      context: context,
-      initialValue: initialScale,
+      initialValue: _scaleEditorValue(),
       previewController: _scalePreviewController(),
+      showSourceSelector: true,
     );
-    if (nextScale != null) {
-      _emitValue(
-        value.copyWith(
-          scaleChoice: dp.LayoutScaleChoice.inline(nextScale),
-        ),
-      );
+    if (nextValue != null) {
+      _applyScaleEditorValue(nextValue);
     }
   }
 
@@ -1802,10 +1971,10 @@ class LayoutEditor extends StatelessWidget {
   /// - Theme storage remains outside the widget.
   Widget _buildThemeSection(BuildContext context) {
     final bool usesInlineTheme =
-        value.themeChoice.mode == dp.LayoutDraftReferenceMode.inline;
+        value.themeChoice.activeSource == dp.LayoutChoiceActiveSource.overrideValue;
     final String summary = usesInlineTheme
-        ? (value.themeChoice.inlineTheme?.displayName ?? 'Inline Theme')
-        : 'Current Theme';
+        ? (value.themeChoice.overrideTheme?.displayName ?? 'Override Theme')
+        : 'Shared Theme';
 
     if (themeVisibility == LayoutEditorFieldVisibility.readOnly) {
       return _buildSectionCard(
@@ -1825,27 +1994,30 @@ class LayoutEditor extends StatelessWidget {
             children: <Widget>[
               _buildChoiceButton(
                 key: const Key('layout-theme-current'),
-                label: 'CURRENT',
+                label: 'SHARED',
                 selected: !usesInlineTheme,
                 onPressed: () {
                   _emitValue(
                     value.copyWith(
-                      themeChoice: const dp.LayoutThemeChoice.current(),
+                      themeChoice: dp.LayoutThemeChoice.shared(
+                        overrideTheme: value.themeChoice.overrideTheme,
+                      ),
                     ),
                   );
                 },
               ),
               _buildChoiceButton(
                 key: const Key('layout-theme-inline'),
-                label: 'INLINE',
+                label: 'OVERRIDE',
                 selected: usesInlineTheme,
                 onPressed: () {
                   _emitValue(
                     value.copyWith(
                       themeChoice: usesInlineTheme
                           ? value.themeChoice
-                          : const dp.LayoutThemeChoice.inline(
-                              dp.ThemeData(
+                          : dp.LayoutThemeChoice.overrideValue(
+                              value.themeChoice.overrideTheme ??
+                                  const dp.ThemeData(
                                 displayName: 'Inline Theme',
                                 primaryColor: '#ff6f61',
                                 secondaryColor: '#4fc3f7',
@@ -1859,18 +2031,16 @@ class LayoutEditor extends StatelessWidget {
               ),
             ],
           ),
-          if (usesInlineTheme) ...<Widget>[
-            const SizedBox(height: 12),
-            Text(summary),
-            const SizedBox(height: 12),
-            FilledButton(
-              key: const Key('layout-theme-edit-inline'),
-              onPressed: () {
-                _editInlineTheme(context);
-              },
-              child: const Text('Edit Theme'),
-            ),
-          ],
+          const SizedBox(height: 12),
+          Text(summary),
+          const SizedBox(height: 12),
+          FilledButton(
+            key: const Key('layout-theme-edit-inline'),
+            onPressed: () {
+              _openThemeEditor(context);
+            },
+            child: const Text('Edit Theme'),
+          ),
         ],
       ),
     );
@@ -1895,10 +2065,10 @@ class LayoutEditor extends StatelessWidget {
   /// - Scale storage remains outside the widget.
   Widget _buildScaleSection(BuildContext context) {
     final bool usesInlineScale =
-        value.scaleChoice.mode == dp.LayoutDraftReferenceMode.inline;
+        value.scaleChoice.activeSource == dp.LayoutChoiceActiveSource.overrideValue;
     final String summary = usesInlineScale
-        ? (value.scaleChoice.inlineScale?.displayName ?? 'Inline Scale')
-        : 'Current Scale';
+        ? (value.scaleChoice.overrideScale?.displayName ?? 'Override Scale')
+        : 'Shared Scale';
 
     if (scaleVisibility == LayoutEditorFieldVisibility.readOnly) {
       return _buildSectionCard(
@@ -1918,27 +2088,30 @@ class LayoutEditor extends StatelessWidget {
             children: <Widget>[
               _buildChoiceButton(
                 key: const Key('layout-scale-current'),
-                label: 'CURRENT',
+                label: 'SHARED',
                 selected: !usesInlineScale,
                 onPressed: () {
                   _emitValue(
                     value.copyWith(
-                      scaleChoice: const dp.LayoutScaleChoice.current(),
+                      scaleChoice: dp.LayoutScaleChoice.shared(
+                        overrideScale: value.scaleChoice.overrideScale,
+                      ),
                     ),
                   );
                 },
               ),
               _buildChoiceButton(
                 key: const Key('layout-scale-inline'),
-                label: 'INLINE',
+                label: 'OVERRIDE',
                 selected: usesInlineScale,
                 onPressed: () {
                   _emitValue(
                     value.copyWith(
                       scaleChoice: usesInlineScale
                           ? value.scaleChoice
-                          : dp.LayoutScaleChoice.inline(
-                              dp.ScaleCatalog.scaleDataForName(
+                          : dp.LayoutScaleChoice.overrideValue(
+                              value.scaleChoice.overrideScale ??
+                                  dp.ScaleCatalog.scaleDataForName(
                                 scaleName: 'Major',
                                 rootNote: 0,
                               ),
@@ -1949,34 +2122,36 @@ class LayoutEditor extends StatelessWidget {
               ),
             ],
           ),
-          if (usesInlineScale) ...<Widget>[
-            const SizedBox(height: 12),
-            Text(summary),
-            const SizedBox(height: 12),
-            FilledButton(
-              key: const Key('layout-scale-edit-inline'),
-              onPressed: () {
-                _editInlineScale(context);
-              },
-              child: const Text('Edit Scale'),
-            ),
-          ],
+          const SizedBox(height: 12),
+          Text(summary),
+          const SizedBox(height: 12),
+          FilledButton(
+            key: const Key('layout-scale-edit-inline'),
+            onPressed: () {
+              _openScaleEditor(context);
+            },
+            child: const Text('Edit Scale'),
+          ),
         ],
       ),
     );
   }
 }
 
-/// Adapter that wraps layout preview ownership for inline theme editing flows.
-class _LayoutThemePreviewController implements EditorPreviewController<dp.ThemeData> {
+/// Adapter that wraps layout preview ownership for shared/override theme flows.
+class _LayoutThemePreviewController
+    implements EditorPreviewController<SharedOverrideEditorValue<dp.ThemeData>> {
   final dp.LayoutDraft baseDraft;
+  final ValueChanged<dp.ThemeData> onSharedThemeChanged;
   final EditorPreviewController<dp.LayoutDraft> layoutPreviewController;
 
   /// Purpose:
-  ///   Bridge theme-only preview updates into full layout-draft preview updates.
+  ///   Bridge theme editor previews into layout-draft previews while preserving
+  ///   shared-versus-override isolation.
   ///
   /// Parameters:
-  ///   - `baseDraft`: Layout draft that should wrap each previewed inline theme.
+  ///   - `baseDraft`: Layout draft that should wrap each previewed theme choice.
+  ///   - `onSharedThemeChanged`: Host callback for System shared theme writes.
   ///   - `layoutPreviewController`: Host-owned layout preview controller.
   ///
   /// Return value:
@@ -1993,32 +2168,44 @@ class _LayoutThemePreviewController implements EditorPreviewController<dp.ThemeD
   ///   - This adapter never persists edits on its own.
   const _LayoutThemePreviewController({
     required this.baseDraft,
+    required this.onSharedThemeChanged,
     required this.layoutPreviewController,
   });
 
   /// Purpose:
-  ///   Preview one inline theme change as a full layout draft update.
+  ///   Preview one theme editor value as a full layout draft update.
   ///
   /// Parameters:
-  ///   - `value`: Inline theme candidate being previewed.
+  ///   - `value`: Shared/override theme editor candidate being previewed.
   ///
   /// Return value:
   ///   - A future that completes when the host preview controller finishes.
   ///
   /// Requirements/Preconditions:
-  ///   - `value` should describe a valid inline theme.
+  ///   - `value` should describe a valid theme editor state.
   ///
   /// Guarantees/Postconditions:
-  ///   - Only the layout draft's inline theme choice changes.
+  ///   - Shared-mode previews keep `themeChoice.activeSource` as shared and
+  ///     forward `sharedValue` through `onSharedThemeChanged`.
+  ///   - Override-mode previews update only the layout override payload.
   ///
   /// Invariants:
   ///   - The wrapped layout draft keeps its existing scale, scope, and settings.
   @override
-  Future<void> preview(dp.ThemeData value) {
-    return layoutPreviewController.preview(
-      baseDraft.copyWith(
-        themeChoice: dp.LayoutThemeChoice.inline(value),
-      ),
+  Future<void> preview(SharedOverrideEditorValue<dp.ThemeData> value) async {
+    if (value.activeSource == dp.LayoutChoiceActiveSource.shared) {
+      onSharedThemeChanged(value.sharedValue);
+    }
+    final dp.LayoutThemeChoice themeChoice =
+        value.activeSource == dp.LayoutChoiceActiveSource.overrideValue
+            ? dp.LayoutThemeChoice.overrideValue(
+                value.overrideValue ?? value.sharedValue,
+              )
+            : dp.LayoutThemeChoice.shared(
+                overrideTheme: value.overrideValue,
+              );
+    await layoutPreviewController.preview(
+      baseDraft.copyWith(themeChoice: themeChoice),
     );
   }
 
@@ -2045,16 +2232,20 @@ class _LayoutThemePreviewController implements EditorPreviewController<dp.ThemeD
   }
 }
 
-/// Adapter that wraps layout preview ownership for inline scale editing flows.
-class _LayoutScalePreviewController implements EditorPreviewController<dp.ScaleData> {
+/// Adapter that wraps layout preview ownership for shared/override scale flows.
+class _LayoutScalePreviewController
+    implements EditorPreviewController<SharedOverrideEditorValue<dp.ScaleData>> {
   final dp.LayoutDraft baseDraft;
+  final ValueChanged<dp.ScaleData> onSharedScaleChanged;
   final EditorPreviewController<dp.LayoutDraft> layoutPreviewController;
 
   /// Purpose:
-  ///   Bridge scale-only preview updates into full layout-draft preview updates.
+  ///   Bridge scale editor previews into layout-draft previews while preserving
+  ///   shared-versus-override isolation.
   ///
   /// Parameters:
-  ///   - `baseDraft`: Layout draft that should wrap each previewed inline scale.
+  ///   - `baseDraft`: Layout draft that should wrap each previewed scale choice.
+  ///   - `onSharedScaleChanged`: Host callback for System shared scale writes.
   ///   - `layoutPreviewController`: Host-owned layout preview controller.
   ///
   /// Return value:
@@ -2071,32 +2262,44 @@ class _LayoutScalePreviewController implements EditorPreviewController<dp.ScaleD
   ///   - This adapter never persists edits on its own.
   const _LayoutScalePreviewController({
     required this.baseDraft,
+    required this.onSharedScaleChanged,
     required this.layoutPreviewController,
   });
 
   /// Purpose:
-  ///   Preview one inline scale change as a full layout draft update.
+  ///   Preview one scale editor value as a full layout draft update.
   ///
   /// Parameters:
-  ///   - `value`: Inline scale candidate being previewed.
+  ///   - `value`: Shared/override scale editor candidate being previewed.
   ///
   /// Return value:
   ///   - A future that completes when the host preview controller finishes.
   ///
   /// Requirements/Preconditions:
-  ///   - `value` should describe a valid inline scale.
+  ///   - `value` should describe a valid scale editor state.
   ///
   /// Guarantees/Postconditions:
-  ///   - Only the layout draft's inline scale choice changes.
+  ///   - Shared-mode previews keep `scaleChoice.activeSource` as shared and
+  ///     forward `sharedValue` through `onSharedScaleChanged`.
+  ///   - Override-mode previews update only the layout override payload.
   ///
   /// Invariants:
   ///   - The wrapped layout draft keeps its existing theme, scope, and settings.
   @override
-  Future<void> preview(dp.ScaleData value) {
-    return layoutPreviewController.preview(
-      baseDraft.copyWith(
-        scaleChoice: dp.LayoutScaleChoice.inline(value),
-      ),
+  Future<void> preview(SharedOverrideEditorValue<dp.ScaleData> value) async {
+    if (value.activeSource == dp.LayoutChoiceActiveSource.shared) {
+      onSharedScaleChanged(value.sharedValue);
+    }
+    final dp.LayoutScaleChoice scaleChoice =
+        value.activeSource == dp.LayoutChoiceActiveSource.overrideValue
+            ? dp.LayoutScaleChoice.overrideValue(
+                value.overrideValue ?? value.sharedValue,
+              )
+            : dp.LayoutScaleChoice.shared(
+                overrideScale: value.overrideValue,
+              );
+    await layoutPreviewController.preview(
+      baseDraft.copyWith(scaleChoice: scaleChoice),
     );
   }
 

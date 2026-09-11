@@ -24,4 +24,4 @@ description: Guides creation and extension of Flutter apps for the Dog Paw SDK. 
 2. Put runtime logic in services or controllers.
 3. Add or update widget tests for UI behavior.
 4. Add `dogpaw_test` integration coverage when the app talks to Epiphany.
-5. Install into an emulator with `tools/dogpaw emulator install-flutter --name <name> --manifest <path>`.
+5. Install into an emulator with `tools/dogpaw emulator install --name <name> --manifest <path>`.

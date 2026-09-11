@@ -17,7 +17,7 @@
     "i2cAddress": 66
   },
 
-  "pedalIO": {
+  "systemPedalCv": {
     "enabled": true,
     "spiBus": 0,
     "adcDevice": 0,

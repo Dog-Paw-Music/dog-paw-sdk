@@ -1,57 +1,41 @@
 import 'dart:async';
-import 'dart:ffi';
 import 'dart:io';
 
 import '../test_support.dart';
 import 'package:dogpaw/dogpaw.dart';
 import 'package:dogpaw/src/json_constants.dart';
 import 'package:dogpaw/src/ffi/native_dogpaw_entity.dart';
+import 'package:dogpaw_test/src/package_runtime_paths.dart';
 import 'package:path/path.dart' as path;
 import 'package:test/test.dart';
 
-/// Purpose: Resolve the package-owned prebuilt native bridge library for the
-/// current test host.
+/// Purpose: Resolve the native bridge library used by child-process bridge
+/// probes in the direct package integration suite.
 ///
 /// Parameters: None.
 ///
 /// Return value:
-/// - Absolute `String` path to the matching `libdogpaw_bridge.so` artifact.
+/// - Absolute `String` path to the selected `libdogpaw_bridge.so` artifact.
 ///
 /// Requirements/Preconditions:
-/// - The package prebuilt bridge must already exist for the current host ABI.
+/// - The package fixture or source checkout must expose a bridge artifact for
+///   the current host ABI.
 ///
 /// Guarantees/Postconditions:
 /// - Throws [StateError] when the current host ABI is unsupported or the
-///   prebuilt artifact is missing.
+///   bridge artifact is missing.
 ///
 /// Invariants:
 /// - Does not modify filesystem state.
-String _resolvePackagePrebuiltBridgePath() {
+String _resolveFixtureBridgePath() {
   final String packageRoot = Directory.current.path;
-  final String subdir;
-  switch (Abi.current()) {
-    case Abi.linuxX64:
-      subdir = 'linux-x64';
-      break;
-    case Abi.linuxArm64:
-      subdir = 'linux-arm64';
-      break;
-    default:
-      throw StateError(
-        'Unsupported ABI for native bridge probe test: ${Abi.current()}',
-      );
-  }
-
-  final String bridgePath = path.join(
-    packageRoot,
-    'linux',
-    'prebuilt',
-    subdir,
-    'libdogpaw_bridge.so',
+  final String? bridgePath = resolveBridgeLibraryPathForFixture(
+    environment: Platform.environment,
+    dogpawPackageRootPath: packageRoot,
   );
-  if (!File(bridgePath).existsSync()) {
+  if (bridgePath == null || bridgePath.isEmpty) {
     throw StateError(
-      'Missing prebuilt bridge artifact for integration probe: $bridgePath',
+      'Missing bridge artifact for integration probe in package: $packageRoot',
     );
   }
   return bridgePath;
@@ -75,7 +59,8 @@ String _resolvePackagePrebuiltBridgePath() {
 /// - The child process is killed before returning when the timeout expires.
 ///
 /// Invariants:
-/// - Always launches the probe with the package-local prebuilt bridge library.
+/// - Always launches the probe with the bridge library resolved by the shared
+///   fixture policy.
 Future<ProcessResult> _runNativeBridgeProbe(
   String scenario, {
   Duration timeout = const Duration(seconds: 25),
@@ -83,7 +68,7 @@ Future<ProcessResult> _runNativeBridgeProbe(
   final String packageRoot = Directory.current.path;
   final String packageConfigPath =
       path.join(packageRoot, '.dart_tool', 'package_config.json');
-  final String bridgeLibraryPath = _resolvePackagePrebuiltBridgePath();
+  final String bridgeLibraryPath = _resolveFixtureBridgePath();
   final String probePath = path.join(
     packageRoot,
     'test',
@@ -205,9 +190,7 @@ void main() {
       creator.disconnect();
     });
 
-    test(
-        'executes scale CRUD and current-scale lifecycle through native-backed requests',
-        () async {
+    test('executes scale CRUD through native-backed requests', () async {
       final NativeDogPawEntityClient entity =
           NativeDogPawEntityClient('NativeBridgeScaleCrudEntity');
 
@@ -311,45 +294,6 @@ void main() {
           equals('Native Upserted Scale'));
       expect(readUpsertedResult.value!.rootNote, equals(9));
 
-      final Result<bool> setCurrentResult = await entity.setCurrentScale(
-        scaleName,
-        namespaceSelector: const NamespaceSelector.global(),
-      );
-      expect(setCurrentResult.success, isTrue,
-          reason:
-              'Native-backed setCurrentScale should succeed: ${setCurrentResult.error}');
-
-      final Result<Scale?> readCurrentResult = await entity.readCurrentScale(
-        includeResolved: true,
-        includeSpec: true,
-      );
-      expect(readCurrentResult.success, isTrue,
-          reason:
-              'Native-backed readCurrentScale should succeed: ${readCurrentResult.error}');
-      expect(readCurrentResult.value, isNotNull);
-      expect(readCurrentResult.value!.name, equals(scaleName));
-      expect(readCurrentResult.value!.displayName,
-          equals('Native Upserted Scale'));
-
-      final Result<bool> removeCurrentResult =
-          await entity.removeCurrentScale();
-      expect(removeCurrentResult.success, isTrue,
-          reason:
-              'Native-backed removeCurrentScale should succeed: ${removeCurrentResult.error}');
-
-      final Result<Scale?> readDefaultCurrentResult =
-          await entity.readCurrentScale(
-        includeResolved: true,
-        includeSpec: true,
-      );
-      expect(readDefaultCurrentResult.success, isTrue,
-          reason:
-              'Native-backed readCurrentScale after remove should succeed: ${readDefaultCurrentResult.error}');
-      expect(readDefaultCurrentResult.value, isNotNull);
-      expect(
-          readDefaultCurrentResult.value!.name, equals('__DEFAULT_CURRENT__'));
-      expect(readDefaultCurrentResult.value!.displayName, equals('Major (C)'));
-
       final Result<bool> deleteResult = await entity.deleteScale(
         scaleName,
         namespaceSelector: const NamespaceSelector.global(),
@@ -373,9 +317,7 @@ void main() {
       await entity.dispose();
     });
 
-    test(
-        'executes theme CRUD and current-theme lifecycle through native-backed requests',
-        () async {
+    test('executes theme CRUD through native-backed requests', () async {
       final NativeDogPawEntityClient entity =
           NativeDogPawEntityClient('NativeBridgeThemeCrudEntity');
 
@@ -465,43 +407,6 @@ void main() {
         isTrue,
       );
 
-      final Result<bool> setCurrentResult = await entity.setCurrentTheme(
-        themeName,
-        namespaceSelector: const NamespaceSelector.global(),
-      );
-      expect(setCurrentResult.success, isTrue,
-          reason:
-              'Native-backed setCurrentTheme should succeed: ${setCurrentResult.error}');
-
-      final Result<Theme?> currentResult = await entity.readCurrentTheme(
-        includeResolved: true,
-        includeSpec: true,
-      );
-      expect(currentResult.success, isTrue,
-          reason:
-              'Native-backed readCurrentTheme should succeed: ${currentResult.error}');
-      expect(currentResult.value, isNotNull);
-      expect(currentResult.value!.name, equals(themeName));
-      expect(currentResult.value!.data.displayName, equals('Native Set Theme'));
-
-      final Result<bool> removeCurrentResult =
-          await entity.removeCurrentTheme();
-      expect(removeCurrentResult.success, isTrue,
-          reason:
-              'Native-backed removeCurrentTheme should succeed: ${removeCurrentResult.error}');
-
-      final Result<Theme?> readDefaultCurrentResult =
-          await entity.readCurrentTheme(
-        includeResolved: true,
-        includeSpec: true,
-      );
-      expect(readDefaultCurrentResult.success, isTrue,
-          reason:
-              'Native-backed readCurrentTheme after remove should succeed: ${readDefaultCurrentResult.error}');
-      expect(readDefaultCurrentResult.value, isNotNull);
-      expect(
-          readDefaultCurrentResult.value!.name, equals('__DEFAULT_CURRENT__'));
-
       final Result<bool> deleteResult = await entity.deleteTheme(
         themeName,
         namespaceSelector: const NamespaceSelector.global(),
@@ -514,9 +419,7 @@ void main() {
       await entity.dispose();
     });
 
-    test(
-        'executes theme subscriptions and current-theme subscriptions through native-backed events',
-        () async {
+    test('executes theme subscriptions through native-backed events', () async {
       final NativeDogPawEntityClient subscriber =
           NativeDogPawEntityClient('NativeBridgeThemeSubscriptionSubscriber');
       final NativeDogPawEntityClient publisher =
@@ -586,64 +489,6 @@ void main() {
       expect(ordinaryUnsubscribeResult.success, isTrue,
           reason:
               'Native-backed unsubscribeFromThemes should succeed: ${ordinaryUnsubscribeResult.error}');
-
-      final String currentThemeName = uniqueName('native_bridge_current_theme');
-      final Theme currentTheme = Theme(
-        name: currentThemeName,
-        namespaceSelector: const NamespaceSelector.global(),
-        spec: const ThemeData(
-          displayName: 'Native Current Theme',
-          primaryColor: '#515151',
-          secondaryColor: '#616161',
-          accentColor: '#717171',
-          backgroundColor: '#818181',
-        ),
-      );
-      final Result<bool> createCurrentThemeResult =
-          await publisher.createTheme(currentTheme);
-      expect(createCurrentThemeResult.success, isTrue,
-          reason:
-              'Native-backed createTheme for current subscription should succeed: ${createCurrentThemeResult.error}');
-
-      final Completer<Theme> currentNotification = Completer<Theme>();
-      final Result<bool> currentSubscribeResult =
-          await subscriber.subscribeToCurrentTheme(
-        (String notificationType, DataItemRef ref, Theme theme) {
-          if (theme.name == currentThemeName &&
-              !currentNotification.isCompleted) {
-            currentNotification.complete(theme);
-          }
-        },
-        includeResolved: true,
-        includeSpec: true,
-        sendImmediately: false,
-      );
-      expect(currentSubscribeResult.success, isTrue,
-          reason:
-              'Native-backed subscribeToCurrentTheme should succeed: ${currentSubscribeResult.error}');
-
-      final Result<bool> setCurrentThemeResult =
-          await publisher.setCurrentTheme(
-        currentThemeName,
-        namespaceSelector: const NamespaceSelector.global(),
-      );
-      expect(setCurrentThemeResult.success, isTrue,
-          reason:
-              'Native-backed setCurrentTheme for subscription should succeed: ${setCurrentThemeResult.error}');
-
-      final Theme currentReceivedTheme =
-          await currentNotification.future.timeout(const Duration(seconds: 2));
-      expect(currentReceivedTheme.name, equals(currentThemeName));
-      expect(
-        currentReceivedTheme.data.displayName,
-        equals('Native Current Theme'),
-      );
-
-      final Result<bool> currentUnsubscribeResult =
-          await subscriber.unsubscribeFromCurrentTheme();
-      expect(currentUnsubscribeResult.success, isTrue,
-          reason:
-              'Native-backed unsubscribeFromCurrentTheme should succeed: ${currentUnsubscribeResult.error}');
 
       subscriber.disconnect();
       publisher.disconnect();
@@ -1052,9 +897,8 @@ void main() {
       final String destinationEndpointName =
           uniqueName('native_bridge_route_in');
       final String connectionRequestName =
-          uniqueName('native_bridge_connection_request');
-      final String followRequestName =
-          uniqueName('native_bridge_follow_request');
+          uniqueName('native_bridge_connection_rule');
+      final String followRequestName = uniqueName('native_bridge_follow_rule');
       final String leaderFlag = uniqueName('native_bridge_leader_flag');
 
       expect(
@@ -1087,9 +931,9 @@ void main() {
         isTrue,
       );
 
-      final ConnectionRequest connectionRequest = ConnectionRequest(
+      final ConnectionRule connectionRequest = ConnectionRule(
         name: connectionRequestName,
-        spec: ConnectionRequestData(
+        spec: ConnectionRuleData(
           sourceRef: DataItemRef.byName(
             name: sourceEndpointName,
             namespaceSelector:
@@ -1103,22 +947,50 @@ void main() {
         ),
       );
 
-      final Result<bool> createConnectionRequestResult =
-          await observer.createConnectionRequest(connectionRequest);
-      expect(createConnectionRequestResult.success, isTrue,
+      final Result<bool> createConnectionRuleResult =
+          await observer.createConnectionRule(connectionRequest);
+      expect(createConnectionRuleResult.success, isTrue,
           reason:
-              'Native-backed createConnectionRequest should succeed: ${createConnectionRequestResult.error}');
+              'Native-backed createConnectionRule should succeed: ${createConnectionRuleResult.error}');
 
-      final Result<List<ConnectionRequest>> connectionRequestsResult =
-          await observer.listConnectionRequests(includeSpec: true);
+      final Result<List<ConnectionRule>> connectionRequestsResult =
+          await observer.listConnectionRules(includeSpec: true);
       expect(connectionRequestsResult.success, isTrue,
           reason:
-              'Native-backed listConnectionRequests should succeed: ${connectionRequestsResult.error}');
+              'Native-backed listConnectionRules should succeed: ${connectionRequestsResult.error}');
       expect(
-        connectionRequestsResult.value!.any(
-            (ConnectionRequest item) => item.name == connectionRequestName),
+        connectionRequestsResult.value!
+            .any((ConnectionRule item) => item.name == connectionRequestName),
         isTrue,
       );
+
+      // Every Dart MappingType has to survive the native bridge and Epiphany.
+      // Each language otherwise only ever round-trips its own writer, which is
+      // how a mapping-type key mismatch stayed invisible.
+      for (final MappingType mappingType in MappingType.values) {
+        final Result<bool> mappingUpdate = await observer.updateConnectionRule(
+          ConnectionRule(
+            name: connectionRequestName,
+            spec: ConnectionRuleData(
+              sourceRef: connectionRequest.spec!.sourceRef,
+              destinationRef: connectionRequest.spec!.destinationRef,
+              mapping: MappingConfig(type: mappingType),
+            ),
+          ),
+        );
+        expect(mappingUpdate.success, isTrue,
+            reason: 'Native-backed updateConnectionRule should accept mapping '
+                'type ${mappingType.name}: ${mappingUpdate.error}');
+
+        final Result<List<ConnectionRule>> storedRules =
+            await observer.listConnectionRules(includeSpec: true);
+        expect(storedRules.success, isTrue);
+        final ConnectionRule storedRule = storedRules.value!.firstWhere(
+            (ConnectionRule item) => item.name == connectionRequestName);
+        expect(storedRule.spec!.mapping?.type, mappingType,
+            reason: 'Native round-trip must preserve mapping type '
+                '${mappingType.name}.');
+      }
 
       await Future<void>.delayed(const Duration(milliseconds: 200));
 
@@ -1133,15 +1005,15 @@ void main() {
       expect(
         realizedConnectionsResult.value!.any(
           (Connection connection) =>
-              connection.spec?.sourceRef.name == sourceEndpointName &&
-              connection.spec?.destinationRef.name == destinationEndpointName,
+              connection.sourceRef?.name == sourceEndpointName &&
+              connection.destinationRef?.name == destinationEndpointName,
         ),
         isTrue,
       );
 
-      final FollowRequest followRequest = FollowRequest(
+      final FollowRule followRule = FollowRule(
         name: followRequestName,
-        spec: FollowRequestData(
+        spec: FollowRuleData(
           followerRef: DataItemRef.byName(
             name: destinationEndpointName,
             namespaceSelector: const NamespaceSelector.specificEntity(
@@ -1151,20 +1023,20 @@ void main() {
         ),
       );
 
-      final Result<bool> createFollowRequestResult =
-          await destinationOwner.createFollowRequest(followRequest);
-      expect(createFollowRequestResult.success, isTrue,
+      final Result<bool> createFollowRuleResult =
+          await destinationOwner.createFollowRule(followRule);
+      expect(createFollowRuleResult.success, isTrue,
           reason:
-              'Native-backed createFollowRequest should succeed: ${createFollowRequestResult.error}');
+              'Native-backed createFollowRule should succeed: ${createFollowRuleResult.error}');
 
-      final Result<List<FollowRequest>> followRequestsResult =
-          await destinationOwner.listFollowRequests(includeSpec: true);
-      expect(followRequestsResult.success, isTrue,
+      final Result<List<FollowRule>> followRulesResult =
+          await destinationOwner.listFollowRules(includeSpec: true);
+      expect(followRulesResult.success, isTrue,
           reason:
-              'Native-backed listFollowRequests should succeed: ${followRequestsResult.error}');
+              'Native-backed listFollowRules should succeed: ${followRulesResult.error}');
       expect(
-        followRequestsResult.value!
-            .any((FollowRequest item) => item.name == followRequestName),
+        followRulesResult.value!
+            .any((FollowRule item) => item.name == followRequestName),
         isTrue,
       );
 
@@ -1177,6 +1049,197 @@ void main() {
     });
 
     test(
+        'executes realized connection subscriptions through native-backed events',
+        () async {
+      const String sourceOwnerEntityName = 'NativeBridgeConnSubSource';
+      const String destinationOwnerEntityName = 'NativeBridgeConnSubDest';
+      final NativeDogPawEntityClient sourceOwner =
+          NativeDogPawEntityClient(sourceOwnerEntityName);
+      final NativeDogPawEntityClient destinationOwner =
+          NativeDogPawEntityClient(destinationOwnerEntityName);
+      final NativeDogPawEntityClient subscriber =
+          NativeDogPawEntityClient('NativeBridgeConnSubSubscriber');
+      final NativeDogPawEntityClient publisher =
+          NativeDogPawEntityClient('NativeBridgeConnSubPublisher');
+
+      final Result<bool> sourceConnect = await sourceOwner.connect();
+      expect(sourceConnect.success, isTrue,
+          reason:
+              'Connection-subscription source connect should succeed: ${sourceConnect.error}');
+      await sourceOwner.completeConnectionStart();
+
+      final Result<bool> destinationConnect = await destinationOwner.connect();
+      expect(destinationConnect.success, isTrue,
+          reason:
+              'Connection-subscription destination connect should succeed: ${destinationConnect.error}');
+      await destinationOwner.completeConnectionStart();
+
+      final Result<bool> subscriberConnect = await subscriber.connect();
+      expect(subscriberConnect.success, isTrue,
+          reason:
+              'Native-backed connection subscriber connect should succeed: ${subscriberConnect.error}');
+      await subscriber.completeConnectionStart();
+
+      final Result<bool> publisherConnect = await publisher.connect();
+      expect(publisherConnect.success, isTrue,
+          reason:
+              'Native-backed connection publisher connect should succeed: ${publisherConnect.error}');
+      await publisher.completeConnectionStart();
+
+      final String sourceEndpointName =
+          uniqueName('native_bridge_connsub_out');
+      final String destinationEndpointName =
+          uniqueName('native_bridge_connsub_in');
+      final String connectionRuleName =
+          uniqueName('native_bridge_connsub_rule');
+
+      expect(
+        (await sourceOwner.createEndpoint(
+          EndpointInfo(
+            name: sourceEndpointName,
+            spec: const EndpointSpec(
+              direction: EndpointDirection.output,
+              dataType: DataTypeSpec(DataType.int_),
+              category: EndpointCategory.messageQueue,
+            ),
+          ),
+        ))
+            .success,
+        isTrue,
+      );
+      expect(
+        (await destinationOwner.createEndpoint(
+          EndpointInfo(
+            name: destinationEndpointName,
+            spec: const EndpointSpec(
+              direction: EndpointDirection.input,
+              dataType: DataTypeSpec(DataType.int_),
+              category: EndpointCategory.messageQueue,
+            ),
+          ),
+        ))
+            .success,
+        isTrue,
+      );
+
+      final Completer<Connection> addNotification = Completer<Connection>();
+      final Result<bool> subscribeResult =
+          await subscriber.subscribeToConnections(
+        (String notificationType, DataItemRef ref, Connection connection) {
+          // Realized connections are named from their source/destination
+          // pair, not the originating ConnectionRule name, so match on the
+          // endpoint pair instead of `connectionRuleName`.
+          if (connection.sourceRef?.name == sourceEndpointName &&
+              connection.destinationRef?.name == destinationEndpointName &&
+              !addNotification.isCompleted) {
+            addNotification.complete(connection);
+          }
+        },
+        includeResolved: true,
+        includeSpec: true,
+        sendImmediately: false,
+      );
+      expect(subscribeResult.success, isTrue,
+          reason:
+              'Native-backed subscribeToConnections should succeed: ${subscribeResult.error}');
+
+      final ConnectionRule connectionRule = ConnectionRule(
+        name: connectionRuleName,
+        spec: ConnectionRuleData(
+          sourceRef: DataItemRef.byName(
+            name: sourceEndpointName,
+            namespaceSelector:
+                const NamespaceSelector.specificEntity(sourceOwnerEntityName),
+          ),
+          destinationRef: DataItemRef.byName(
+            name: destinationEndpointName,
+            namespaceSelector: const NamespaceSelector.specificEntity(
+                destinationOwnerEntityName),
+          ),
+        ),
+      );
+      final Result<bool> createRuleResult =
+          await publisher.createConnectionRule(connectionRule);
+      expect(createRuleResult.success, isTrue,
+          reason:
+              'Native-backed createConnectionRule for subscription should succeed: ${createRuleResult.error}');
+
+      final Connection addedConnection =
+          await addNotification.future.timeout(const Duration(seconds: 5));
+      expect(addedConnection.sourceRef?.name, equals(sourceEndpointName));
+      expect(addedConnection.destinationRef?.name,
+          equals(destinationEndpointName));
+
+      final Result<bool> unsubscribeResult =
+          await subscriber.unsubscribeFromConnections();
+      expect(unsubscribeResult.success, isTrue,
+          reason:
+              'Native-backed unsubscribeFromConnections should succeed: ${unsubscribeResult.error}');
+
+      sourceOwner.disconnect();
+      destinationOwner.disconnect();
+      subscriber.disconnect();
+      publisher.disconnect();
+      await sourceOwner.dispose();
+      await destinationOwner.dispose();
+      await subscriber.dispose();
+      await publisher.dispose();
+    });
+
+    test(
+        'serializes debug probe events in bridge-local FIFO order during multi-threaded handoff',
+        () async {
+      final ProcessResult result = await _runNativeBridgeProbe(
+        'dispatcher_order_probe',
+      );
+
+      expect(result.exitCode, 0,
+          reason: 'Native bridge dispatcher-order probe should preserve FIFO '
+              'handoff order.\nstdout:\n${result.stdout}\n\nstderr:\n'
+              '${result.stderr}');
+    });
+
+    test('drains debug probe events that were accepted before shutdown',
+        () async {
+      final ProcessResult result = await _runNativeBridgeProbe(
+        'shutdown_drain_probe',
+      );
+
+      expect(result.exitCode, 0,
+          reason: 'Native bridge shutdown-drain probe should deliver accepted '
+              'events before teardown returns.\nstdout:\n${result.stdout}'
+              '\n\nstderr:\n${result.stderr}');
+    });
+
+    test(
+        'startup continuous polls stay quiet until first payload then log readiness',
+        () async {
+      final ProcessResult result = await _runNativeBridgeProbe(
+        'continuous_startup_poll_probe',
+      );
+      final String logs = '${result.stdout}\n${result.stderr}';
+
+      expect(result.exitCode, 0,
+          reason:
+              'Continuous startup poll probe should exit cleanly.\nstdout:\n'
+              '${result.stdout}\n\nstderr:\n${result.stderr}');
+      expect(
+        logs,
+        isNot(contains('Failed to get read guard for connection')),
+        reason: 'Initial no-frame continuous polls should not emit read-guard '
+            'warnings before the first payload arrives.\nstdout:\n'
+            '${result.stdout}\n\nstderr:\n${result.stderr}',
+      );
+      expect(
+        logs,
+        contains('First readable continuous payload observed'),
+        reason:
+            'The bridge should log when the first continuous payload becomes '
+            'readable.\nstdout:\n${result.stdout}\n\nstderr:\n${result.stderr}',
+      );
+    });
+
+    test(
         'survives concurrent local-endpoint connection queries during routing churn',
         () async {
       final ProcessResult result = await _runNativeBridgeProbe(
@@ -1184,8 +1247,7 @@ void main() {
       );
 
       expect(result.exitCode, 0,
-          reason:
-              'Native bridge deadlock probe should exit cleanly.\nstdout:\n'
+          reason: 'Native bridge deadlock probe should exit cleanly.\nstdout:\n'
               '${result.stdout}\n\nstderr:\n${result.stderr}');
     });
 
@@ -1208,7 +1270,8 @@ void main() {
         spec: const LayoutData(displayName: 'Native CRUD Layout'),
       );
 
-      final Result<bool> createResult = await entity.createLayout(initialLayout);
+      final Result<bool> createResult =
+          await entity.createLayout(initialLayout);
       expect(createResult.success, isTrue,
           reason:
               'Native-backed createLayout should succeed: ${createResult.error}');
@@ -1262,7 +1325,8 @@ void main() {
         isTrue,
       );
 
-      final Result<String> addStackEntryResult = await entity.addLayoutStackEntry(
+      final Result<String> addStackEntryResult =
+          await entity.addLayoutStackEntry(
         DataItemRef(
           name: layoutName,
           namespaceSelector: const NamespaceSelector.global(),
@@ -1295,8 +1359,9 @@ void main() {
           reason:
               'Native-backed removeLayoutStackEntry should succeed: ${removeStackEntryResult.error}');
 
-      final Result<LayoutStackSnapshot> readStackAfterRemoveResult = await entity
-          .readLayoutStack(includeResolved: false, includeSpec: false);
+      final Result<LayoutStackSnapshot> readStackAfterRemoveResult =
+          await entity.readLayoutStack(
+              includeResolved: false, includeSpec: false);
       expect(readStackAfterRemoveResult.success, isTrue,
           reason:
               'Native-backed readLayoutStack after remove should succeed: ${readStackAfterRemoveResult.error}');
@@ -1490,21 +1555,6 @@ void main() {
         isTrue,
       );
 
-      final Result<bool> setCurrentResult = await entity.setCurrentScale(
-        scaleName,
-        namespaceSelector: const NamespaceSelector.global(),
-      );
-      expect(setCurrentResult.success, isTrue,
-          reason:
-              'Public setCurrentScale should succeed: ${setCurrentResult.error}');
-
-      final Result<Scale?> currentResult = await entity.readCurrentScale();
-      expect(currentResult.success, isTrue,
-          reason:
-              'Public readCurrentScale should succeed: ${currentResult.error}');
-      expect(currentResult.value, isNotNull);
-      expect(currentResult.value!.name, equals(scaleName));
-
       final Result<Connection?> missingConnectionResult =
           await entity.readConnection('definitely_not_implemented_here');
       expect(missingConnectionResult.success, isTrue);
@@ -1560,21 +1610,6 @@ void main() {
       expect(readThemeResult.value, isNotNull);
       expect(readThemeResult.value!.data.displayName,
           equals('Public Native Theme'));
-
-      final Result<bool> setCurrentThemeResult = await entity.setCurrentTheme(
-        themeName,
-        namespaceSelector: const NamespaceSelector.global(),
-      );
-      expect(setCurrentThemeResult.success, isTrue,
-          reason:
-              'Public setCurrentTheme should succeed: ${setCurrentThemeResult.error}');
-
-      final Result<Theme?> currentThemeResult = await entity.readCurrentTheme();
-      expect(currentThemeResult.success, isTrue,
-          reason:
-              'Public readCurrentTheme should succeed: ${currentThemeResult.error}');
-      expect(currentThemeResult.value, isNotNull);
-      expect(currentThemeResult.value!.name, equals(themeName));
 
       final String layoutName = uniqueName('public_native_layout');
       final Layout layout = Layout(
@@ -1675,111 +1710,46 @@ void main() {
     });
 
     test(
-        'public facade routes current theme/scale and layout-stack subscriptions through native bridge',
+        'public facade routes layout-stack subscriptions through native bridge',
         () async {
       final DogPawEntity subscriber =
-          DogPawEntity('PublicNativeCurrentSubscriber');
+          DogPawEntity('PublicNativeLayoutStackSubscriber');
       final DogPawEntity publisher =
-          DogPawEntity('PublicNativeCurrentPublisher');
+          DogPawEntity('PublicNativeLayoutStackPublisher');
 
       final ConnectionResult subscriberConnect = await subscriber.connect();
       expect(subscriberConnect.success, isTrue,
           reason:
-              'Public current subscriber should connect: ${subscriberConnect.error}');
+              'Public layout-stack subscriber should connect: ${subscriberConnect.error}');
       await subscriberConnect.handle!.complete();
 
       final ConnectionResult publisherConnect = await publisher.connect();
       expect(publisherConnect.success, isTrue,
           reason:
-              'Public current publisher should connect: ${publisherConnect.error}');
+              'Public layout-stack publisher should connect: ${publisherConnect.error}');
       await publisherConnect.handle!.complete();
 
-      final String themeName = uniqueName('public_native_current_theme');
-      final String scaleName = uniqueName('public_native_current_scale');
-      final String layoutName = uniqueName('public_native_current_layout');
-
-      final Result<bool> createThemeResult = await publisher.createTheme(
-        Theme(
-          name: themeName,
-          namespaceSelector: const NamespaceSelector.global(),
-          spec: const ThemeData(
-            displayName: 'Public Current Theme',
-            primaryColor: '#121212',
-            secondaryColor: '#232323',
-            accentColor: '#343434',
-            backgroundColor: '#454545',
-          ),
-        ),
-      );
-      expect(createThemeResult.success, isTrue,
-          reason:
-              'Public createTheme for current subscription should succeed: ${createThemeResult.error}');
-
-      final Result<bool> createScaleResult = await publisher.createScale(
-        Scale(
-          name: scaleName,
-          namespaceSelector: const NamespaceSelector.global(),
-          spec: const ScaleData(
-            displayName: 'Public Current Scale',
-            rootNote: 3,
-            noteCategories: [1, -1, 1, -1, 1, 1, -1, 1, -1, 1, -1, 1],
-          ),
-        ),
-      );
-      expect(createScaleResult.success, isTrue,
-          reason:
-              'Public createScale for current subscription should succeed: ${createScaleResult.error}');
+      final String layoutName = uniqueName('public_native_layout_stack');
 
       final Result<bool> createLayoutResult = await publisher.createLayout(
         Layout(
           name: layoutName,
           namespaceSelector: const NamespaceSelector.global(),
-          spec: const LayoutData(displayName: 'Public Current Layout'),
+          spec: const LayoutData(displayName: 'Public Layout Stack Entry'),
         ),
         addToLayoutStack: false,
       );
       expect(createLayoutResult.success, isTrue,
           reason:
-              'Public createLayout for current subscription should succeed: ${createLayoutResult.error}');
+              'Public createLayout for layout-stack subscription should succeed: ${createLayoutResult.error}');
 
-      final Completer<Theme> themeNotification = Completer<Theme>();
-      final Completer<Scale> scaleNotification = Completer<Scale>();
       final Completer<LayoutStackSnapshot> layoutNotification =
           Completer<LayoutStackSnapshot>();
 
-      final Result<bool> subscribeThemeResult =
-          await subscriber.subscribeToCurrentTheme(
-        (String notificationType, DataItemRef ref, dynamic theme) {
-          if (theme.name == themeName && !themeNotification.isCompleted) {
-            themeNotification.complete(theme as Theme);
-          }
-        },
-        includeResolved: true,
-        includeSpec: true,
-        sendImmediately: false,
-      );
-      expect(subscribeThemeResult.success, isTrue,
-          reason:
-              'Public subscribeToCurrentTheme should succeed: ${subscribeThemeResult.error}');
-
-      final Result<bool> subscribeScaleResult =
-          await subscriber.subscribeToCurrentScale(
-        (String notificationType, DataItemRef ref, dynamic scale) {
-          if (scale.name == scaleName && !scaleNotification.isCompleted) {
-            scaleNotification.complete(scale as Scale);
-          }
-        },
-        includeResolved: true,
-        includeSpec: true,
-        sendImmediately: false,
-      );
-      expect(subscribeScaleResult.success, isTrue,
-          reason:
-              'Public subscribeToCurrentScale should succeed: ${subscribeScaleResult.error}');
-
       final Result<bool> subscribeLayoutResult =
           await subscriber.subscribeToLayoutStack(
-        (String notificationType, DataItemRef ref, LayoutStackSnapshot snapshot) {
+        (String notificationType, DataItemRef ref,
+            LayoutStackSnapshot snapshot) {
           final bool containsLayout = snapshot.entries.any(
             (LayoutStackEntry entry) => entry.layoutRef.name == layoutName,
           );
@@ -1795,24 +1765,6 @@ void main() {
           reason:
               'Public subscribeToLayoutStack should succeed: ${subscribeLayoutResult.error}');
 
-      final Result<bool> setCurrentThemeResult =
-          await publisher.setCurrentTheme(
-        themeName,
-        namespaceSelector: const NamespaceSelector.global(),
-      );
-      expect(setCurrentThemeResult.success, isTrue,
-          reason:
-              'Public setCurrentTheme for current subscription should succeed: ${setCurrentThemeResult.error}');
-
-      final Result<bool> setCurrentScaleResult =
-          await publisher.setCurrentScale(
-        scaleName,
-        namespaceSelector: const NamespaceSelector.global(),
-      );
-      expect(setCurrentScaleResult.success, isTrue,
-          reason:
-              'Public setCurrentScale for current subscription should succeed: ${setCurrentScaleResult.error}');
-
       final Result<String> addLayoutStackEntryResult =
           await publisher.addLayoutStackEntry(
         DataItemRef(
@@ -1824,33 +1776,15 @@ void main() {
           reason:
               'Public addLayoutStackEntry for layout stack subscription should succeed: ${addLayoutStackEntryResult.error}');
 
-      final Theme receivedTheme =
-          await themeNotification.future.timeout(const Duration(seconds: 2));
-      final Scale receivedScale =
-          await scaleNotification.future.timeout(const Duration(seconds: 2));
       final LayoutStackSnapshot receivedLayout =
           await layoutNotification.future.timeout(const Duration(seconds: 2));
 
-      expect(receivedTheme.name, equals(themeName));
-      expect(receivedScale.name, equals(scaleName));
       expect(
         receivedLayout.entries.any(
           (LayoutStackEntry entry) => entry.layoutRef.name == layoutName,
         ),
         isTrue,
       );
-
-      final Result<bool> unsubscribeThemeResult =
-          await subscriber.unsubscribeFromCurrentTheme();
-      expect(unsubscribeThemeResult.success, isTrue,
-          reason:
-              'Public unsubscribeFromCurrentTheme should succeed: ${unsubscribeThemeResult.error}');
-
-      final Result<bool> unsubscribeScaleResult =
-          await subscriber.unsubscribeFromCurrentScale();
-      expect(unsubscribeScaleResult.success, isTrue,
-          reason:
-              'Public unsubscribeFromCurrentScale should succeed: ${unsubscribeScaleResult.error}');
 
       final Result<bool> unsubscribeLayoutResult =
           await subscriber.unsubscribeFromLayoutStack();

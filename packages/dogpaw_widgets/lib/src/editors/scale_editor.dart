@@ -5,7 +5,9 @@ import 'package:dogpaw/dogpaw.dart' as dp;
 import 'package:flutter/material.dart';
 
 import '../models/editor_preview.dart';
+import '../models/shared_override_editor_value.dart';
 import '../primitives/piano_keyboard.dart';
+import 'theme_editor.dart' show SourceToggleCard;
 
 /// Reusable musician-facing editor for one Dog Paw scale value.
 ///
@@ -14,16 +16,20 @@ import '../primitives/piano_keyboard.dart';
 /// app in control of persistence and optional live preview side effects.
 class ScaleEditor extends StatelessWidget {
   /// Current scale value being edited.
-  final dp.ScaleData value;
+  final SharedOverrideEditorValue<dp.ScaleData> value;
 
   /// Callback that receives the next full scale value after user edits.
-  final ValueChanged<dp.ScaleData> onChanged;
+  final ValueChanged<SharedOverrideEditorValue<dp.ScaleData>> onChanged;
 
   /// Optional host-owned live preview integration.
-  final EditorPreviewController<dp.ScaleData>? previewController;
+  final EditorPreviewController<SharedOverrideEditorValue<dp.ScaleData>>?
+      previewController;
 
   /// Whether the editor should render its keyboard preview region.
   final bool enableKeyboardPreview;
+
+  /// Whether the shared/override source selector should be shown.
+  final bool showSourceSelector;
 
   /// Create one reusable scale editor shell.
   ///
@@ -51,9 +57,28 @@ class ScaleEditor extends StatelessWidget {
     required this.onChanged,
     this.previewController,
     this.enableKeyboardPreview = true,
+    this.showSourceSelector = false,
   });
 
-  /// Emit one next scale value through the public callback and optional preview.
+  /// Return the currently active editable scale value.
+  ///
+  /// Parameters:
+  /// - None.
+  ///
+  /// Return value:
+  /// - Shared scale when shared mode is active, otherwise the saved override.
+  ///
+  /// Requirements/Preconditions:
+  /// - None.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Never returns `null`.
+  ///
+  /// Invariants:
+  /// - Reading this getter does not mutate editor state.
+  dp.ScaleData get _activeScale => value.effectiveValue;
+
+  /// Emit one next editor value through the public callback and optional preview.
   ///
   /// Parameters:
   /// - `nextValue`: Full next scale value after one user interaction.
@@ -66,13 +91,17 @@ class ScaleEditor extends StatelessWidget {
   ///
   /// Guarantees/Postconditions:
   /// - `onChanged` is invoked synchronously with `nextValue`.
-  /// - The preview controller receives a best-effort preview request when present.
+  /// - The preview controller receives the full shared/override editor value when
+  ///   present so hosts can preserve active source during live preview.
   ///
   /// Invariants:
   /// - The widget does not persist scale changes on its own.
-  void _emitValue(dp.ScaleData nextValue) {
+  /// - Preview requests stay unawaited so UI interaction stays responsive; hosts
+  ///   must serialize/latest-wins their own I/O.
+  void _emitValue(SharedOverrideEditorValue<dp.ScaleData> nextValue) {
     onChanged(nextValue);
-    final EditorPreviewController<dp.ScaleData>? controller = previewController;
+    final EditorPreviewController<SharedOverrideEditorValue<dp.ScaleData>>?
+        controller = previewController;
     if (controller != null) {
       unawaited(controller.preview(nextValue));
     }
@@ -99,7 +128,8 @@ class ScaleEditor extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
-        final String detectedScaleName = dp.ScaleCatalog.detectScaleName(value);
+        final String detectedScaleName =
+            dp.ScaleCatalog.detectScaleName(_activeScale);
         final _ScaleEditorLayoutMetrics metrics =
             _resolveLayoutMetrics(constraints);
 
@@ -109,6 +139,53 @@ class ScaleEditor extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
+              if (showSourceSelector) ...<Widget>[
+                Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: SourceToggleCard(
+                        key: const Key('scale-source-shared'),
+                        label: 'Shared',
+                        isSelected: value.activeSource ==
+                            dp.LayoutChoiceActiveSource.shared,
+                        onTap: () {
+                          _emitValue(
+                            value.copyWith(
+                              activeSource: dp.LayoutChoiceActiveSource.shared,
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: SourceToggleCard(
+                        key: const Key('scale-source-override'),
+                        label: 'Override',
+                        isSelected: value.activeSource ==
+                            dp.LayoutChoiceActiveSource.overrideValue,
+                        onTap: () {
+                          _emitValue(value.activateOverride());
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                if (value.overrideValue != null) ...<Widget>[
+                  const SizedBox(height: 12),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton(
+                      key: const Key('scale-reset-override'),
+                      onPressed: () {
+                        _emitValue(value.resetOverride());
+                      },
+                      child: const Text('Reset'),
+                    ),
+                  ),
+                ],
+                SizedBox(height: metrics.sectionSpacing),
+              ],
               _buildRootControls(
                 context,
                 selectedWidth: metrics.rootSelectedWidth,
@@ -157,9 +234,25 @@ class ScaleEditor extends StatelessWidget {
   /// Invariants:
   /// - Selection cards still grow in both compact and roomy layouts.
   _ScaleEditorLayoutMetrics _resolveLayoutMetrics(BoxConstraints constraints) {
+    final double compactLayoutHeightThreshold =
+        showSourceSelector ? 620 : 500;
     final bool useCompactLayout =
-        constraints.hasBoundedHeight && constraints.maxHeight <= 500;
+        constraints.hasBoundedHeight &&
+        constraints.maxHeight <= compactLayoutHeightThreshold;
     if (useCompactLayout) {
+      if (showSourceSelector) {
+        return const _ScaleEditorLayoutMetrics(
+          outerPadding: 0,
+          sectionSpacing: 8,
+          rootSelectedWidth: 44,
+          rootSelectedHeight: 44,
+          rootUnselectedHeight: 36,
+          scaleCardHeight: 56,
+          selectedScaleCardHeight: 62,
+          scaleCardFontSize: 15,
+          keyboardHeight: 60,
+        );
+      }
       return const _ScaleEditorLayoutMetrics(
         outerPadding: 4,
         sectionSpacing: 10,
@@ -229,7 +322,7 @@ class ScaleEditor extends StatelessWidget {
               int noteIndex,
             ) {
               final String noteName = dp.ScaleCatalog.rootNoteName(noteIndex);
-              final bool isSelected = value.rootNote % 12 == noteIndex;
+              final bool isSelected = _activeScale.rootNote % 12 == noteIndex;
               final double noteWidth = isSelected ? selectedWidth : unselectedWidth;
               final double noteHeight =
                   isSelected ? selectedHeight : unselectedHeight;
@@ -251,7 +344,11 @@ class ScaleEditor extends StatelessWidget {
                   height: noteHeight,
                   fontSize: 19,
                   onTap: () {
-                    _emitValue(dp.ScaleCatalog.setRootNote(value, noteIndex));
+                    _emitValue(
+                      value.withEffectiveValue(
+                        dp.ScaleCatalog.setRootNote(_activeScale, noteIndex),
+                      ),
+                    );
                   },
                 ),
               );
@@ -281,10 +378,10 @@ class ScaleEditor extends StatelessWidget {
   /// Invariants:
   /// - Color selection depends only on the current scale state.
   Color _keyboardColorForNote(ColorScheme colorScheme, int noteIndex) {
-    if (dp.ScaleCatalog.isRoot(value, noteIndex)) {
+    if (dp.ScaleCatalog.isRoot(_activeScale, noteIndex)) {
       return colorScheme.primary;
     }
-    if (dp.ScaleCatalog.isIncluded(value, noteIndex)) {
+    if (dp.ScaleCatalog.isIncluded(_activeScale, noteIndex)) {
       return colorScheme.tertiaryContainer;
     }
     return colorScheme.surfaceContainerHighest;
@@ -391,9 +488,11 @@ class ScaleEditor extends StatelessWidget {
                                 ? null
                                 : () {
                                     _emitValue(
-                                      dp.ScaleCatalog.scaleDataForName(
-                                        scaleName: scaleNames[itemIndex],
-                                        rootNote: value.rootNote,
+                                      value.withEffectiveValue(
+                                        dp.ScaleCatalog.scaleDataForName(
+                                          scaleName: scaleNames[itemIndex],
+                                          rootNote: _activeScale.rootNote,
+                                        ),
                                       ),
                                     );
                                   },
@@ -452,10 +551,18 @@ class ScaleEditor extends StatelessWidget {
       height: keyboardHeight,
       colorForNote: (int noteIndex) => _keyboardColorForNote(colorScheme, noteIndex),
       onNoteTap: (int noteIndex) {
-        _emitValue(dp.ScaleCatalog.toggleIncludedNote(value, noteIndex));
+        _emitValue(
+          value.withEffectiveValue(
+            dp.ScaleCatalog.toggleIncludedNote(_activeScale, noteIndex),
+          ),
+        );
       },
       onNoteLongPress: (int noteIndex) {
-        _emitValue(dp.ScaleCatalog.setRootNote(value, noteIndex));
+        _emitValue(
+          value.withEffectiveValue(
+            dp.ScaleCatalog.setRootNote(_activeScale, noteIndex),
+          ),
+        );
       },
       showNoteLabels: true,
       labelStyle: _keyboardLabelStyle(),

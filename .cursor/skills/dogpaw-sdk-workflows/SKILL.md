@@ -10,8 +10,9 @@ description: Explains the public Dog Paw SDK workflow surface. Use when the user
 - `tools/dogpaw emulator create --name <name>` creates a local emulator from the SDK seed payload.
 - `tools/dogpaw emulator run --name <name>` starts the screen, bridge, and controls together.
 - `tools/dogpaw emulator screen --name <name>` starts only the screen/runtime stack.
-- `tools/dogpaw emulator install-flutter --name <name> --manifest <path>` installs a Flutter app into the emulator app registry.
-- `tools/dogpaw emulator install-headless --name <name> --manifest <path>` installs a headless app into the emulator app registry.
+- `tools/dogpaw emulator install --name <name> --manifest <path>` installs an app (and its install dependencies) into the emulator app registry. Repeat `--manifest` to install multiple apps in one command.
+- `tools/dogpaw emulator logs --name <name>` summarizes emulator runtime logs.
+- `tools/dogpaw emulator doctor` checks host dependencies.
 
 ## SDK Layout
 

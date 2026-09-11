@@ -4,6 +4,8 @@
     "type": "GLOBAL"
   },
   "spec": {
-    "displayName": "Empty Layout"
+    "displayName": "Empty Layout",
+    "bendMode": "fixed",
+    "bendRangeSemitones": 2.0
   }
 }

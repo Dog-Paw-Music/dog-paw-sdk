@@ -7,6 +7,7 @@ import 'data_item_type.dart';
 import 'data_types.dart';
 import 'data_type_spec.dart';
 import 'connection_policy.dart';
+import 'default_endpoint_helpers.dart';
 import 'json_constants.dart';
 import 'data_item_ref.dart';
 import 'namespace_selector.dart';
@@ -15,12 +16,681 @@ import 'key_event.dart';
 import 'led_message.dart';
 import 'near_press_position_data.dart';
 import 'pos_data.dart';
+import 'result.dart';
+import 'scale.dart';
 import 'scope_buffer_data.dart';
+import 'search_criteria.dart';
+import 'theme.dart';
 
 /// How a JACK-capable endpoint binds to the JACK graph.
 enum JackBindingMode {
   registerNewPort,
   adoptExistingPort,
+}
+
+/// Concrete queue payload carried by a message-queue endpoint.
+enum MessageQueuePayloadContract {
+  endpointData,
+  statefulFloatAction,
+  statefulIntAction,
+  statefulToggleAction,
+  statefulEnumAction,
+  statefulColorAction,
+  statefulThemeAction,
+  statefulScaleAction,
+}
+
+/// Owner behavior for a stateful input endpoint.
+enum StatefulInputBehavior {
+  autoReduced,
+  ownerManaged,
+}
+
+/// Owner-side consumption mode for a stateful input endpoint.
+enum StatefulInputConsumptionMode {
+  callbackOnly,
+  retainedStateOnly,
+  callbackAndRetainedState,
+}
+
+/// Canonical connection-picker display folder labels for System hardware.
+///
+/// Authors targeting the shared System tree must use these exact strings so
+/// folders merge by exact match across apps.
+///
+/// Keep in sync with C++ `dogpaw::display_categories` and Epiphany
+/// `DisplayCategories`.
+const String kDisplayCategorySystem = 'System';
+const String kDisplayCategoryKeys = 'Keys';
+const String kDisplayCategoryKnobs = 'Knobs';
+const String kDisplayCategoryAudioAndMidi = 'Audio & MIDI';
+const String kDisplayCategoryIO = 'I/O';
+const String kDisplayCategoryOther = 'Other';
+
+/**
+ * Purpose: Trim surrounding whitespace from a display-category segment.
+ *
+ * Parameters:
+ * - [value]: Raw label that may include surrounding whitespace.
+ *
+ * Return value:
+ * - Trimmed string; empty when [value] is whitespace-only.
+ *
+ * Requirements/Preconditions:
+ * - None.
+ *
+ * Guarantees/Postconditions:
+ * - Does not mutate [value].
+ *
+ * Invariants:
+ * - Pure function of [value].
+ */
+String _trimDisplaySegment(String value) => value.trim();
+
+/// Optional UI hierarchy metadata for connection-picker folder navigation.
+///
+/// Distinct from transport [EndpointCategory], [groupKey] pairing, and semantic
+/// flags. Missing display means default top-level (owner entity display name)
+/// with no nested folders.
+///
+/// WARNING: Keep in sync with C++ EndpointDisplaySpec in EndpointData.hpp.
+class EndpointDisplaySpec {
+  /// Non-empty trimmed override for the top-level folder title.
+  final String? topLevelCategory;
+
+  /// Nested folder segments under the resolved top-level.
+  final List<String> categoryPath;
+
+  const EndpointDisplaySpec({
+    this.topLevelCategory,
+    this.categoryPath = const <String>[],
+  });
+
+  /**
+   * Purpose: Serialize display hierarchy to JSON for EndpointSpec wire format.
+   *
+   * Parameters:
+   * - None.
+   *
+   * Return value:
+   * - Map with optional `topLevelCategory` and `categoryPath`. Whitespace-only
+   *   segments are skipped (with a warning).
+   *
+   * Requirements/Preconditions:
+   * - None.
+   *
+   * Guarantees/Postconditions:
+   * - Endpoint metadata other than this object is unchanged.
+   *
+   * Invariants:
+   * - Transport category / groupKey / flags are not represented here.
+   */
+  Map<String, dynamic> toJson() {
+    String? trimmedTopLevel;
+    if (topLevelCategory != null) {
+      final String trimmed = _trimDisplaySegment(topLevelCategory!);
+      if (trimmed.isEmpty) {
+        AppLogger.warning(
+          'EndpointDisplaySpec.toJson: skipping whitespace-only topLevelCategory',
+        );
+      } else {
+        if (trimmed != topLevelCategory) {
+          AppLogger.warning(
+            'EndpointDisplaySpec.toJson: trimming surrounding whitespace from '
+            'topLevelCategory',
+          );
+        }
+        trimmedTopLevel = trimmed;
+      }
+    }
+
+    final List<String> trimmedPath = <String>[];
+    for (final String segment in categoryPath) {
+      final String trimmed = _trimDisplaySegment(segment);
+      if (trimmed.isEmpty) {
+        AppLogger.warning(
+          'EndpointDisplaySpec.toJson: skipping whitespace-only categoryPath '
+          'segment',
+        );
+        continue;
+      }
+      if (trimmed != segment) {
+        AppLogger.warning(
+          'EndpointDisplaySpec.toJson: trimming surrounding whitespace from '
+          'categoryPath segment',
+        );
+      }
+      trimmedPath.add(trimmed);
+    }
+
+    return <String, dynamic>{
+      JsonFields.TOP_LEVEL_CATEGORY: trimmedTopLevel,
+      JsonFields.CATEGORY_PATH: trimmedPath.isEmpty ? null : trimmedPath,
+    }.toJsonClean();
+  }
+
+  /**
+   * Purpose: Parse display hierarchy from JSON.
+   *
+   * Parameters:
+   * - [json]: Object describing one display hierarchy.
+   *
+   * Return value:
+   * - Parsed [EndpointDisplaySpec].
+   *
+   * Requirements/Preconditions:
+   * - [json] is a Map; callers that receive a non-Map should omit display.
+   *
+   * Guarantees/Postconditions:
+   * - Throws [FormatException] when field types are invalid.
+   * - Whitespace-only segments are skipped.
+   *
+   * Invariants:
+   * - Empty/whitespace top-level becomes null.
+   */
+  factory EndpointDisplaySpec.fromJson(Map<String, dynamic> json) {
+    String? topLevel;
+    if (json.containsKey(JsonFields.TOP_LEVEL_CATEGORY) &&
+        json[JsonFields.TOP_LEVEL_CATEGORY] != null) {
+      final Object? rawTop = json[JsonFields.TOP_LEVEL_CATEGORY];
+      if (rawTop is! String) {
+        throw const FormatException(
+          'EndpointDisplaySpec.topLevelCategory must be a string',
+        );
+      }
+      final String trimmed = _trimDisplaySegment(rawTop);
+      if (trimmed.isNotEmpty) {
+        topLevel = trimmed;
+      }
+    }
+
+    final List<String> path = <String>[];
+    if (json.containsKey(JsonFields.CATEGORY_PATH) &&
+        json[JsonFields.CATEGORY_PATH] != null) {
+      final Object? rawPath = json[JsonFields.CATEGORY_PATH];
+      if (rawPath is! List) {
+        throw const FormatException(
+          'EndpointDisplaySpec.categoryPath must be an array',
+        );
+      }
+      for (final Object? segment in rawPath) {
+        if (segment is! String) {
+          throw const FormatException(
+            'EndpointDisplaySpec.categoryPath elements must be strings',
+          );
+        }
+        final String trimmed = _trimDisplaySegment(segment);
+        if (trimmed.isEmpty) {
+          continue;
+        }
+        path.add(trimmed);
+      }
+    }
+
+    return EndpointDisplaySpec(
+      topLevelCategory: topLevel,
+      categoryPath: path,
+    );
+  }
+}
+
+/// Public matched-output configuration paired with a stateful input endpoint.
+class MatchedStateOutputSpec {
+  final String name;
+  final String displayName;
+  final String description;
+  final List<String> flags;
+  final String? groupKey;
+  final EndpointDisplaySpec? display;
+
+  const MatchedStateOutputSpec({
+    required this.name,
+    this.displayName = '',
+    this.description = '',
+    this.flags = const <String>[],
+    this.groupKey,
+    this.display,
+  });
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      JsonFields.NAME: name,
+      JsonFields.DISPLAY_NAME: displayName,
+      JsonFields.DESCRIPTION: description,
+      JsonFields.FLAGS: flags,
+      JsonFields.GROUP_KEY: groupKey,
+      JsonFields.DISPLAY: display?.toJson(),
+    }.toJsonClean();
+  }
+
+  factory MatchedStateOutputSpec.fromJson(Map<String, dynamic> json) {
+    return MatchedStateOutputSpec(
+      name: json[JsonFields.NAME] as String? ?? '',
+      displayName: json[JsonFields.DISPLAY_NAME] as String? ?? '',
+      description: json[JsonFields.DESCRIPTION] as String? ?? '',
+      flags: (json[JsonFields.FLAGS] as List<dynamic>? ?? const <dynamic>[])
+          .whereType<String>()
+          .toList(),
+      groupKey: json[JsonFields.GROUP_KEY] as String?,
+      display: json[JsonFields.DISPLAY] is Map<String, dynamic>
+          ? EndpointDisplaySpec.fromJson(
+              json[JsonFields.DISPLAY] as Map<String, dynamic>,
+            )
+          : null,
+    );
+  }
+}
+
+/// Stateful contract nested under one input endpoint spec.
+class EndpointStatefulInputSpec {
+  final StatefulInputBehavior behavior;
+  final StatefulInputConsumptionMode consumptionMode;
+  final Object? initialValue;
+  final MatchedStateOutputSpec? matchedOutput;
+
+  const EndpointStatefulInputSpec({
+    this.behavior = StatefulInputBehavior.autoReduced,
+    this.consumptionMode =
+        StatefulInputConsumptionMode.callbackAndRetainedState,
+    this.initialValue,
+    this.matchedOutput,
+  });
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      JsonFields.STATEFUL_BEHAVIOR: switch (behavior) {
+        StatefulInputBehavior.autoReduced =>
+          JsonFields.STATEFUL_BEHAVIOR_AUTO_REDUCED,
+        StatefulInputBehavior.ownerManaged =>
+          JsonFields.STATEFUL_BEHAVIOR_OWNER_MANAGED,
+      },
+      JsonFields.STATEFUL_CONSUMPTION_MODE: switch (consumptionMode) {
+        StatefulInputConsumptionMode.callbackOnly =>
+          JsonFields.STATEFUL_CONSUMPTION_CALLBACK_ONLY,
+        StatefulInputConsumptionMode.retainedStateOnly =>
+          JsonFields.STATEFUL_CONSUMPTION_RETAINED_STATE_ONLY,
+        StatefulInputConsumptionMode.callbackAndRetainedState =>
+          JsonFields.STATEFUL_CONSUMPTION_CALLBACK_AND_RETAINED_STATE,
+      },
+      JsonFields.INITIAL_VALUE: initialValue,
+      JsonFields.MATCHED_OUTPUT: matchedOutput?.toJson(),
+    }.toJsonClean();
+  }
+
+  factory EndpointStatefulInputSpec.fromJson(Map<String, dynamic> json) {
+    return EndpointStatefulInputSpec(
+      behavior: json[JsonFields.STATEFUL_BEHAVIOR] ==
+              JsonFields.STATEFUL_BEHAVIOR_OWNER_MANAGED
+          ? StatefulInputBehavior.ownerManaged
+          : StatefulInputBehavior.autoReduced,
+      consumptionMode: switch (json[JsonFields.STATEFUL_CONSUMPTION_MODE]) {
+        JsonFields.STATEFUL_CONSUMPTION_CALLBACK_ONLY =>
+          StatefulInputConsumptionMode.callbackOnly,
+        JsonFields.STATEFUL_CONSUMPTION_RETAINED_STATE_ONLY =>
+          StatefulInputConsumptionMode.retainedStateOnly,
+        _ => StatefulInputConsumptionMode.callbackAndRetainedState,
+      },
+      initialValue: json[JsonFields.INITIAL_VALUE],
+      matchedOutput: json[JsonFields.MATCHED_OUTPUT] is Map<String, dynamic>
+          ? MatchedStateOutputSpec.fromJson(
+              json[JsonFields.MATCHED_OUTPUT] as Map<String, dynamic>,
+            )
+          : null,
+    );
+  }
+}
+
+/// Polarity metadata used when indexed scalar values are projected.
+enum ProjectionPolarity {
+  unipolar,
+  bipolar,
+}
+
+/// Activity rule metadata used by active-element projection strategies.
+enum ProjectionActivityRule {
+  aboveThreshold,
+  belowThreshold,
+  absAboveThreshold,
+}
+
+/**
+ * Purpose: Convert projection polarity to the EndpointSpec wire value.
+ *
+ * Parameters:
+ * - [polarity]: Typed polarity value to serialize.
+ *
+ * Return value:
+ * - Canonical protocol string for [polarity].
+ *
+ * Requirements/Preconditions:
+ * - [polarity] is a valid [ProjectionPolarity] enum value.
+ *
+ * Guarantees/Postconditions:
+ * - The returned value matches Epiphany and native DogPawEntity constants.
+ *
+ * Invariants:
+ * - Pure conversion; no endpoint state is read or modified.
+ */
+String projectionPolarityToWireValue(ProjectionPolarity polarity) {
+  return switch (polarity) {
+    ProjectionPolarity.unipolar => JsonFields.PROJECTION_POLARITY_UNIPOLAR,
+    ProjectionPolarity.bipolar => JsonFields.PROJECTION_POLARITY_BIPOLAR,
+  };
+}
+
+/**
+ * Purpose: Parse projection polarity from the EndpointSpec wire value.
+ *
+ * Parameters:
+ * - [value]: Nullable protocol string from JSON.
+ *
+ * Return value:
+ * - Parsed polarity, defaulting to [ProjectionPolarity.unipolar] when omitted.
+ *
+ * Requirements/Preconditions:
+ * - Non-null values must be part of the shared Phase 3a vocabulary.
+ *
+ * Guarantees/Postconditions:
+ * - Throws [ArgumentError] for unknown non-null values.
+ *
+ * Invariants:
+ * - Pure conversion; input JSON is not modified.
+ */
+ProjectionPolarity projectionPolarityFromWireValue(String? value) {
+  return switch (value) {
+    null => ProjectionPolarity.unipolar,
+    JsonFields.PROJECTION_POLARITY_UNIPOLAR => ProjectionPolarity.unipolar,
+    JsonFields.PROJECTION_POLARITY_BIPOLAR => ProjectionPolarity.bipolar,
+    _ => throw ArgumentError.value(
+        value,
+        JsonFields.POLARITY,
+        'Unsupported projection polarity',
+      ),
+  };
+}
+
+/**
+ * Purpose: Convert projection activity rule to the EndpointSpec wire value.
+ *
+ * Parameters:
+ * - [activity]: Typed activity rule to serialize.
+ *
+ * Return value:
+ * - Canonical protocol string for [activity].
+ *
+ * Requirements/Preconditions:
+ * - [activity] is a valid [ProjectionActivityRule] enum value.
+ *
+ * Guarantees/Postconditions:
+ * - The returned value matches Epiphany and native DogPawEntity constants.
+ *
+ * Invariants:
+ * - Pure conversion; no endpoint state is read or modified.
+ */
+String projectionActivityRuleToWireValue(ProjectionActivityRule activity) {
+  return switch (activity) {
+    ProjectionActivityRule.aboveThreshold =>
+      JsonFields.PROJECTION_ACTIVITY_ABOVE_THRESHOLD,
+    ProjectionActivityRule.belowThreshold =>
+      JsonFields.PROJECTION_ACTIVITY_BELOW_THRESHOLD,
+    ProjectionActivityRule.absAboveThreshold =>
+      JsonFields.PROJECTION_ACTIVITY_ABS_ABOVE_THRESHOLD,
+  };
+}
+
+/**
+ * Purpose: Parse projection activity rule from the EndpointSpec wire value.
+ *
+ * Parameters:
+ * - [value]: Nullable protocol string from JSON.
+ *
+ * Return value:
+ * - Parsed activity, defaulting to [ProjectionActivityRule.aboveThreshold]
+ *   when omitted.
+ *
+ * Requirements/Preconditions:
+ * - Non-null values must be part of the shared Phase 3a vocabulary.
+ *
+ * Guarantees/Postconditions:
+ * - Throws [ArgumentError] for unknown non-null values.
+ *
+ * Invariants:
+ * - Pure conversion; input JSON is not modified.
+ */
+ProjectionActivityRule projectionActivityRuleFromWireValue(String? value) {
+  return switch (value) {
+    null => ProjectionActivityRule.aboveThreshold,
+    JsonFields.PROJECTION_ACTIVITY_ABOVE_THRESHOLD =>
+      ProjectionActivityRule.aboveThreshold,
+    JsonFields.PROJECTION_ACTIVITY_BELOW_THRESHOLD =>
+      ProjectionActivityRule.belowThreshold,
+    JsonFields.PROJECTION_ACTIVITY_ABS_ABOVE_THRESHOLD =>
+      ProjectionActivityRule.absAboveThreshold,
+    _ => throw ArgumentError.value(
+        value,
+        JsonFields.ACTIVITY,
+        'Unsupported projection activity rule',
+      ),
+  };
+}
+
+/// One advertised index projection strategy for an output endpoint.
+class ProjectionStrategyHint {
+  /// Strategy name from the Phase 3a conversion vocabulary.
+  final String name;
+
+  /// Optional strategy-specific parameters carried unchanged.
+  final Map<String, dynamic> params;
+
+  const ProjectionStrategyHint({
+    required this.name,
+    this.params = const <String, dynamic>{},
+  });
+
+  /**
+   * Purpose: Serialize this advertised projection strategy to JSON.
+   *
+   * Parameters:
+   * - None.
+   *
+   * Return value:
+   * - Protocol object containing strategy [name] and optional [params].
+   *
+   * Requirements/Preconditions:
+   * - [name] is a shared conversion strategy wire value.
+   *
+   * Guarantees/Postconditions:
+   * - Empty parameter maps are omitted from JSON.
+   *
+   * Invariants:
+   * - This object remains unchanged.
+   */
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      JsonFields.NAME: name,
+      JsonFields.PARAMS: params.isEmpty ? null : params,
+    }.toJsonClean();
+  }
+
+  /**
+   * Purpose: Parse one advertised projection strategy from JSON.
+   *
+   * Parameters:
+   * - [json]: Protocol object containing a strategy name and optional params.
+   *
+   * Return value:
+   * - Parsed [ProjectionStrategyHint].
+   *
+   * Requirements/Preconditions:
+   * - [json] must contain a string `name` field.
+   *
+   * Guarantees/Postconditions:
+   * - Throws [FormatException] when required field types are invalid.
+   *
+   * Invariants:
+   * - Unknown names are preserved for callers that validate against context.
+   */
+  factory ProjectionStrategyHint.fromJson(Map<String, dynamic> json) {
+    final Object? rawName = json[JsonFields.NAME];
+    if (rawName is! String) {
+      throw const FormatException(
+          'ProjectionStrategyHint.name must be a string');
+    }
+
+    return ProjectionStrategyHint(
+      name: rawName,
+      params: Map<String, dynamic>.from(
+        json[JsonFields.PARAMS] ?? <String, dynamic>{},
+      ),
+    );
+  }
+}
+
+/// Optional endpoint metadata for future index projection validation.
+class ProjectionHints {
+  final ProjectionPolarity polarity;
+  final ProjectionActivityRule activity;
+  final double activeThreshold;
+  final double idleValue;
+  final List<ProjectionStrategyHint> strategies;
+  final bool strategiesProvided;
+
+  const ProjectionHints({
+    this.polarity = ProjectionPolarity.unipolar,
+    this.activity = ProjectionActivityRule.aboveThreshold,
+    this.activeThreshold = 0.0,
+    this.idleValue = 0.0,
+    this.strategies = const <ProjectionStrategyHint>[
+      ProjectionStrategyHint(name: JsonFields.CONVERSION_MAX_VALUE),
+      ProjectionStrategyHint(name: JsonFields.CONVERSION_AVERAGE_VALUE),
+      ProjectionStrategyHint(name: JsonFields.CONVERSION_LAST_ACTIVE),
+      ProjectionStrategyHint(name: JsonFields.CONVERSION_FIRST_ACTIVE),
+    ],
+    this.strategiesProvided = false,
+  });
+
+  /**
+   * Purpose: Serialize projection hints to EndpointSpec JSON.
+   *
+   * Parameters:
+   * - None.
+   *
+   * Return value:
+   * - Protocol object for source projection metadata.
+   *
+   * Requirements/Preconditions:
+   * - Strategy names are shared conversion strategy wire values.
+   *
+   * Guarantees/Postconditions:
+   * - All Phase 3a fields are present in serialized hints.
+   *
+   * Invariants:
+   * - This object and its strategy list are not modified.
+   */
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      JsonFields.POLARITY: projectionPolarityToWireValue(polarity),
+      JsonFields.ACTIVITY: projectionActivityRuleToWireValue(activity),
+      JsonFields.ACTIVE_THRESHOLD: activeThreshold,
+      JsonFields.IDLE_VALUE: idleValue,
+      JsonFields.STRATEGIES: strategies
+          .map((ProjectionStrategyHint hint) => hint.toJson())
+          .toList(),
+    };
+  }
+
+  /**
+   * Purpose: Parse endpoint projection hints from JSON.
+   *
+   * Parameters:
+   * - [json]: Protocol object containing any Phase 3a projection hint fields.
+   *
+   * Return value:
+   * - Parsed [ProjectionHints] with omitted fields filled from defaults.
+   *
+   * Requirements/Preconditions:
+   * - Present enum fields must use shared wire vocabulary.
+   *
+   * Guarantees/Postconditions:
+   * - Throws [FormatException] or [ArgumentError] for malformed fields.
+   *
+   * Invariants:
+   * - Unknown strategy names are preserved for connection validation.
+   */
+  factory ProjectionHints.fromJson(Map<String, dynamic> json) {
+    final Object? rawStrategies = json[JsonFields.STRATEGIES];
+    List<ProjectionStrategyHint> parsedStrategies =
+        const ProjectionHints().strategies;
+    final bool strategiesProvided = rawStrategies != null;
+    if (rawStrategies != null) {
+      if (rawStrategies is! List) {
+        throw const FormatException(
+            'projectionHints.strategies must be a list');
+      }
+      parsedStrategies = rawStrategies.map((Object? value) {
+        if (value is! Map<String, dynamic>) {
+          throw const FormatException(
+            'projectionHints.strategies entries must be objects',
+          );
+        }
+        return ProjectionStrategyHint.fromJson(value);
+      }).toList();
+    }
+
+    return ProjectionHints(
+      polarity: projectionPolarityFromWireValue(
+        json[JsonFields.POLARITY] as String?,
+      ),
+      activity: projectionActivityRuleFromWireValue(
+        json[JsonFields.ACTIVITY] as String?,
+      ),
+      activeThreshold:
+          (json[JsonFields.ACTIVE_THRESHOLD] as num?)?.toDouble() ?? 0.0,
+      idleValue: (json[JsonFields.IDLE_VALUE] as num?)?.toDouble() ?? 0.0,
+      strategies: parsedStrategies,
+      strategiesProvided: strategiesProvided,
+    );
+  }
+}
+
+/**
+ * Purpose: Resolve endpoint projection hints with connection parameter overrides.
+ *
+ * Parameters:
+ * - [hints]: Optional source endpoint hints.
+ * - [indexConversion]: Optional connection-level conversion assertion.
+ *
+ * Return value:
+ * - Effective projection hints after applying Phase 3a defaults and overrides.
+ *
+ * Requirements/Preconditions:
+ * - Override values for threshold and idle must be numeric when present.
+ *
+ * Guarantees/Postconditions:
+ * - Omitted hints resolve to pressure-style defaults.
+ * - Connection parameters override source threshold and idle values.
+ *
+ * Invariants:
+ * - Neither [hints] nor [indexConversion] is mutated.
+ */
+ProjectionHints resolveProjectionHints(
+  ProjectionHints? hints, {
+  IndexConversionConfig? indexConversion,
+}) {
+  final ProjectionHints base = hints ?? const ProjectionHints();
+  final Map<String, dynamic> parameters =
+      indexConversion?.parameters ?? const <String, dynamic>{};
+  return ProjectionHints(
+    polarity: base.polarity,
+    activity: base.activity,
+    activeThreshold:
+        (parameters[JsonFields.ACTIVE_THRESHOLD] as num?)?.toDouble() ??
+            base.activeThreshold,
+    idleValue: (parameters[JsonFields.IDLE_VALUE] as num?)?.toDouble() ??
+        base.idleValue,
+    strategies: base.strategies,
+    strategiesProvided: base.strategiesProvided,
+  );
 }
 
 /// Complete endpoint specification
@@ -45,6 +715,14 @@ class EndpointSpec {
   /// Data flow category (default: message queue)
   final EndpointCategory category;
 
+  /// Concrete queue payload used when [category] is message queue.
+  final MessageQueuePayloadContract messageQueuePayloadContract;
+
+  /// CONTINUOUS-only idle behavior while no peer is attached (spec-time
+  /// default; may be overridden at runtime via
+  /// `LocalEndpoint.setContinuousFirstPeerPolicy()`).
+  final ContinuousFirstPeerPolicy continuousFirstPeerPolicy;
+
   /// JACK client name for ordinary JACK-backed endpoints.
   final String? jackClientName;
 
@@ -60,8 +738,20 @@ class EndpointSpec {
   /// Optional grouping key for stereo/device grouping.
   final String? groupKey;
 
-  /// Optional backing endpoint reference for output shims.
+  /// Optional connection-picker folder hierarchy.
+  final EndpointDisplaySpec? display;
+
+  /// When true, connection pickers omit this endpoint (default false).
+  final bool hideFromPicker;
+
+  /// Optional backing endpoint reference for the current output-only shim rule.
   final DataItemRef? shimTargetRef;
+
+  /// Optional stateful-input contract layered on queue inputs.
+  final EndpointStatefulInputSpec? statefulInput;
+
+  /// Optional source projection metadata for indexed outputs.
+  final ProjectionHints? projectionHints;
 
   const EndpointSpec({
     required this.direction,
@@ -70,13 +760,97 @@ class EndpointSpec {
     this.description = '',
     this.connectionPolicy = const ConnectionPolicy(),
     this.category = EndpointCategory.messageQueue,
+    this.messageQueuePayloadContract = MessageQueuePayloadContract.endpointData,
+    this.continuousFirstPeerPolicy =
+        ContinuousFirstPeerPolicy.invalidateUntilNextWrite,
     this.jackClientName,
     this.fullJackPortName,
     this.jackBindingMode = JackBindingMode.registerNewPort,
     this.flags = const <String>[],
     this.groupKey,
+    this.display,
+    this.hideFromPicker = false,
     this.shimTargetRef,
+    this.statefulInput,
+    this.projectionHints,
   });
+
+  /// Purpose: Resolve the concrete queue payload contract used by this spec.
+  ///
+  /// Parameters:
+  /// - None.
+  ///
+  /// Return value:
+  /// - The action-oriented payload contract for supported scalar/control
+  ///   message-queue endpoints, or the stored contract for all other cases.
+  ///
+  /// Requirements/Preconditions:
+  /// - None.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Endpoint metadata remains unchanged.
+  ///
+  /// Invariants:
+  /// - `endpointData` is treated as a sentinel default for supported scalar
+  ///   queue types rather than an instruction to force raw-value transport.
+  MessageQueuePayloadContract get effectiveMessageQueuePayloadContract =>
+      _resolveEffectiveMessageQueuePayloadContract(
+        category: category,
+        dataType: dataType,
+        requestedContract: messageQueuePayloadContract,
+      );
+
+  /// Purpose: Report whether this spec uses a typed action queue payload.
+  ///
+  /// Parameters:
+  /// - None.
+  ///
+  /// Return value:
+  /// - `true` when this spec resolves to a non-raw message-queue contract.
+  ///
+  /// Requirements/Preconditions:
+  /// - None.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Endpoint metadata remains unchanged.
+  ///
+  /// Invariants:
+  /// - This depends only on the spec fields.
+  bool get usesActionMessageQueuePayload =>
+      category == EndpointCategory.messageQueue &&
+      effectiveMessageQueuePayloadContract !=
+          MessageQueuePayloadContract.endpointData;
+
+  static MessageQueuePayloadContract
+      _resolveEffectiveMessageQueuePayloadContract({
+    required EndpointCategory category,
+    required DataTypeSpec dataType,
+    required MessageQueuePayloadContract requestedContract,
+  }) {
+    if (category != EndpointCategory.messageQueue ||
+        requestedContract != MessageQueuePayloadContract.endpointData) {
+      return requestedContract;
+    }
+
+    switch (dataType.baseType) {
+      case DataType.float:
+        return MessageQueuePayloadContract.statefulFloatAction;
+      case DataType.int_:
+        return MessageQueuePayloadContract.statefulIntAction;
+      case DataType.toggle:
+        return MessageQueuePayloadContract.statefulToggleAction;
+      case DataType.enum_:
+        return MessageQueuePayloadContract.statefulEnumAction;
+      case DataType.color:
+        return MessageQueuePayloadContract.statefulColorAction;
+      case DataType.theme:
+        return MessageQueuePayloadContract.statefulThemeAction;
+      case DataType.scale:
+        return MessageQueuePayloadContract.statefulScaleAction;
+      default:
+        return requestedContract;
+    }
+  }
 
   Map<String, dynamic> toJson() {
     String directionStr;
@@ -118,6 +892,9 @@ class EndpointSpec {
         JsonFields.JACK_BINDING_MODE_ADOPT_EXISTING_PORT,
     };
 
+    final String continuousFirstPeerPolicyStr =
+        continuousFirstPeerPolicyToWireValue(continuousFirstPeerPolicy);
+
     return <String, dynamic>{
       JsonFields.DISPLAY_NAME: displayName,
       JsonFields.DESCRIPTION: description,
@@ -125,12 +902,36 @@ class EndpointSpec {
       JsonFields.DATA_TYPE: dataType.toJson(),
       JsonFields.CONNECTION_POLICY: connectionPolicy.toJson(),
       JsonFields.CATEGORY: categoryStr,
+      JsonFields.MESSAGE_QUEUE_PAYLOAD_CONTRACT: switch (
+          effectiveMessageQueuePayloadContract) {
+        MessageQueuePayloadContract.endpointData =>
+          JsonFields.MESSAGE_QUEUE_PAYLOAD_ENDPOINT_DATA,
+        MessageQueuePayloadContract.statefulFloatAction =>
+          JsonFields.MESSAGE_QUEUE_PAYLOAD_STATEFUL_FLOAT_ACTION,
+        MessageQueuePayloadContract.statefulIntAction =>
+          JsonFields.MESSAGE_QUEUE_PAYLOAD_STATEFUL_INT_ACTION,
+        MessageQueuePayloadContract.statefulToggleAction =>
+          JsonFields.MESSAGE_QUEUE_PAYLOAD_STATEFUL_TOGGLE_ACTION,
+        MessageQueuePayloadContract.statefulEnumAction =>
+          JsonFields.MESSAGE_QUEUE_PAYLOAD_STATEFUL_ENUM_ACTION,
+        MessageQueuePayloadContract.statefulColorAction =>
+          JsonFields.MESSAGE_QUEUE_PAYLOAD_STATEFUL_COLOR_ACTION,
+        MessageQueuePayloadContract.statefulThemeAction =>
+          JsonFields.MESSAGE_QUEUE_PAYLOAD_STATEFUL_THEME_ACTION,
+        MessageQueuePayloadContract.statefulScaleAction =>
+          JsonFields.MESSAGE_QUEUE_PAYLOAD_STATEFUL_SCALE_ACTION,
+      },
+      JsonFields.CONTINUOUS_FIRST_PEER_POLICY: continuousFirstPeerPolicyStr,
       JsonFields.JACK_CLIENT_NAME: jackClientName,
       JsonFields.FULL_JACK_PORT_NAME: fullJackPortName,
       JsonFields.JACK_BINDING_MODE: jackBindingModeStr,
       JsonFields.FLAGS: flags,
       JsonFields.GROUP_KEY: groupKey,
+      JsonFields.DISPLAY: display?.toJson(),
+      JsonFields.HIDE_FROM_PICKER: hideFromPicker ? true : null,
       JsonFields.SHIM_TARGET_REF: shimTargetRef?.toJson(),
+      JsonFields.STATEFUL_INPUT: statefulInput?.toJson(),
+      JsonFields.PROJECTION_HINTS: projectionHints?.toJson(),
     }.toJsonClean();
   }
 
@@ -182,6 +983,27 @@ class EndpointSpec {
         },
         orElse: () => EndpointCategory.messageQueue,
       ),
+      messageQueuePayloadContract: switch (
+          json[JsonFields.MESSAGE_QUEUE_PAYLOAD_CONTRACT]) {
+        JsonFields.MESSAGE_QUEUE_PAYLOAD_STATEFUL_FLOAT_ACTION =>
+          MessageQueuePayloadContract.statefulFloatAction,
+        JsonFields.MESSAGE_QUEUE_PAYLOAD_STATEFUL_INT_ACTION =>
+          MessageQueuePayloadContract.statefulIntAction,
+        JsonFields.MESSAGE_QUEUE_PAYLOAD_STATEFUL_TOGGLE_ACTION =>
+          MessageQueuePayloadContract.statefulToggleAction,
+        JsonFields.MESSAGE_QUEUE_PAYLOAD_STATEFUL_ENUM_ACTION =>
+          MessageQueuePayloadContract.statefulEnumAction,
+        JsonFields.MESSAGE_QUEUE_PAYLOAD_STATEFUL_COLOR_ACTION =>
+          MessageQueuePayloadContract.statefulColorAction,
+        JsonFields.MESSAGE_QUEUE_PAYLOAD_STATEFUL_THEME_ACTION =>
+          MessageQueuePayloadContract.statefulThemeAction,
+        JsonFields.MESSAGE_QUEUE_PAYLOAD_STATEFUL_SCALE_ACTION =>
+          MessageQueuePayloadContract.statefulScaleAction,
+        _ => MessageQueuePayloadContract.endpointData,
+      },
+      continuousFirstPeerPolicy: continuousFirstPeerPolicyFromWireValue(
+        json[JsonFields.CONTINUOUS_FIRST_PEER_POLICY] as String?,
+      ),
       jackClientName: json[JsonFields.JACK_CLIENT_NAME] as String?,
       fullJackPortName: json[JsonFields.FULL_JACK_PORT_NAME] as String?,
       jackBindingMode: json[JsonFields.JACK_BINDING_MODE] ==
@@ -192,11 +1014,487 @@ class EndpointSpec {
           .whereType<String>()
           .toList(),
       groupKey: json[JsonFields.GROUP_KEY] as String?,
+      display: json[JsonFields.DISPLAY] is Map<String, dynamic>
+          ? EndpointDisplaySpec.fromJson(
+              json[JsonFields.DISPLAY] as Map<String, dynamic>,
+            )
+          : null,
+      hideFromPicker: json[JsonFields.HIDE_FROM_PICKER] == true,
       shimTargetRef: json[JsonFields.SHIM_TARGET_REF] is Map<String, dynamic>
           ? DataItemRef.fromJson(
               json[JsonFields.SHIM_TARGET_REF] as Map<String, dynamic>,
             )
           : null,
+      statefulInput: json[JsonFields.STATEFUL_INPUT] is Map<String, dynamic>
+          ? EndpointStatefulInputSpec.fromJson(
+              json[JsonFields.STATEFUL_INPUT] as Map<String, dynamic>,
+            )
+          : null,
+      projectionHints: json[JsonFields.PROJECTION_HINTS] is Map<String, dynamic>
+          ? ProjectionHints.fromJson(
+              json[JsonFields.PROJECTION_HINTS] as Map<String, dynamic>,
+            )
+          : null,
+    );
+  }
+
+  EndpointSpec copyWithStatefulTransport({
+    MessageQueuePayloadContract? messageQueuePayloadContract,
+    EndpointStatefulInputSpec? statefulInput,
+  }) {
+    return EndpointSpec(
+      displayName: displayName,
+      description: description,
+      direction: direction,
+      dataType: dataType,
+      connectionPolicy: connectionPolicy,
+      category: category,
+      messageQueuePayloadContract:
+          messageQueuePayloadContract ?? this.messageQueuePayloadContract,
+      continuousFirstPeerPolicy: continuousFirstPeerPolicy,
+      jackClientName: jackClientName,
+      fullJackPortName: fullJackPortName,
+      jackBindingMode: jackBindingMode,
+      flags: flags,
+      groupKey: groupKey,
+      display: display,
+      hideFromPicker: hideFromPicker,
+      shimTargetRef: shimTargetRef,
+      statefulInput: statefulInput ?? this.statefulInput,
+      projectionHints: projectionHints,
+    );
+  }
+
+  /**
+   * Purpose: Copy this endpoint spec while changing projection hints.
+   *
+   * Parameters:
+   * - [projectionHints]: New optional projection hint metadata.
+   *
+   * Return value:
+   * - New [EndpointSpec] preserving all other fields.
+   *
+   * Requirements/Preconditions:
+   * - [projectionHints], when provided, uses shared strategy wire values.
+   *
+   * Guarantees/Postconditions:
+   * - The original spec is unchanged.
+   *
+   * Invariants:
+   * - Direction, category, data type, and transport metadata are preserved.
+   */
+  EndpointSpec copyWithProjectionHints(ProjectionHints? projectionHints) {
+    return EndpointSpec(
+      displayName: displayName,
+      description: description,
+      direction: direction,
+      dataType: dataType,
+      connectionPolicy: connectionPolicy,
+      category: category,
+      messageQueuePayloadContract: messageQueuePayloadContract,
+      continuousFirstPeerPolicy: continuousFirstPeerPolicy,
+      jackClientName: jackClientName,
+      fullJackPortName: fullJackPortName,
+      jackBindingMode: jackBindingMode,
+      flags: flags,
+      groupKey: groupKey,
+      display: display,
+      hideFromPicker: hideFromPicker,
+      shimTargetRef: shimTargetRef,
+      statefulInput: statefulInput,
+      projectionHints: projectionHints,
+    );
+  }
+}
+
+enum StatefulFloatActionType { setValue, add }
+
+enum StatefulIntActionType { setValue, add }
+
+enum StatefulToggleActionType { setValue, toggle }
+
+enum StatefulEnumActionType { setId, step }
+
+enum StatefulColorActionType { setValue }
+
+enum StatefulThemeActionType { setValue }
+
+enum StatefulScaleActionType { setValue }
+
+/// CONTINUOUS output idle behavior while no peer is attached.
+///
+/// WARNING: Keep in sync with C++ `ContinuousFirstPeerPolicy` in
+/// dogPawEntity/cpp/EndpointData.hpp.
+enum ContinuousFirstPeerPolicy {
+  /// Peerless writes soft-succeed without publishing a new valid frame; the
+  /// last-published frame is cleared when the peer count drops to zero.
+  invalidateUntilNextWrite,
+
+  /// The first peerless write after creation (or after the last valid frame
+  /// was cleared) publishes and seeds a frame that later 0-peer readers may
+  /// observe; further peerless writes then skip until a peer reconnects.
+  keepLastValid,
+}
+
+/// Purpose: Convert a [ContinuousFirstPeerPolicy] value to its wire
+/// identifier, as accepted by the native peer-count/policy FFI functions and
+/// the JSON spec field `continuousFirstPeerPolicy`.
+///
+/// Parameters:
+/// - [policy]: the policy to convert.
+///
+/// Return value: the wire identifier string for [policy].
+///
+/// Requirements/Preconditions: none.
+///
+/// Guarantees/Postconditions: the result round-trips through
+/// [continuousFirstPeerPolicyFromWireValue].
+String continuousFirstPeerPolicyToWireValue(ContinuousFirstPeerPolicy policy) {
+  return switch (policy) {
+    ContinuousFirstPeerPolicy.invalidateUntilNextWrite =>
+      JsonFields.CONTINUOUS_FIRST_PEER_POLICY_INVALIDATE_UNTIL_NEXT_WRITE,
+    ContinuousFirstPeerPolicy.keepLastValid =>
+      JsonFields.CONTINUOUS_FIRST_PEER_POLICY_KEEP_LAST_VALID,
+  };
+}
+
+/// Purpose: Convert a wire identifier back into a [ContinuousFirstPeerPolicy]
+/// value.
+///
+/// Parameters:
+/// - [wireValue]: a wire identifier, typically produced by
+///   [continuousFirstPeerPolicyToWireValue] or read from native/JSON state.
+///
+/// Return value: the matching policy, defaulting to
+/// [ContinuousFirstPeerPolicy.invalidateUntilNextWrite] for any unrecognized
+/// or null value (mirrors the native default).
+///
+/// Requirements/Preconditions: none.
+///
+/// Guarantees/Postconditions: never throws.
+ContinuousFirstPeerPolicy continuousFirstPeerPolicyFromWireValue(
+  String? wireValue,
+) {
+  if (wireValue == JsonFields.CONTINUOUS_FIRST_PEER_POLICY_KEEP_LAST_VALID) {
+    return ContinuousFirstPeerPolicy.keepLastValid;
+  }
+  return ContinuousFirstPeerPolicy.invalidateUntilNextWrite;
+}
+
+class StatefulFloatAction {
+  final StatefulFloatActionType action;
+  final double value;
+
+  const StatefulFloatAction({
+    required this.action,
+    required this.value,
+  });
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        JsonFields.ACTION: action == StatefulFloatActionType.add
+            ? JsonFields.STATEFUL_ACTION_ADD
+            : JsonFields.STATEFUL_ACTION_SET_VALUE,
+        JsonFields.VALUE: value,
+      };
+
+  factory StatefulFloatAction.fromJson(Map<String, dynamic> json) {
+    return StatefulFloatAction(
+      action: json[JsonFields.ACTION] == JsonFields.STATEFUL_ACTION_ADD
+          ? StatefulFloatActionType.add
+          : StatefulFloatActionType.setValue,
+      value: (json[JsonFields.VALUE] as num).toDouble(),
+    );
+  }
+}
+
+class StatefulIntAction {
+  final StatefulIntActionType action;
+  final int value;
+
+  const StatefulIntAction({
+    required this.action,
+    required this.value,
+  });
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        JsonFields.ACTION: action == StatefulIntActionType.add
+            ? JsonFields.STATEFUL_ACTION_ADD
+            : JsonFields.STATEFUL_ACTION_SET_VALUE,
+        JsonFields.VALUE: value,
+      };
+
+  factory StatefulIntAction.fromJson(Map<String, dynamic> json) {
+    return StatefulIntAction(
+      action: json[JsonFields.ACTION] == JsonFields.STATEFUL_ACTION_ADD
+          ? StatefulIntActionType.add
+          : StatefulIntActionType.setValue,
+      value: json[JsonFields.VALUE] as int? ?? 0,
+    );
+  }
+}
+
+class StatefulToggleAction {
+  final StatefulToggleActionType action;
+  final bool value;
+
+  const StatefulToggleAction({
+    required this.action,
+    required this.value,
+  });
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        JsonFields.ACTION: action == StatefulToggleActionType.toggle
+            ? JsonFields.STATEFUL_ACTION_TOGGLE
+            : JsonFields.STATEFUL_ACTION_SET_VALUE,
+        JsonFields.VALUE: value,
+      };
+
+  factory StatefulToggleAction.fromJson(Map<String, dynamic> json) {
+    return StatefulToggleAction(
+      action: json[JsonFields.ACTION] == JsonFields.STATEFUL_ACTION_TOGGLE
+          ? StatefulToggleActionType.toggle
+          : StatefulToggleActionType.setValue,
+      value: json[JsonFields.VALUE] as bool? ?? false,
+    );
+  }
+}
+
+class StatefulEnumAction {
+  final StatefulEnumActionType action;
+  final int value;
+
+  const StatefulEnumAction({
+    required this.action,
+    required this.value,
+  });
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        JsonFields.ACTION: action == StatefulEnumActionType.step
+            ? JsonFields.STATEFUL_ACTION_STEP
+            : JsonFields.STATEFUL_ACTION_SET_ID,
+        JsonFields.VALUE: value,
+      };
+
+  factory StatefulEnumAction.fromJson(Map<String, dynamic> json) {
+    return StatefulEnumAction(
+      action: json[JsonFields.ACTION] == JsonFields.STATEFUL_ACTION_STEP
+          ? StatefulEnumActionType.step
+          : StatefulEnumActionType.setId,
+      value: json[JsonFields.VALUE] as int? ?? 0,
+    );
+  }
+}
+
+class StatefulColorAction {
+  final StatefulColorActionType action;
+  final int value;
+
+  const StatefulColorAction({
+    required this.action,
+    required this.value,
+  });
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        JsonFields.ACTION: JsonFields.STATEFUL_ACTION_SET_VALUE,
+        JsonFields.VALUE: value,
+      };
+
+  factory StatefulColorAction.fromJson(Map<String, dynamic> json) {
+    return StatefulColorAction(
+      action: StatefulColorActionType.setValue,
+      value: json[JsonFields.VALUE] as int? ?? 0,
+    );
+  }
+}
+
+/// Full-object replacement action for a stateful theme queue.
+class StatefulThemeAction {
+  final StatefulThemeActionType action;
+  final ThemeData value;
+
+  const StatefulThemeAction({
+    required this.action,
+    required this.value,
+  });
+
+  /// Purpose: Serialize this full-theme replacement for bridge JSON.
+  ///
+  /// Parameters: None.
+  ///
+  /// Return value: `set_value` action object containing ThemeData JSON.
+  ///
+  /// Requirements/Preconditions: [value] is a valid ThemeData value.
+  ///
+  /// Guarantees/Postconditions: This action remains unchanged.
+  ///
+  /// Invariants: No patch or delta fields are emitted.
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        JsonFields.ACTION: JsonFields.STATEFUL_ACTION_SET_VALUE,
+        JsonFields.VALUE: value.toJson(),
+      };
+
+  /// Purpose: Parse one full-theme replacement from bridge JSON.
+  ///
+  /// Parameters: [json] contains an action value object.
+  ///
+  /// Return value: Parsed immutable StatefulThemeAction.
+  ///
+  /// Requirements/Preconditions: `value` must contain ThemeData JSON.
+  ///
+  /// Guarantees/Postconditions: Input JSON remains unchanged.
+  ///
+  /// Invariants: The action vocabulary remains `set_value` only.
+  factory StatefulThemeAction.fromJson(Map<String, dynamic> json) {
+    return StatefulThemeAction(
+      action: StatefulThemeActionType.setValue,
+      value: ThemeData.fromJson(
+        json[JsonFields.VALUE] as Map<String, dynamic>,
+      ),
+    );
+  }
+}
+
+/// Full-object replacement action for a stateful scale queue.
+class StatefulScaleAction {
+  final StatefulScaleActionType action;
+  final ScaleData value;
+
+  const StatefulScaleAction({
+    required this.action,
+    required this.value,
+  });
+
+  /// Purpose: Serialize this full-scale replacement for bridge JSON.
+  ///
+  /// Parameters: None.
+  ///
+  /// Return value: `set_value` action object containing ScaleData JSON.
+  ///
+  /// Requirements/Preconditions: [value] has twelve note categories.
+  ///
+  /// Guarantees/Postconditions: This action remains unchanged.
+  ///
+  /// Invariants: No patch or delta fields are emitted.
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        JsonFields.ACTION: JsonFields.STATEFUL_ACTION_SET_VALUE,
+        JsonFields.VALUE: value.toJson(),
+      };
+
+  /// Purpose: Parse one full-scale replacement from bridge JSON.
+  ///
+  /// Parameters: [json] contains an action value object.
+  ///
+  /// Return value: Parsed immutable StatefulScaleAction.
+  ///
+  /// Requirements/Preconditions: `value` must contain ScaleData JSON.
+  ///
+  /// Guarantees/Postconditions: Input JSON remains unchanged.
+  ///
+  /// Invariants: The action vocabulary remains `set_value` only.
+  factory StatefulScaleAction.fromJson(Map<String, dynamic> json) {
+    return StatefulScaleAction(
+      action: StatefulScaleActionType.setValue,
+      value: ScaleData.fromJson(
+        json[JsonFields.VALUE] as Map<String, dynamic>,
+      ),
+    );
+  }
+}
+
+class StatefulEnumCommittedState {
+  final int id;
+
+  const StatefulEnumCommittedState({
+    required this.id,
+  });
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        JsonFields.ID: id,
+      };
+
+  factory StatefulEnumCommittedState.fromJson(Map<String, dynamic> json) {
+    return StatefulEnumCommittedState(
+      id: json[JsonFields.ID] as int? ?? 0,
+    );
+  }
+}
+
+/// JSON publication shape for one committed theme value.
+class StatefulThemeCommittedState {
+  final ThemeData value;
+
+  const StatefulThemeCommittedState({required this.value});
+
+  /// Purpose: Serialize one committed full-theme snapshot.
+  ///
+  /// Parameters: None.
+  ///
+  /// Return value: Object containing ThemeData under `value`.
+  ///
+  /// Requirements/Preconditions: [value] is valid ThemeData.
+  ///
+  /// Guarantees/Postconditions: This state remains unchanged.
+  ///
+  /// Invariants: Serialization always preserves the full object.
+  Map<String, dynamic> toJson() =>
+      <String, dynamic>{JsonFields.VALUE: value.toJson()};
+
+  /// Purpose: Parse one committed full-theme snapshot.
+  ///
+  /// Parameters: [json] contains ThemeData under `value`.
+  ///
+  /// Return value: Parsed immutable committed state.
+  ///
+  /// Requirements/Preconditions: `value` must be a JSON object.
+  ///
+  /// Guarantees/Postconditions: Input JSON remains unchanged.
+  ///
+  /// Invariants: Missing theme fields follow ThemeData parsing rules.
+  factory StatefulThemeCommittedState.fromJson(Map<String, dynamic> json) {
+    return StatefulThemeCommittedState(
+      value: ThemeData.fromJson(
+        json[JsonFields.VALUE] as Map<String, dynamic>,
+      ),
+    );
+  }
+}
+
+/// JSON publication shape for one committed scale value.
+class StatefulScaleCommittedState {
+  final ScaleData value;
+
+  const StatefulScaleCommittedState({required this.value});
+
+  /// Purpose: Serialize one committed full-scale snapshot.
+  ///
+  /// Parameters: None.
+  ///
+  /// Return value: Object containing ScaleData under `value`.
+  ///
+  /// Requirements/Preconditions: [value] has twelve note categories.
+  ///
+  /// Guarantees/Postconditions: This state remains unchanged.
+  ///
+  /// Invariants: Serialization always preserves the full object.
+  Map<String, dynamic> toJson() =>
+      <String, dynamic>{JsonFields.VALUE: value.toJson()};
+
+  /// Purpose: Parse one committed full-scale snapshot.
+  ///
+  /// Parameters: [json] contains ScaleData under `value`.
+  ///
+  /// Return value: Parsed immutable committed state.
+  ///
+  /// Requirements/Preconditions: `value` must be a JSON object.
+  ///
+  /// Guarantees/Postconditions: Input JSON remains unchanged.
+  ///
+  /// Invariants: ScaleData owns list-shape interpretation.
+  factory StatefulScaleCommittedState.fromJson(Map<String, dynamic> json) {
+    return StatefulScaleCommittedState(
+      value: ScaleData.fromJson(
+        json[JsonFields.VALUE] as Map<String, dynamic>,
+      ),
     );
   }
 }
@@ -211,6 +1509,9 @@ class EndpointInfo extends DataItemType<EndpointSpec> {
   String? _jackPortName;
   String? _filePath;
 
+  /// Human-facing display name of the owning entity, when Epiphany provides it.
+  String? ownerDisplayName;
+
   /// Getters for fully resolved runtime resource names.
   String? get queueShmName => _queueShmName;
   String? get socketPath => _socketPath;
@@ -223,6 +1524,7 @@ class EndpointInfo extends DataItemType<EndpointSpec> {
     required super.name,
     required EndpointSpec spec,
     super.namespaceSelector,
+    this.ownerDisplayName,
   }) : super(
           spec: spec,
         );
@@ -232,10 +1534,20 @@ class EndpointInfo extends DataItemType<EndpointSpec> {
     super.namespaceSelector,
     super.spec,
     super.resolved,
+    this.ownerDisplayName,
   });
 
   @override
   Map<String, dynamic> specToJson(EndpointSpec data) => data.toJson();
+
+  @override
+  Map<String, dynamic> toJson() {
+    final Map<String, dynamic> result = super.toJson();
+    if (ownerDisplayName != null) {
+      result[JsonFields.OWNER_DISPLAY_NAME] = ownerDisplayName;
+    }
+    return result;
+  }
 
   factory EndpointInfo.fromJson(Map<String, dynamic> json) {
     final name = json[JsonFields.NAME] as String? ?? '';
@@ -262,6 +1574,7 @@ class EndpointInfo extends DataItemType<EndpointSpec> {
       namespaceSelector: namespaceSelector,
       spec: spec,
       resolved: resolved,
+      ownerDisplayName: json[JsonFields.OWNER_DISPLAY_NAME] as String?,
     );
 
     // Parse sharedMemory object with fully-resolved paths/names from Epiphany
@@ -280,6 +1593,254 @@ class EndpointInfo extends DataItemType<EndpointSpec> {
     }
 
     return endpoint;
+  }
+
+  /// Builds a [ConnectionPolicy] with optional auto-connect criteria.
+  ///
+  /// Parameters:
+  /// - [criteria]: When non-null, used as `endpointConnectionRule`; otherwise empty.
+  ///
+  /// Returns a policy suitable for stock helper [EndpointSpec]s.
+  static ConnectionPolicy _policyForOptionalCriteria(
+    SearchCriteria? criteria,
+  ) {
+    if (criteria == null) {
+      return const ConnectionPolicy();
+    }
+    return ConnectionPolicy(endpointConnectionRule: criteria);
+  }
+
+  /// Search criteria that match the stock key_press *output* from BladeHW.
+  ///
+  /// Use when declaring an app *input* endpoint that should auto-connect to
+  /// the default key sensor worker (see also [forKeyPressInput]).
+  ///
+  /// Returns an AND of direction/name/sourceEntity/baseType conditions.
+  static SearchCriteria defaultKeyPressOutputCriteria() {
+    return SearchCriteria.andCombination([
+      SearchCriteria.fromCondition('direction', 'equals', 'output'),
+      SearchCriteria.fromCondition(
+        'name',
+        'equals',
+        DefaultDogPawEndpoints.keyPressEndpointName,
+      ),
+      SearchCriteria.fromCondition(
+        'sourceEntity',
+        'equals',
+        DefaultDogPawEndpoints.keyPressSourceEntity,
+      ),
+      SearchCriteria.fromCondition('baseType', 'equals', 'key_press'),
+    ]);
+  }
+
+  /// Search criteria that match the stock key_position *output* from BladeHW.
+  ///
+  /// Use when declaring an app *input* continuous endpoint that should
+  /// auto-connect to the default key sensor worker (see also
+  /// [forKeyPositionInput]).
+  ///
+  /// Returns an AND of direction/name/sourceEntity/baseType conditions.
+  static SearchCriteria defaultKeyPositionOutputCriteria() {
+    return SearchCriteria.andCombination([
+      SearchCriteria.fromCondition('direction', 'equals', 'output'),
+      SearchCriteria.fromCondition(
+        'name',
+        'equals',
+        DefaultDogPawEndpoints.keyPositionEndpointName,
+      ),
+      SearchCriteria.fromCondition(
+        'sourceEntity',
+        'equals',
+        DefaultDogPawEndpoints.keyPressSourceEntity,
+      ),
+      SearchCriteria.fromCondition('baseType', 'equals', 'key_position'),
+    ]);
+  }
+
+  /// Search criteria that match LEDComms `led_overlay_input`.
+  ///
+  /// Returns an AND of direction/name/sourceEntity/baseType conditions.
+  static SearchCriteria defaultLedOverlayInputCriteria() {
+    return SearchCriteria.andCombination([
+      SearchCriteria.fromCondition('direction', 'equals', 'input'),
+      SearchCriteria.fromCondition(
+        'name',
+        'equals',
+        DefaultDogPawEndpoints.ledOverlayInputName,
+      ),
+      SearchCriteria.fromCondition(
+        'sourceEntity',
+        'equals',
+        DefaultDogPawEndpoints.ledSourceEntity,
+      ),
+      SearchCriteria.fromCondition('baseType', 'equals', 'led_message'),
+    ]);
+  }
+
+  /// Search criteria that match LEDComms `led_primary_input`.
+  ///
+  /// Returns an AND of direction/name/sourceEntity/baseType conditions.
+  static SearchCriteria defaultLedPrimaryInputCriteria() {
+    return SearchCriteria.andCombination([
+      SearchCriteria.fromCondition('direction', 'equals', 'input'),
+      SearchCriteria.fromCondition(
+        'name',
+        'equals',
+        DefaultDogPawEndpoints.ledPrimaryInputName,
+      ),
+      SearchCriteria.fromCondition(
+        'sourceEntity',
+        'equals',
+        DefaultDogPawEndpoints.ledSourceEntity,
+      ),
+      SearchCriteria.fromCondition('baseType', 'equals', 'led_message'),
+    ]);
+  }
+
+  /// Build an INPUT message-queue endpoint for receiving stock key_press events.
+  ///
+  /// Parameters:
+  /// - [name]: Local endpoint name owned by the calling app (e.g. `key_input`).
+  /// - [displayName]: Optional picker/UI label; defaults to [name].
+  /// - [description]: Optional human description.
+  /// - [autoConnectToDefault]: When true (default), attaches
+  ///   [defaultKeyPressOutputCriteria] so Epiphany links to BladeHW::key_press.
+  ///
+  /// Returns an [EndpointInfo] ready for `DogPawEntity.createEndpoint`.
+  factory EndpointInfo.forKeyPressInput({
+    required String name,
+    String? displayName,
+    String? description,
+    bool autoConnectToDefault = true,
+  }) {
+    final SearchCriteria? criteria =
+        autoConnectToDefault ? defaultKeyPressOutputCriteria() : null;
+    return EndpointInfo(
+      name: name,
+      spec: EndpointSpec(
+        displayName: displayName ?? name,
+        description: description ??
+            'Receives key_press events from '
+                '${DefaultDogPawEndpoints.keyPressSourceEntity}',
+        direction: EndpointDirection.input,
+        dataType: const DataTypeSpec(DataType.keyPress),
+        category: EndpointCategory.messageQueue,
+        connectionPolicy: _policyForOptionalCriteria(criteria),
+      ),
+    );
+  }
+
+  /// Build an INPUT continuous endpoint for receiving stock key_position data.
+  ///
+  /// Parameters:
+  /// - [name]: Local endpoint name owned by the calling app
+  ///   (e.g. `key_position_input`).
+  /// - [displayName]: Optional picker/UI label; defaults to [name].
+  /// - [description]: Optional human description.
+  /// - [indexSpec]: Key-grid index layout; defaults to an 8x8 [IndexSpecKey]
+  ///   matching the stock BladeHW surface.
+  /// - [autoConnectToDefault]: When true (default), attaches
+  ///   [defaultKeyPositionOutputCriteria] so Epiphany links to
+  ///   BladeHW::key_position.
+  ///
+  /// Returns an [EndpointInfo] ready for `DogPawEntity.createEndpoint`.
+  factory EndpointInfo.forKeyPositionInput({
+    required String name,
+    String? displayName,
+    String? description,
+    IndexSpec? indexSpec,
+    bool autoConnectToDefault = true,
+  }) {
+    final SearchCriteria? criteria =
+        autoConnectToDefault ? defaultKeyPositionOutputCriteria() : null;
+    final IndexSpec resolvedIndex = indexSpec ?? const IndexSpecKey(8, 8);
+    return EndpointInfo(
+      name: name,
+      spec: EndpointSpec(
+        displayName: displayName ?? name,
+        description: description ??
+            'Receives key_position from '
+                '${DefaultDogPawEndpoints.keyPressSourceEntity}',
+        direction: EndpointDirection.input,
+        dataType: DataTypeSpec(
+          DataType.keyPosition,
+          indexSpec: resolvedIndex,
+        ),
+        category: EndpointCategory.continuous,
+        connectionPolicy: _policyForOptionalCriteria(criteria),
+      ),
+    );
+  }
+
+  /// Build an OUTPUT message-queue endpoint for LED overlay / flash traffic.
+  ///
+  /// Parameters:
+  /// - [name]: Local endpoint name owned by the calling app (e.g. `led_output`).
+  /// - [displayName]: Optional picker/UI label; defaults to [name].
+  /// - [description]: Optional human description.
+  /// - [autoConnectToDefault]: When true (default), attaches
+  ///   [defaultLedOverlayInputCriteria] so Epiphany links to
+  ///   LEDComms::led_overlay_input.
+  ///
+  /// Returns an [EndpointInfo] ready for `DogPawEntity.createEndpoint`.
+  factory EndpointInfo.forLedOverlayOutput({
+    required String name,
+    String? displayName,
+    String? description,
+    bool autoConnectToDefault = true,
+  }) {
+    final SearchCriteria? criteria =
+        autoConnectToDefault ? defaultLedOverlayInputCriteria() : null;
+    return EndpointInfo(
+      name: name,
+      spec: EndpointSpec(
+        displayName: displayName ?? name,
+        description: description ??
+            'Sends LED overlay messages to '
+                '${DefaultDogPawEndpoints.ledSourceEntity}',
+        direction: EndpointDirection.output,
+        dataType: const DataTypeSpec(DataType.ledMessage),
+        category: EndpointCategory.messageQueue,
+        connectionPolicy: _policyForOptionalCriteria(criteria),
+      ),
+    );
+  }
+
+  /// Build an OUTPUT message-queue endpoint for continuous primary LED feedback.
+  ///
+  /// Primary traffic is claim-gated on LEDComms; most teaching apps should prefer
+  /// [forLedOverlayOutput] unless they participate in the primary claim stack.
+  ///
+  /// Parameters:
+  /// - [name]: Local endpoint name owned by the calling app.
+  /// - [displayName]: Optional picker/UI label; defaults to [name].
+  /// - [description]: Optional human description.
+  /// - [autoConnectToDefault]: When true (default), attaches
+  ///   [defaultLedPrimaryInputCriteria] so Epiphany links to
+  ///   LEDComms::led_primary_input.
+  ///
+  /// Returns an [EndpointInfo] ready for `DogPawEntity.createEndpoint`.
+  factory EndpointInfo.forLedPrimaryOutput({
+    required String name,
+    String? displayName,
+    String? description,
+    bool autoConnectToDefault = true,
+  }) {
+    final SearchCriteria? criteria =
+        autoConnectToDefault ? defaultLedPrimaryInputCriteria() : null;
+    return EndpointInfo(
+      name: name,
+      spec: EndpointSpec(
+        displayName: displayName ?? name,
+        description: description ??
+            'Sends LED primary messages to '
+                '${DefaultDogPawEndpoints.ledSourceEntity}',
+        direction: EndpointDirection.output,
+        dataType: const DataTypeSpec(DataType.ledMessage),
+        category: EndpointCategory.messageQueue,
+        connectionPolicy: _policyForOptionalCriteria(criteria),
+      ),
+    );
   }
 
   /// Purpose: Copy metadata fields from another endpoint snapshot.
@@ -301,10 +1862,50 @@ class EndpointInfo extends DataItemType<EndpointSpec> {
   /// Invariants:
   /// - No native runtime handles are created, destroyed, or mutated here.
   void copyMetadataFrom(EndpointInfo other) {
+    final EndpointSpec? previousSpec = spec;
+    final EndpointSpec? previousResolved = resolved;
     name = other.name;
     namespaceSelector = other.namespaceSelector;
+    ownerDisplayName = other.ownerDisplayName;
     spec = other.spec;
     resolved = other.resolved;
+    if (spec != null &&
+        previousSpec != null &&
+        spec!.messageQueuePayloadContract ==
+            MessageQueuePayloadContract.endpointData &&
+        previousSpec.messageQueuePayloadContract !=
+            MessageQueuePayloadContract.endpointData) {
+      spec = spec!.copyWithStatefulTransport(
+        messageQueuePayloadContract: previousSpec.messageQueuePayloadContract,
+      );
+    }
+    if (spec != null &&
+        previousSpec != null &&
+        spec!.statefulInput == null &&
+        previousSpec.statefulInput != null) {
+      spec = spec!.copyWithStatefulTransport(
+        statefulInput: previousSpec.statefulInput,
+      );
+    }
+    if (resolved != null &&
+        previousResolved != null &&
+        resolved!.messageQueuePayloadContract ==
+            MessageQueuePayloadContract.endpointData &&
+        previousResolved.messageQueuePayloadContract !=
+            MessageQueuePayloadContract.endpointData) {
+      resolved = resolved!.copyWithStatefulTransport(
+        messageQueuePayloadContract:
+            previousResolved.messageQueuePayloadContract,
+      );
+    }
+    if (resolved != null &&
+        previousResolved != null &&
+        resolved!.statefulInput == null &&
+        previousResolved.statefulInput != null) {
+      resolved = resolved!.copyWithStatefulTransport(
+        statefulInput: previousResolved.statefulInput,
+      );
+    }
     _queueShmName = other._queueShmName;
     _socketPath = other._socketPath;
     _sharedDataName = other._sharedDataName;
@@ -411,6 +2012,31 @@ abstract class LocalEndpointRuntimeDelegate {
   /// Number of currently realized native input connections.
   int get inputConnectionCount;
 
+  /// Current OUTPUT CONTINUOUS/MESSAGE_QUEUE peer count, or `0` for
+  /// categories that do not define one (see
+  /// `Endpoint::getPeerCount()`/SPARSE_ENDPOINT idle/scale plan Phase 1).
+  int get peerCount;
+
+  /// Set the runtime `ContinuousFirstPeerPolicy` override for a CONTINUOUS
+  /// output. Returns `false` when the endpoint is not an OUTPUT CONTINUOUS
+  /// endpoint.
+  bool setContinuousFirstPeerPolicy(ContinuousFirstPeerPolicy policy);
+
+  /// Read the effective `ContinuousFirstPeerPolicy` (runtime override if one
+  /// has been set, otherwise the spec-time default), or `null` when the
+  /// endpoint is not CONTINUOUS.
+  ContinuousFirstPeerPolicy? getContinuousFirstPeerPolicy();
+
+  /// Read the native retained-state snapshot for this local endpoint.
+  EndpointRetainedStateSnapshot getRetainedStateSnapshot();
+
+  /// Adopt one retained-state snapshot into the native local endpoint runtime.
+  bool adoptRetainedStateSnapshot(
+    EndpointRetainedStateSnapshot snapshot, {
+    bool publishMatchedOutput = true,
+    EndpointSenderInfo? senderInfo,
+  });
+
   /// Write serialized bytes through the native local endpoint runtime.
   bool writeBytes(Uint8List bytes, {bool immediate = true});
 
@@ -429,8 +2055,26 @@ abstract class LocalEndpointRuntimeDelegate {
 
 /// Live runtime endpoint owned by the current Dart `DogPawEntity`.
 class LocalEndpoint extends EndpointInfo {
+  static const int _voiceRefSizeBytes = 16;
+  static const int _keySourceSizeBytes = 12;
+  static const int _voiceMemberSizeBytes = 40;
+  static const int _voiceMessageSizeBytes = 724;
+  static const int _maxVoiceMembers = 16;
+
   /// The number of input handles currently tracked for this local endpoint.
   int get inputHandlesCount => _runtimeDelegate?.inputConnectionCount ?? 0;
+
+  /// Current OUTPUT CONTINUOUS/MESSAGE_QUEUE peer count. `0` when this
+  /// endpoint's category does not define a peer count, or when no native
+  /// runtime delegate is attached yet.
+  ///
+  /// OUTPUT CONTINUOUS/MESSAGE_QUEUE counts reflect the native maintenance
+  /// thread's last poll and may lag a true attach/detach by a short, bounded
+  /// interval (see `Endpoint::getPeerCount()`).
+  int get peerCount => _runtimeDelegate?.peerCount ?? 0;
+
+  /// Whether [peerCount] is currently greater than zero.
+  bool get hasPeers => peerCount > 0;
 
   LocalEndpointRuntimeDelegate? _runtimeDelegate;
   void Function(LocalEndpointConnectionAddedEvent event)?
@@ -439,6 +2083,22 @@ class LocalEndpoint extends EndpointInfo {
       _connectionRemovedCallback;
   void Function(LocalEndpointConnectionIndexSpecChangedEvent event)?
       _connectionIndexSpecChangedCallback;
+  void Function(int peerCount)? _peerCountCallback;
+  void Function(StatefulFloatAction action, EndpointSenderInfo senderInfo)?
+      _statefulFloatInputCallback;
+  void Function(StatefulIntAction action, EndpointSenderInfo senderInfo)?
+      _statefulIntInputCallback;
+  void Function(StatefulToggleAction action, EndpointSenderInfo senderInfo)?
+      _statefulToggleInputCallback;
+  void Function(StatefulEnumAction action, EndpointSenderInfo senderInfo)?
+      _statefulEnumInputCallback;
+  void Function(StatefulColorAction action, EndpointSenderInfo senderInfo)?
+      _statefulColorInputCallback;
+  void Function(StatefulThemeAction action, EndpointSenderInfo senderInfo)?
+      _statefulThemeInputCallback;
+  void Function(StatefulScaleAction action, EndpointSenderInfo senderInfo)?
+      _statefulScaleInputCallback;
+  EndpointRetainedStateSnapshot? _callbackScopedRetainedStateSnapshot;
   final Map<String, EndpointSenderInfo> _senderInfoByConnectionName =
       <String, EndpointSenderInfo>{};
 
@@ -453,8 +2113,7 @@ class LocalEndpoint extends EndpointInfo {
     super.namespaceSelector,
     super.spec,
     super.resolved,
-  }) : super.full(
-        );
+  }) : super.full();
 
   /// Purpose: Create one local runtime endpoint from endpoint metadata.
   ///
@@ -700,10 +2359,685 @@ class LocalEndpoint extends EndpointInfo {
     _connectionIndexSpecChangedCallback?.call(event);
   }
 
+  /// Purpose: Register one observational callback for OUTPUT
+  /// CONTINUOUS/MESSAGE_QUEUE peer-count changes on this local endpoint.
+  ///
+  /// Parameters:
+  /// - [callback]: callback invoked with the new peer count after native
+  ///   runtime has already applied the change, or `null` to clear the
+  ///   callback.
+  ///
+  /// Return value:
+  /// - None.
+  ///
+  /// Requirements/Preconditions:
+  /// - This endpoint should be an OUTPUT CONTINUOUS or MESSAGE_QUEUE
+  ///   endpoint; other categories never dispatch this callback.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Replaces any previously registered peer-count callback.
+  /// - Matching `Endpoint::setPeerCountCallback()`'s own contract, native
+  ///   runtime invokes the underlying callback once immediately with the
+  ///   current count, which is forwarded here the same way.
+  ///
+  /// Invariants:
+  /// - This callback is observational only; write behavior does not depend
+  ///   on Dart receiving it (idle-skip decisions are enforced natively).
+  void setPeerCountCallback(void Function(int peerCount)? callback) {
+    _peerCountCallback = callback;
+  }
+
+  /// Purpose: Dispatch one peer-count-changed observation to the currently
+  /// registered callback.
+  ///
+  /// Parameters:
+  /// - [peerCount]: new peer count reported by the native runtime.
+  ///
+  /// Return value:
+  /// - None.
+  ///
+  /// Requirements/Preconditions:
+  /// - Intended for internal `DogPawEntity` notification dispatch.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Invokes the registered callback synchronously when present.
+  ///
+  /// Invariants:
+  /// - Missing callbacks are ignored.
+  void dispatchPeerCountChangedEvent(int peerCount) {
+    _peerCountCallback?.call(peerCount);
+  }
+
+  /// Purpose: Set the runtime `ContinuousFirstPeerPolicy` override for this
+  /// CONTINUOUS output endpoint.
+  ///
+  /// Parameters:
+  /// - [policy]: idle-write policy to apply immediately.
+  ///
+  /// Return value:
+  /// - `true` on success, `false` if this endpoint is not an OUTPUT
+  ///   CONTINUOUS endpoint or has no attached native runtime delegate.
+  ///
+  /// Requirements/Preconditions:
+  /// - Requires a native runtime delegate (see `_requireRuntimeDelegate()`).
+  ///
+  /// Guarantees/Postconditions:
+  /// - On success, subsequent peerless writes on this endpoint follow
+  ///   [policy] immediately; the override wins over the spec-time default
+  ///   until changed again.
+  ///
+  /// Invariants:
+  /// - Never changes this endpoint's category or direction.
+  bool setContinuousFirstPeerPolicy(ContinuousFirstPeerPolicy policy) {
+    return _requireRuntimeDelegate('setContinuousFirstPeerPolicy')
+        .setContinuousFirstPeerPolicy(policy);
+  }
+
+  /// Purpose: Read the effective `ContinuousFirstPeerPolicy` for this
+  /// CONTINUOUS endpoint.
+  ///
+  /// Parameters:
+  /// - None.
+  ///
+  /// Return value:
+  /// - Runtime override if one has been set via
+  ///   [setContinuousFirstPeerPolicy], otherwise the spec-time default from
+  ///   [EndpointSpec.continuousFirstPeerPolicy]. `null` when this endpoint is
+  ///   not CONTINUOUS.
+  ///
+  /// Requirements/Preconditions:
+  /// - Requires a native runtime delegate (see `_requireRuntimeDelegate()`).
+  ///
+  /// Guarantees/Postconditions:
+  /// - Endpoint state is unchanged.
+  ///
+  /// Invariants:
+  /// - None.
+  ContinuousFirstPeerPolicy? getContinuousFirstPeerPolicy() {
+    return _requireRuntimeDelegate('getContinuousFirstPeerPolicy')
+        .getContinuousFirstPeerPolicy();
+  }
+
+  /// Purpose: Store one callback for processed float action messages.
+  ///
+  /// Parameters:
+  /// - [callback]: callback invoked with each native-processed float action and
+  ///   sender metadata, or `null` to clear it.
+  ///
+  /// Return value:
+  /// - None.
+  ///
+  /// Requirements/Preconditions:
+  /// - This endpoint should describe an action-oriented float input.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Future stateful float action events replace the previous callback.
+  ///
+  /// Invariants:
+  /// - Callback registration does not start another Dart-side polling system.
+  void setStatefulFloatInputCallback(
+    void Function(StatefulFloatAction action, EndpointSenderInfo senderInfo)?
+        callback,
+  ) {
+    _statefulFloatInputCallback = callback;
+  }
+
+  /// Purpose: Store one callback for processed int action messages.
+  ///
+  /// Parameters:
+  /// - [callback]: callback invoked with each native-processed int action and
+  ///   sender metadata, or `null` to clear it.
+  ///
+  /// Return value:
+  /// - None.
+  ///
+  /// Requirements/Preconditions:
+  /// - This endpoint should describe an action-oriented int input.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Future stateful int action events replace the previous callback.
+  ///
+  /// Invariants:
+  /// - Callback registration does not start another Dart-side polling system.
+  void setStatefulIntInputCallback(
+    void Function(StatefulIntAction action, EndpointSenderInfo senderInfo)?
+        callback,
+  ) {
+    _statefulIntInputCallback = callback;
+  }
+
+  /// Purpose: Store one callback for processed toggle action messages.
+  ///
+  /// Parameters:
+  /// - [callback]: callback invoked with each native-processed toggle action
+  ///   and sender metadata, or `null` to clear it.
+  ///
+  /// Return value:
+  /// - None.
+  ///
+  /// Requirements/Preconditions:
+  /// - This endpoint should describe an action-oriented toggle input.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Future stateful toggle action events replace the previous callback.
+  ///
+  /// Invariants:
+  /// - Callback registration does not start another Dart-side polling system.
+  void setStatefulToggleInputCallback(
+    void Function(StatefulToggleAction action, EndpointSenderInfo senderInfo)?
+        callback,
+  ) {
+    _statefulToggleInputCallback = callback;
+  }
+
+  /// Purpose: Store one callback for processed enum action messages.
+  ///
+  /// Parameters:
+  /// - [callback]: callback invoked with each native-processed enum action and
+  ///   sender metadata, or `null` to clear it.
+  ///
+  /// Return value:
+  /// - None.
+  ///
+  /// Requirements/Preconditions:
+  /// - This endpoint should describe an action-oriented enum input.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Future stateful enum action events replace the previous callback.
+  ///
+  /// Invariants:
+  /// - Callback registration does not start another Dart-side polling system.
+  void setStatefulEnumInputCallback(
+    void Function(StatefulEnumAction action, EndpointSenderInfo senderInfo)?
+        callback,
+  ) {
+    _statefulEnumInputCallback = callback;
+  }
+
+  /// Purpose: Store one callback for processed color action messages.
+  ///
+  /// Parameters:
+  /// - [callback]: callback invoked with each native-processed color action and
+  ///   sender metadata, or `null` to clear it.
+  ///
+  /// Return value:
+  /// - None.
+  ///
+  /// Requirements/Preconditions:
+  /// - This endpoint should describe an action-oriented color input.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Future stateful color action events replace the previous callback.
+  ///
+  /// Invariants:
+  /// - Callback registration does not start another Dart-side polling system.
+  void setStatefulColorInputCallback(
+    void Function(StatefulColorAction action, EndpointSenderInfo senderInfo)?
+        callback,
+  ) {
+    _statefulColorInputCallback = callback;
+  }
+
+  /// Purpose: Store the callback for native-processed full-theme actions.
+  ///
+  /// Parameters: [callback] receives each action and its logical sender, or
+  /// `null` clears the callback.
+  ///
+  /// Return value: None.
+  ///
+  /// Requirements/Preconditions: This should be a THEME queue input.
+  ///
+  /// Guarantees/Postconditions: Future events use the replacement callback.
+  ///
+  /// Invariants: No transport or retained state is created in Dart.
+  void setStatefulThemeInputCallback(
+    void Function(StatefulThemeAction action, EndpointSenderInfo senderInfo)?
+        callback,
+  ) {
+    _statefulThemeInputCallback = callback;
+  }
+
+  /// Purpose: Store the callback for native-processed full-scale actions.
+  ///
+  /// Parameters: [callback] receives each action and its logical sender, or
+  /// `null` clears the callback.
+  ///
+  /// Return value: None.
+  ///
+  /// Requirements/Preconditions: This should be a SCALE queue input.
+  ///
+  /// Guarantees/Postconditions: Future events use the replacement callback.
+  ///
+  /// Invariants: No transport or retained state is created in Dart.
+  void setStatefulScaleInputCallback(
+    void Function(StatefulScaleAction action, EndpointSenderInfo senderInfo)?
+        callback,
+  ) {
+    _statefulScaleInputCallback = callback;
+  }
+
+  /// Purpose: Return the latest retained float value from the native endpoint
+  /// runtime.
+  ///
+  /// Parameters:
+  /// - None.
+  ///
+  /// Return value:
+  /// - Retained float value, or `null` when the native reducer is not retaining
+  ///   state for this endpoint.
+  ///
+  /// Requirements/Preconditions:
+  /// - None.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Endpoint metadata and runtime handles remain unchanged.
+  ///
+  /// Invariants:
+  /// - Returned state is sourced from the native local endpoint runtime when
+  ///   available.
+  double? getRetainedStatefulFloatValue() {
+    final EndpointRetainedStateSnapshot snapshot = getRetainedStateSnapshot();
+    return snapshot.hasState && snapshot.value is num
+        ? (snapshot.value as num).toDouble()
+        : null;
+  }
+
+  /// Purpose: Return the latest retained int value from the native endpoint
+  /// runtime.
+  ///
+  /// Parameters:
+  /// - None.
+  ///
+  /// Return value:
+  /// - Retained int value, or `null` when unavailable.
+  ///
+  /// Requirements/Preconditions:
+  /// - None.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Endpoint metadata and runtime handles remain unchanged.
+  ///
+  /// Invariants:
+  /// - Returned state is sourced from the native local endpoint runtime when
+  ///   available.
+  int? getRetainedStatefulIntValue() {
+    final EndpointRetainedStateSnapshot snapshot = getRetainedStateSnapshot();
+    return snapshot.hasState && snapshot.value is int
+        ? snapshot.value as int
+        : null;
+  }
+
+  /// Purpose: Return the latest retained toggle value from the native endpoint
+  /// runtime.
+  ///
+  /// Parameters:
+  /// - None.
+  ///
+  /// Return value:
+  /// - Retained toggle value, or `null` when unavailable.
+  ///
+  /// Requirements/Preconditions:
+  /// - None.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Endpoint metadata and runtime handles remain unchanged.
+  ///
+  /// Invariants:
+  /// - Returned state is sourced from the native local endpoint runtime when
+  ///   available.
+  bool? getRetainedStatefulToggleValue() {
+    final EndpointRetainedStateSnapshot snapshot = getRetainedStateSnapshot();
+    return snapshot.hasState && snapshot.value is bool
+        ? snapshot.value as bool
+        : null;
+  }
+
+  /// Purpose: Return the latest retained enum id from the native endpoint
+  /// runtime.
+  ///
+  /// Parameters:
+  /// - None.
+  ///
+  /// Return value:
+  /// - Retained enum id, or `null` when unavailable.
+  ///
+  /// Requirements/Preconditions:
+  /// - None.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Endpoint metadata and runtime handles remain unchanged.
+  ///
+  /// Invariants:
+  /// - Returned state is sourced from the native local endpoint runtime when
+  ///   available.
+  int? getRetainedStatefulEnumId() {
+    final EndpointRetainedStateSnapshot snapshot = getRetainedStateSnapshot();
+    return snapshot.hasState && snapshot.value is int
+        ? snapshot.value as int
+        : null;
+  }
+
+  /// Purpose: Return the latest retained packed color value from the native
+  /// endpoint runtime.
+  ///
+  /// Parameters:
+  /// - None.
+  ///
+  /// Return value:
+  /// - Retained packed color value, or `null` when unavailable.
+  ///
+  /// Requirements/Preconditions:
+  /// - None.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Endpoint metadata and runtime handles remain unchanged.
+  ///
+  /// Invariants:
+  /// - Returned state is sourced from the native local endpoint runtime when
+  ///   available.
+  int? getRetainedStatefulColorValue() {
+    final EndpointRetainedStateSnapshot snapshot = getRetainedStateSnapshot();
+    return snapshot.hasState && snapshot.value is int
+        ? snapshot.value as int
+        : null;
+  }
+
+  /// Purpose: Return the current retained-state snapshot for this local
+  /// endpoint.
+  ///
+  /// Parameters:
+  /// - None.
+  ///
+  /// Return value:
+  /// - `EndpointRetainedStateSnapshot` describing the current retained input or
+  ///   constrained retained output state.
+  ///
+  /// Requirements/Preconditions:
+  /// - None.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Endpoint metadata and runtime delegates remain unchanged.
+  ///
+  /// Invariants:
+  /// - Returned data reflects the native local endpoint runtime when this
+  ///   endpoint is runtime-backed.
+  EndpointRetainedStateSnapshot getRetainedStateSnapshot() {
+    final EndpointRetainedStateSnapshot? callbackScopedSnapshot =
+        _callbackScopedRetainedStateSnapshot;
+    if (callbackScopedSnapshot != null) {
+      return callbackScopedSnapshot;
+    }
+    final LocalEndpointRuntimeDelegate? runtimeDelegate = _runtimeDelegate;
+    if (runtimeDelegate != null) {
+      return runtimeDelegate.getRetainedStateSnapshot();
+    }
+    return const EndpointRetainedStateSnapshot(hasState: false);
+  }
+
+  /// Purpose: Commit one accepted retained-state snapshot through the attached
+  /// native endpoint runtime.
+  ///
+  /// Parameters:
+  /// - [snapshot]: retained-state snapshot to adopt as the endpoint's committed
+  ///   state.
+  /// - [publishMatchedOutput]: whether a linked matched output should publish
+  ///   the committed state immediately.
+  /// - [senderInfo]: optional logical sender metadata associated with the
+  ///   deferred request being accepted.
+  ///
+  /// Return value:
+  /// - `true` when the native runtime accepted and applied [snapshot],
+  ///   otherwise `false`.
+  ///
+  /// Requirements/Preconditions:
+  /// - This endpoint must have a native runtime delegate attached.
+  ///
+  /// Guarantees/Postconditions:
+  /// - On success, subsequent retained-state reads come from the newly adopted
+  ///   native state.
+  /// - When [publishMatchedOutput] is `true`, any linked matched output
+  ///   publishes the committed state through the native runtime path.
+  ///
+  /// Invariants:
+  /// - This method does not mutate authored endpoint metadata.
+  bool adoptRetainedStateSnapshot(
+    EndpointRetainedStateSnapshot snapshot, {
+    bool publishMatchedOutput = true,
+    EndpointSenderInfo? senderInfo,
+  }) {
+    return _requireRuntimeDelegate('adoptRetainedStateSnapshot')
+        .adoptRetainedStateSnapshot(
+      snapshot,
+      publishMatchedOutput: publishMatchedOutput,
+      senderInfo: senderInfo,
+    );
+  }
+
+  void dispatchStatefulFloatActionEvent({
+    required StatefulFloatAction action,
+    required EndpointSenderInfo senderInfo,
+    required double? retainedValue,
+  }) {
+    _invokeWithCallbackScopedRetainedState(
+      retainedValue == null
+          ? const EndpointRetainedStateSnapshot(hasState: false)
+          : EndpointRetainedStateSnapshot(
+              hasState: true,
+              value: retainedValue,
+              timestampUs: DateTime.now().microsecondsSinceEpoch,
+            ),
+      () => _statefulFloatInputCallback?.call(action, senderInfo),
+    );
+  }
+
+  void dispatchStatefulIntActionEvent({
+    required StatefulIntAction action,
+    required EndpointSenderInfo senderInfo,
+    required int? retainedValue,
+  }) {
+    _invokeWithCallbackScopedRetainedState(
+      retainedValue == null
+          ? const EndpointRetainedStateSnapshot(hasState: false)
+          : EndpointRetainedStateSnapshot(
+              hasState: true,
+              value: retainedValue,
+              timestampUs: DateTime.now().microsecondsSinceEpoch,
+            ),
+      () => _statefulIntInputCallback?.call(action, senderInfo),
+    );
+  }
+
+  void dispatchStatefulToggleActionEvent({
+    required StatefulToggleAction action,
+    required EndpointSenderInfo senderInfo,
+    required bool? retainedValue,
+  }) {
+    _invokeWithCallbackScopedRetainedState(
+      retainedValue == null
+          ? const EndpointRetainedStateSnapshot(hasState: false)
+          : EndpointRetainedStateSnapshot(
+              hasState: true,
+              value: retainedValue,
+              timestampUs: DateTime.now().microsecondsSinceEpoch,
+            ),
+      () => _statefulToggleInputCallback?.call(action, senderInfo),
+    );
+  }
+
+  /// Purpose: Deliver one processed enum action from the native runtime to this
+  /// Dart endpoint wrapper.
+  ///
+  /// Parameters:
+  /// - [action]: processed enum action payload.
+  /// - [senderInfo]: logical upstream sender metadata.
+  /// - [retainedValue]: latest retained enum id after native reduction.
+  ///
+  /// Return value:
+  /// - None.
+  ///
+  /// Requirements/Preconditions:
+  /// - This endpoint represents a locally owned enum input.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Any registered enum callback is invoked once with the processed action.
+  /// - During that callback, retained-state reads stay aligned with the
+  ///   triggering action.
+  ///
+  /// Invariants:
+  /// - Endpoint authored metadata is unchanged.
+  void dispatchStatefulEnumActionEvent({
+    required StatefulEnumAction action,
+    required EndpointSenderInfo senderInfo,
+    required int? retainedValue,
+  }) {
+    _invokeWithCallbackScopedRetainedState(
+      retainedValue == null
+          ? const EndpointRetainedStateSnapshot(hasState: false)
+          : EndpointRetainedStateSnapshot(
+              hasState: true,
+              value: retainedValue,
+              timestampUs: DateTime.now().microsecondsSinceEpoch,
+            ),
+      () => _statefulEnumInputCallback?.call(action, senderInfo),
+    );
+  }
+
+  /// Purpose: Deliver one processed color action from the native runtime to
+  /// this Dart endpoint wrapper.
+  ///
+  /// Parameters:
+  /// - [action]: processed color action payload.
+  /// - [senderInfo]: logical upstream sender metadata.
+  /// - [retainedValue]: latest retained packed color value after native
+  ///   reduction.
+  ///
+  /// Return value:
+  /// - None.
+  ///
+  /// Requirements/Preconditions:
+  /// - This endpoint represents a locally owned color input.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Any registered color callback is invoked once with the processed action.
+  /// - During that callback, retained-state reads stay aligned with the
+  ///   triggering action.
+  ///
+  /// Invariants:
+  /// - Endpoint authored metadata is unchanged.
+  void dispatchStatefulColorActionEvent({
+    required StatefulColorAction action,
+    required EndpointSenderInfo senderInfo,
+    required int? retainedValue,
+  }) {
+    _invokeWithCallbackScopedRetainedState(
+      retainedValue == null
+          ? const EndpointRetainedStateSnapshot(hasState: false)
+          : EndpointRetainedStateSnapshot(
+              hasState: true,
+              value: retainedValue,
+              timestampUs: DateTime.now().microsecondsSinceEpoch,
+            ),
+      () => _statefulColorInputCallback?.call(action, senderInfo),
+    );
+  }
+
+  /// Purpose: Deliver one native-processed theme action to the Dart callback.
+  ///
+  /// Parameters: [action] is the full replacement, [senderInfo] identifies its
+  /// source, and [retainedValue] is native retained state during the callback.
+  ///
+  /// Return value: None.
+  ///
+  /// Requirements/Preconditions: [retainedValue] is null or ThemeData JSON.
+  ///
+  /// Guarantees/Postconditions: The callback runs once when registered.
+  ///
+  /// Invariants: Authored endpoint metadata is unchanged.
+  void dispatchStatefulThemeActionEvent({
+    required StatefulThemeAction action,
+    required EndpointSenderInfo senderInfo,
+    required Map<String, dynamic>? retainedValue,
+  }) {
+    _invokeWithCallbackScopedRetainedState(
+      retainedValue == null
+          ? const EndpointRetainedStateSnapshot(hasState: false)
+          : EndpointRetainedStateSnapshot(
+              hasState: true,
+              value: retainedValue,
+              timestampUs: DateTime.now().microsecondsSinceEpoch,
+            ),
+      () => _statefulThemeInputCallback?.call(action, senderInfo),
+    );
+  }
+
+  /// Purpose: Deliver one native-processed scale action to the Dart callback.
+  ///
+  /// Parameters: [action] is the full replacement, [senderInfo] identifies its
+  /// source, and [retainedValue] is native retained state during the callback.
+  ///
+  /// Return value: None.
+  ///
+  /// Requirements/Preconditions: [retainedValue] is null or ScaleData JSON.
+  ///
+  /// Guarantees/Postconditions: The callback runs once when registered.
+  ///
+  /// Invariants: Authored endpoint metadata is unchanged.
+  void dispatchStatefulScaleActionEvent({
+    required StatefulScaleAction action,
+    required EndpointSenderInfo senderInfo,
+    required Map<String, dynamic>? retainedValue,
+  }) {
+    _invokeWithCallbackScopedRetainedState(
+      retainedValue == null
+          ? const EndpointRetainedStateSnapshot(hasState: false)
+          : EndpointRetainedStateSnapshot(
+              hasState: true,
+              value: retainedValue,
+              timestampUs: DateTime.now().microsecondsSinceEpoch,
+            ),
+      () => _statefulScaleInputCallback?.call(action, senderInfo),
+    );
+  }
+
+  /// Purpose: Expose one event-local retained-state snapshot while invoking a
+  /// typed callback, so callback reads stay aligned with the triggering action.
+  ///
+  /// Parameters:
+  /// - [snapshot]: retained-state view for the in-flight callback.
+  /// - [callback]: synchronous callback body to run.
+  ///
+  /// Return value:
+  /// - None.
+  ///
+  /// Requirements/Preconditions:
+  /// - [callback] must finish synchronously and should not store references that
+  ///   depend on [snapshot] remaining active afterward.
+  ///
+  /// Guarantees/Postconditions:
+  /// - `getRetainedStateSnapshot()` returns [snapshot] only during [callback].
+  /// - After [callback] returns, ordinary retained-state reads revert to the
+  ///   native runtime delegate.
+  ///
+  /// Invariants:
+  /// - Authored endpoint metadata and runtime delegates remain unchanged.
+  void _invokeWithCallbackScopedRetainedState(
+    EndpointRetainedStateSnapshot snapshot,
+    void Function() callback,
+  ) {
+    final EndpointRetainedStateSnapshot? previousSnapshot =
+        _callbackScopedRetainedStateSnapshot;
+    _callbackScopedRetainedStateSnapshot = snapshot;
+    try {
+      callback();
+    } finally {
+      _callbackScopedRetainedStateSnapshot = previousSnapshot;
+    }
+  }
+
   /// Write data to a file-backed endpoint
   Future<bool> writeFileBacked(dynamic data) async {
     // 1. Check if this is an output file-backed endpoint
-    final currentSpec = resolved ?? spec;
+    final currentSpec = spec ?? resolved;
     if (currentSpec == null) return false;
 
     if (currentSpec.direction != EndpointDirection.output) return false;
@@ -824,7 +3158,7 @@ class LocalEndpoint extends EndpointInfo {
   /// Returns a list of data objects from all active connections, or the specific connection if named.
   Future<bool> pollFileBacked(Function(dynamic) onData,
       {String? connectionName, bool onlyAsBytes = false}) async {
-    final currentSpec = resolved ?? spec;
+    final currentSpec = spec ?? resolved;
     if (currentSpec == null) {
       AppLogger.warning(
           'pollFileBacked called on non-resolved endpoint: $name');
@@ -854,7 +3188,7 @@ class LocalEndpoint extends EndpointInfo {
   Future<bool> readFileBacked(Function(dynamic) onData,
       {String? connectionName}) async {
     // 1. Check if this is a file-backed input endpoint
-    final currentSpec = resolved ?? spec;
+    final currentSpec = spec ?? resolved;
     if (currentSpec == null) {
       AppLogger.warning(
           'readFileBacked called on non-resolved endpoint: $name');
@@ -894,12 +3228,11 @@ class LocalEndpoint extends EndpointInfo {
 
   /// Write data to endpoint (Output only)
   bool write(dynamic data) {
-    final effectiveSpec = resolved ?? spec;
+    final effectiveSpec = spec ?? resolved;
     if (effectiveSpec == null) return false;
 
     try {
-      final bytes =
-          _serializeData(data, effectiveSpec.dataType, effectiveSpec.category);
+      final bytes = _serializeEndpointData(data, effectiveSpec);
       if (bytes == null) return false;
       return _requireRuntimeDelegate('write').writeBytes(bytes);
     } catch (e) {
@@ -915,7 +3248,7 @@ class LocalEndpoint extends EndpointInfo {
   /// Poll for new data (Input only)
   /// Returns a list of data objects from all active connections, or the specific connection if named.
   List<dynamic> poll({String? connectionName}) {
-    final effectiveSpec = resolved ?? spec;
+    final effectiveSpec = spec ?? resolved;
     if (effectiveSpec == null) return [];
     if (effectiveSpec.direction != EndpointDirection.input) return [];
     final List<dynamic> results = <dynamic>[];
@@ -923,12 +3256,8 @@ class LocalEndpoint extends EndpointInfo {
         _requireRuntimeDelegate('poll')
             .pollBytes(connectionName: connectionName);
     for (final LocalEndpointPollPacket packet in packets) {
-      final dynamic data = _deserializeData(
-        packet.bytes,
-        effectiveSpec.dataType.baseType,
-        packet.indexSpec,
-        effectiveSpec.category,
-      );
+      final dynamic data = _deserializeEndpointData(
+          packet.bytes, effectiveSpec, packet.indexSpec);
       if (data != null) {
         results.add(data);
       }
@@ -942,7 +3271,7 @@ class LocalEndpoint extends EndpointInfo {
   /// connection if named, paired with the logical source endpoint for each
   /// realized connection.
   List<LocalEndpointPollResult> pollWithSenderInfo({String? connectionName}) {
-    final EndpointSpec? effectiveSpec = resolved ?? spec;
+    final EndpointSpec? effectiveSpec = spec ?? resolved;
     if (effectiveSpec == null) return <LocalEndpointPollResult>[];
     if (effectiveSpec.direction != EndpointDirection.input) {
       return <LocalEndpointPollResult>[];
@@ -961,12 +3290,8 @@ class LocalEndpoint extends EndpointInfo {
         );
         continue;
       }
-      final dynamic data = _deserializeData(
-        packet.bytes,
-        effectiveSpec.dataType.baseType,
-        packet.indexSpec,
-        effectiveSpec.category,
-      );
+      final dynamic data = _deserializeEndpointData(
+          packet.bytes, effectiveSpec, packet.indexSpec);
       if (data != null) {
         results
             .add(LocalEndpointPollResult(data: data, senderInfo: senderInfo));
@@ -978,6 +3303,295 @@ class LocalEndpoint extends EndpointInfo {
   //---------------------------------------------------------------------------
   // Serialization Helpers
   //---------------------------------------------------------------------------
+  Uint8List? _serializeEndpointData(dynamic data, EndpointSpec endpointSpec) {
+    if (endpointSpec.usesActionMessageQueuePayload) {
+      return _serializeMessageQueuePayload(
+        data,
+        endpointSpec.effectiveMessageQueuePayloadContract,
+      );
+    }
+    return _serializeData(
+      data,
+      endpointSpec.dataType,
+      endpointSpec.category,
+    );
+  }
+
+  dynamic _deserializeEndpointData(
+    Uint8List bytes,
+    EndpointSpec endpointSpec,
+    IndexSpec indexSpec,
+  ) {
+    if (endpointSpec.usesActionMessageQueuePayload) {
+      return _deserializeMessageQueuePayload(
+        bytes,
+        endpointSpec.effectiveMessageQueuePayloadContract,
+      );
+    }
+    return _deserializeData(
+      bytes,
+      endpointSpec.dataType.baseType,
+      indexSpec,
+      endpointSpec.category,
+    );
+  }
+
+  Uint8List? _serializeMessageQueuePayload(
+    dynamic data,
+    MessageQueuePayloadContract payloadContract,
+  ) {
+    switch (payloadContract) {
+      case MessageQueuePayloadContract.endpointData:
+        return null;
+      case MessageQueuePayloadContract.statefulFloatAction:
+        if (data is! StatefulFloatAction) {
+          throw ArgumentError.value(
+            data,
+            'data',
+            'Expected StatefulFloatAction payload',
+          );
+        }
+        final ByteData buffer = ByteData(8);
+        buffer.setInt32(
+          0,
+          data.action == StatefulFloatActionType.add ? 1 : 0,
+          Endian.little,
+        );
+        buffer.setFloat32(4, data.value, Endian.little);
+        return buffer.buffer.asUint8List();
+      case MessageQueuePayloadContract.statefulIntAction:
+        if (data is! StatefulIntAction) {
+          throw ArgumentError.value(
+            data,
+            'data',
+            'Expected StatefulIntAction payload',
+          );
+        }
+        final ByteData buffer = ByteData(8);
+        buffer.setInt32(
+          0,
+          data.action == StatefulIntActionType.add ? 1 : 0,
+          Endian.little,
+        );
+        buffer.setInt32(4, data.value, Endian.little);
+        return buffer.buffer.asUint8List();
+      case MessageQueuePayloadContract.statefulToggleAction:
+        if (data is! StatefulToggleAction) {
+          throw ArgumentError.value(
+            data,
+            'data',
+            'Expected StatefulToggleAction payload',
+          );
+        }
+        final ByteData buffer = ByteData(8);
+        buffer.setInt32(
+          0,
+          data.action == StatefulToggleActionType.toggle ? 1 : 0,
+          Endian.little,
+        );
+        buffer.setUint8(4, data.value ? 1 : 0);
+        return buffer.buffer.asUint8List();
+      case MessageQueuePayloadContract.statefulEnumAction:
+        if (data is! StatefulEnumAction) {
+          throw ArgumentError.value(
+            data,
+            'data',
+            'Expected StatefulEnumAction payload',
+          );
+        }
+        final ByteData enumBuffer = ByteData(8);
+        enumBuffer.setInt32(
+          0,
+          data.action == StatefulEnumActionType.step ? 1 : 0,
+          Endian.little,
+        );
+        enumBuffer.setInt32(4, data.value, Endian.little);
+        return enumBuffer.buffer.asUint8List();
+      case MessageQueuePayloadContract.statefulColorAction:
+        if (data is! StatefulColorAction) {
+          throw ArgumentError.value(
+            data,
+            'data',
+            'Expected StatefulColorAction payload',
+          );
+        }
+        final ByteData colorBuffer = ByteData(8);
+        colorBuffer.setInt32(0, 0, Endian.little);
+        colorBuffer.setUint32(4, data.value, Endian.little);
+        return colorBuffer.buffer.asUint8List();
+      case MessageQueuePayloadContract.statefulThemeAction:
+        if (data is! StatefulThemeAction) {
+          throw ArgumentError.value(
+            data,
+            'data',
+            'Expected StatefulThemeAction payload',
+          );
+        }
+        final ByteData themeBuffer = ByteData(580);
+        themeBuffer.setInt32(0, 0, Endian.little);
+        _writeFixedUtf8(themeBuffer, 4, 64, data.value.displayName);
+        _writeFixedUtf8(themeBuffer, 68, 128, data.value.primaryColor);
+        _writeFixedUtf8(themeBuffer, 196, 128, data.value.secondaryColor);
+        _writeFixedUtf8(themeBuffer, 324, 128, data.value.accentColor);
+        _writeFixedUtf8(themeBuffer, 452, 128, data.value.backgroundColor);
+        return themeBuffer.buffer.asUint8List();
+      case MessageQueuePayloadContract.statefulScaleAction:
+        if (data is! StatefulScaleAction) {
+          throw ArgumentError.value(
+            data,
+            'data',
+            'Expected StatefulScaleAction payload',
+          );
+        }
+        if (data.value.noteCategories.length != 12) {
+          throw ArgumentError.value(
+            data.value.noteCategories,
+            'noteCategories',
+            'Expected exactly 12 note categories',
+          );
+        }
+        final ByteData scaleBuffer = ByteData(120);
+        scaleBuffer.setInt32(0, 0, Endian.little);
+        _writeFixedUtf8(scaleBuffer, 4, 64, data.value.displayName ?? '');
+        scaleBuffer.setInt32(68, data.value.rootNote, Endian.little);
+        for (int index = 0; index < 12; index += 1) {
+          scaleBuffer.setInt32(
+            72 + index * 4,
+            data.value.noteCategories[index],
+            Endian.little,
+          );
+        }
+        return scaleBuffer.buffer.asUint8List();
+    }
+  }
+
+  /// Purpose: Encode one Dart string into a fixed null-terminated wire field.
+  ///
+  /// Parameters: [buffer] receives bytes at [offset], [capacity] includes the
+  /// terminator, and [value] is encoded as UTF-8.
+  ///
+  /// Return value: None.
+  ///
+  /// Requirements/Preconditions: The encoded value must use fewer than
+  /// [capacity] bytes and the destination range must exist.
+  ///
+  /// Guarantees/Postconditions: The exact UTF-8 bytes and one null terminator
+  /// are written; oversized values throw rather than truncate.
+  ///
+  /// Invariants: Bytes outside the destination field remain unchanged.
+  void _writeFixedUtf8(
+    ByteData buffer,
+    int offset,
+    int capacity,
+    String value,
+  ) {
+    final List<int> encoded = utf8.encode(value);
+    if (encoded.length >= capacity) {
+      throw ArgumentError.value(
+        value,
+        'value',
+        'UTF-8 value requires ${encoded.length} bytes but field allows '
+            '${capacity - 1}',
+      );
+    }
+    for (int index = 0; index < encoded.length; index += 1) {
+      buffer.setUint8(offset + index, encoded[index]);
+    }
+    buffer.setUint8(offset + encoded.length, 0);
+  }
+
+  /// Purpose: Decode one fixed null-terminated UTF-8 wire field.
+  ///
+  /// Parameters: [buffer] supplies [capacity] bytes beginning at [offset].
+  ///
+  /// Return value: Decoded string through the first null terminator.
+  ///
+  /// Requirements/Preconditions: The destination range must exist and contain
+  /// one terminator.
+  ///
+  /// Guarantees/Postconditions: Unterminated or invalid UTF-8 fields throw.
+  ///
+  /// Invariants: The source bytes are unchanged.
+  String _readFixedUtf8(ByteData buffer, int offset, int capacity) {
+    int length = 0;
+    while (length < capacity && buffer.getUint8(offset + length) != 0) {
+      length += 1;
+    }
+    if (length == capacity) {
+      throw const FormatException('Fixed UTF-8 field is not null terminated');
+    }
+    final Uint8List bytes =
+        buffer.buffer.asUint8List(buffer.offsetInBytes + offset, length);
+    return utf8.decode(bytes);
+  }
+
+  dynamic _deserializeMessageQueuePayload(
+    Uint8List bytes,
+    MessageQueuePayloadContract payloadContract,
+  ) {
+    final ByteData payload = ByteData.sublistView(bytes);
+    switch (payloadContract) {
+      case MessageQueuePayloadContract.endpointData:
+        return null;
+      case MessageQueuePayloadContract.statefulFloatAction:
+        return StatefulFloatAction(
+          action: payload.getInt32(0, Endian.little) == 1
+              ? StatefulFloatActionType.add
+              : StatefulFloatActionType.setValue,
+          value: payload.getFloat32(4, Endian.little),
+        );
+      case MessageQueuePayloadContract.statefulIntAction:
+        return StatefulIntAction(
+          action: payload.getInt32(0, Endian.little) == 1
+              ? StatefulIntActionType.add
+              : StatefulIntActionType.setValue,
+          value: payload.getInt32(4, Endian.little),
+        );
+      case MessageQueuePayloadContract.statefulToggleAction:
+        return StatefulToggleAction(
+          action: payload.getInt32(0, Endian.little) == 1
+              ? StatefulToggleActionType.toggle
+              : StatefulToggleActionType.setValue,
+          value: payload.getUint8(4) != 0,
+        );
+      case MessageQueuePayloadContract.statefulEnumAction:
+        return StatefulEnumAction(
+          action: payload.getInt32(0, Endian.little) == 1
+              ? StatefulEnumActionType.step
+              : StatefulEnumActionType.setId,
+          value: payload.getInt32(4, Endian.little),
+        );
+      case MessageQueuePayloadContract.statefulColorAction:
+        return StatefulColorAction(
+          action: StatefulColorActionType.setValue,
+          value: payload.getUint32(4, Endian.little),
+        );
+      case MessageQueuePayloadContract.statefulThemeAction:
+        return StatefulThemeAction(
+          action: StatefulThemeActionType.setValue,
+          value: ThemeData(
+            displayName: _readFixedUtf8(payload, 4, 64),
+            primaryColor: _readFixedUtf8(payload, 68, 128),
+            secondaryColor: _readFixedUtf8(payload, 196, 128),
+            accentColor: _readFixedUtf8(payload, 324, 128),
+            backgroundColor: _readFixedUtf8(payload, 452, 128),
+          ),
+        );
+      case MessageQueuePayloadContract.statefulScaleAction:
+        return StatefulScaleAction(
+          action: StatefulScaleActionType.setValue,
+          value: ScaleData(
+            displayName: _readFixedUtf8(payload, 4, 64),
+            rootNote: payload.getInt32(68, Endian.little),
+            noteCategories: List<int>.generate(
+              12,
+              (int index) => payload.getInt32(72 + index * 4, Endian.little),
+            ),
+          ),
+        );
+    }
+  }
+
   // Helper: Get size in bytes for a single element of any data type
   int _getElementSize(DataType type) {
     switch (type) {
@@ -999,6 +3613,12 @@ class LocalEndpoint extends EndpointInfo {
         return 1;
       case DataType.enum_:
         return 4;
+      case DataType.color:
+        return 4;
+      case DataType.theme:
+        return 576;
+      case DataType.scale:
+        return 116;
       case DataType.keyPress:
         return 20;
       case DataType.nearPress:
@@ -1014,13 +3634,13 @@ class LocalEndpoint extends EndpointInfo {
       case DataType.midiMessage:
         return 3;
       case DataType.voiceMessage:
-        return 12;
+        return _voiceMessageSizeBytes;
       case DataType.voiceOutputValue:
         return 24;
       case DataType.globalOutputValue:
         return 8;
-      case DataType.dppParamQueue:
-        return 16;
+      case DataType.dppEditorMessage:
+        return 24;
       case DataType.custom:
         return -1; // Custom data is handled by file-backed endpoints
       case DataType.audioStream:
@@ -1028,6 +3648,342 @@ class LocalEndpoint extends EndpointInfo {
       case DataType.scopeBuffer:
         return 16 + ScopeBufferData.maxSamplesPerChannel * 4 * 2;
     }
+  }
+
+  // Helper: Serialize a single element at an offset
+  ///
+  /// Purpose:
+  /// Encode one `KeySource`-shaped map into the native shared binary layout used
+  /// by `VOICE_MESSAGE`.
+  ///
+  /// Parameters:
+  /// - [bd]: Destination byte buffer.
+  /// - [offset]: Starting byte offset for this encoded key source.
+  /// - [keySource]: Map containing `origin`, `channel`, `note`, `col`, and `row`.
+  ///
+  /// Return value:
+  /// - None.
+  ///
+  /// Requirements/Preconditions:
+  /// - [keySource] must provide integer values for all required fields.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Writes the shared Dog Paw `KeySource` layout exactly.
+  ///
+  /// Invariants:
+  /// - Writes stay within the fixed 12-byte `KeySource` footprint.
+  void _serializeVoiceKeySource(
+    ByteData bd,
+    int offset,
+    Map<String, dynamic> keySource,
+  ) {
+    bd.setInt32(offset, keySource['origin'] as int, Endian.little);
+    bd.setUint8(offset + 4, keySource['channel'] as int);
+    bd.setUint8(offset + 5, keySource['note'] as int);
+    bd.setUint16(offset + 6, keySource['col'] as int, Endian.little);
+    bd.setUint16(offset + 8, keySource['row'] as int, Endian.little);
+  }
+
+  /// Purpose:
+  /// Encode one `VoiceRef`-shaped map into the native shared binary layout used
+  /// by `VOICE_MESSAGE` and `VOICE_OUTPUT_VALUE`.
+  ///
+  /// Parameters:
+  /// - [bd]: Destination byte buffer.
+  /// - [offset]: Starting byte offset for this encoded voice reference.
+  /// - [voiceRef]: Map containing `regionId`, `regionInstanceId`,
+  ///   `logicalVoiceId`, and `slotIdx`.
+  ///
+  /// Return value:
+  /// - None.
+  ///
+  /// Requirements/Preconditions:
+  /// - [voiceRef] must provide integer values for all four required fields.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Writes the shared Dog Paw `VoiceRef` layout exactly.
+  ///
+  /// Invariants:
+  /// - Writes stay within the fixed 16-byte `VoiceRef` footprint.
+  void _serializeVoiceRef(
+    ByteData bd,
+    int offset,
+    Map<String, dynamic> voiceRef,
+  ) {
+    bd.setInt32(offset, voiceRef['regionId'] as int, Endian.little);
+    bd.setInt32(offset + 4, voiceRef['regionInstanceId'] as int, Endian.little);
+    bd.setInt32(offset + 8, voiceRef['logicalVoiceId'] as int, Endian.little);
+    bd.setInt32(offset + 12, voiceRef['slotIdx'] as int, Endian.little);
+  }
+
+  /// Purpose:
+  /// Encode one `VoiceMember`-shaped map into the native shared binary layout
+  /// used inside `VOICE_MESSAGE`.
+  ///
+  /// Parameters:
+  /// - [bd]: Destination byte buffer.
+  /// - [offset]: Starting byte offset for this encoded member.
+  /// - [member]: Map containing `keySource` plus the scalar member fields.
+  ///
+  /// Return value:
+  /// - None.
+  ///
+  /// Requirements/Preconditions:
+  /// - [member] must provide a valid `keySource` map and numeric scalar fields.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Writes one complete 40-byte shared `VoiceMember`.
+  ///
+  /// Invariants:
+  /// - The scalar field ordering matches the shared C++ struct exactly.
+  void _serializeVoiceMember(
+    ByteData bd,
+    int offset,
+    Map<String, dynamic> member,
+  ) {
+    _serializeVoiceKeySource(
+      bd,
+      offset,
+      Map<String, dynamic>.from(member['keySource'] as Map),
+    );
+    bd.setFloat32(
+      offset + _keySourceSizeBytes,
+      (member['noteValue'] as num).toDouble(),
+      Endian.little,
+    );
+    bd.setFloat32(
+      offset + _keySourceSizeBytes + 4,
+      (member['velocity'] as num).toDouble(),
+      Endian.little,
+    );
+    bd.setFloat32(
+      offset + _keySourceSizeBytes + 8,
+      (member['pressure'] as num).toDouble(),
+      Endian.little,
+    );
+    bd.setFloat32(
+      offset + _keySourceSizeBytes + 12,
+      (member['bend'] as num).toDouble(),
+      Endian.little,
+    );
+    bd.setFloat32(
+      offset + _keySourceSizeBytes + 16,
+      (member['slide'] as num).toDouble(),
+      Endian.little,
+    );
+    bd.setFloat32(
+      offset + _keySourceSizeBytes + 20,
+      (member['row'] as num).toDouble(),
+      Endian.little,
+    );
+    bd.setFloat32(
+      offset + _keySourceSizeBytes + 24,
+      (member['column'] as num).toDouble(),
+      Endian.little,
+    );
+  }
+
+  /// Purpose:
+  /// Encode one rich `VOICE_MESSAGE` payload map into the native shared binary
+  /// layout consumed by the Dog Paw runtime.
+  ///
+  /// Parameters:
+  /// - [bd]: Destination byte buffer.
+  /// - [offset]: Starting byte offset for this encoded message.
+  /// - [message]: Map containing `kind`, `voice`, `relatedVoice`,
+  ///   `hasRelatedMember`, `relatedMember`, `memberCount`, and `members`.
+  ///
+  /// Return value:
+  /// - None.
+  ///
+  /// Requirements/Preconditions:
+  /// - [message] must provide the full rich voice-message shape.
+  /// - `memberCount` must be between `0` and `16`.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Writes one complete shared `VoiceMessage`.
+  ///
+  /// Invariants:
+  /// - Member payloads beyond `memberCount` remain zeroed.
+  void _serializeVoiceMessage(
+    ByteData bd,
+    int offset,
+    Map<String, dynamic> message,
+  ) {
+    final int memberCount = message['memberCount'] as int;
+    if (memberCount < 0 || memberCount > _maxVoiceMembers) {
+      throw ArgumentError(
+        'VOICE_MESSAGE memberCount must be between 0 and $_maxVoiceMembers.',
+      );
+    }
+    final List<dynamic> members =
+        (message['members'] as List<dynamic>? ?? const <dynamic>[]);
+    if (members.length < memberCount) {
+      throw ArgumentError(
+        'VOICE_MESSAGE members length ${members.length} is smaller than '
+        'memberCount $memberCount.',
+      );
+    }
+
+    bd.setInt32(offset, message['kind'] as int, Endian.little);
+    _serializeVoiceRef(
+      bd,
+      offset + 4,
+      Map<String, dynamic>.from(message['voice'] as Map),
+    );
+    _serializeVoiceRef(
+      bd,
+      offset + 20,
+      Map<String, dynamic>.from(message['relatedVoice'] as Map),
+    );
+    bd.setUint8(
+      offset + 36,
+      (message['hasRelatedMember'] as bool?) == true ? 1 : 0,
+    );
+    _serializeVoiceMember(
+      bd,
+      offset + 40,
+      Map<String, dynamic>.from(message['relatedMember'] as Map),
+    );
+    bd.setUint32(offset + 80, memberCount, Endian.little);
+    for (int memberIndex = 0; memberIndex < memberCount; memberIndex++) {
+      _serializeVoiceMember(
+        bd,
+        offset + 84 + memberIndex * _voiceMemberSizeBytes,
+        Map<String, dynamic>.from(members[memberIndex] as Map),
+      );
+    }
+  }
+
+  /// Purpose:
+  /// Decode one shared `KeySource` value from raw bytes.
+  ///
+  /// Parameters:
+  /// - [bd]: Source byte buffer.
+  /// - [offset]: Starting byte offset for this key source.
+  ///
+  /// Return value:
+  /// - Map containing `origin`, `channel`, `note`, `col`, and `row`.
+  ///
+  /// Requirements/Preconditions:
+  /// - [bd] contains a complete encoded `KeySource` at [offset].
+  ///
+  /// Guarantees/Postconditions:
+  /// - Returned map is detached from the underlying bytes.
+  ///
+  /// Invariants:
+  /// - Field names mirror the shared `KeySource` meaning.
+  Map<String, dynamic> _deserializeVoiceKeySource(ByteData bd, int offset) {
+    return <String, dynamic>{
+      'origin': bd.getInt32(offset, Endian.little),
+      'channel': bd.getUint8(offset + 4),
+      'note': bd.getUint8(offset + 5),
+      'col': bd.getUint16(offset + 6, Endian.little),
+      'row': bd.getUint16(offset + 8, Endian.little),
+    };
+  }
+
+  /// Purpose:
+  /// Decode one shared `VoiceRef` value from raw bytes.
+  ///
+  /// Parameters:
+  /// - [bd]: Source byte buffer.
+  /// - [offset]: Starting byte offset for this voice reference.
+  ///
+  /// Return value:
+  /// - Map containing `regionId`, `regionInstanceId`, `logicalVoiceId`, and
+  ///   `slotIdx`.
+  ///
+  /// Requirements/Preconditions:
+  /// - [bd] contains a complete encoded `VoiceRef` at [offset].
+  ///
+  /// Guarantees/Postconditions:
+  /// - Returned map is detached from the underlying bytes.
+  ///
+  /// Invariants:
+  /// - Field names mirror the shared `VoiceRef` meaning.
+  Map<String, dynamic> _deserializeVoiceRef(ByteData bd, int offset) {
+    return <String, dynamic>{
+      'regionId': bd.getInt32(offset, Endian.little),
+      'regionInstanceId': bd.getInt32(offset + 4, Endian.little),
+      'logicalVoiceId': bd.getInt32(offset + 8, Endian.little),
+      'slotIdx': bd.getInt32(offset + 12, Endian.little),
+    };
+  }
+
+  /// Purpose:
+  /// Decode one shared `VoiceMember` value from raw bytes.
+  ///
+  /// Parameters:
+  /// - [bd]: Source byte buffer.
+  /// - [offset]: Starting byte offset for this member.
+  ///
+  /// Return value:
+  /// - Map containing `keySource` plus the scalar member fields.
+  ///
+  /// Requirements/Preconditions:
+  /// - [bd] contains a complete encoded `VoiceMember` at [offset].
+  ///
+  /// Guarantees/Postconditions:
+  /// - Returned map is detached from the underlying bytes.
+  ///
+  /// Invariants:
+  /// - Field ordering matches the shared C++ `VoiceMember` layout.
+  Map<String, dynamic> _deserializeVoiceMember(ByteData bd, int offset) {
+    return <String, dynamic>{
+      'keySource': _deserializeVoiceKeySource(bd, offset),
+      'noteValue': bd.getFloat32(offset + _keySourceSizeBytes, Endian.little),
+      'velocity':
+          bd.getFloat32(offset + _keySourceSizeBytes + 4, Endian.little),
+      'pressure':
+          bd.getFloat32(offset + _keySourceSizeBytes + 8, Endian.little),
+      'bend': bd.getFloat32(offset + _keySourceSizeBytes + 12, Endian.little),
+      'slide': bd.getFloat32(offset + _keySourceSizeBytes + 16, Endian.little),
+      'row': bd.getFloat32(offset + _keySourceSizeBytes + 20, Endian.little),
+      'column': bd.getFloat32(offset + _keySourceSizeBytes + 24, Endian.little),
+    };
+  }
+
+  /// Purpose:
+  /// Decode one rich shared `VOICE_MESSAGE` payload from raw bytes.
+  ///
+  /// Parameters:
+  /// - [bd]: Source byte buffer.
+  /// - [offset]: Starting byte offset for this message.
+  ///
+  /// Return value:
+  /// - Map containing the rich logical-voice transport payload.
+  ///
+  /// Requirements/Preconditions:
+  /// - [bd] contains a complete encoded `VoiceMessage` at [offset].
+  ///
+  /// Guarantees/Postconditions:
+  /// - Member arrays are truncated to the declared `memberCount`.
+  ///
+  /// Invariants:
+  /// - Returned field names mirror the shared `VoiceMessage` meaning.
+  Map<String, dynamic> _deserializeVoiceMessage(ByteData bd, int offset) {
+    final int memberCount = bd.getUint32(offset + 80, Endian.little);
+    final int clampedMemberCount =
+        memberCount.clamp(0, _maxVoiceMembers).toInt();
+    final List<Map<String, dynamic>> members = <Map<String, dynamic>>[];
+    for (int memberIndex = 0; memberIndex < clampedMemberCount; memberIndex++) {
+      members.add(
+        _deserializeVoiceMember(
+          bd,
+          offset + 84 + memberIndex * _voiceMemberSizeBytes,
+        ),
+      );
+    }
+    return <String, dynamic>{
+      'kind': bd.getInt32(offset, Endian.little),
+      'voice': _deserializeVoiceRef(bd, offset + 4),
+      'relatedVoice': _deserializeVoiceRef(bd, offset + 20),
+      'hasRelatedMember': bd.getUint8(offset + 36) != 0,
+      'relatedMember': _deserializeVoiceMember(bd, offset + 40),
+      'memberCount': clampedMemberCount,
+      'members': members,
+    };
   }
 
   // Helper: Serialize a single element at an offset
@@ -1072,6 +4028,14 @@ class LocalEndpoint extends EndpointInfo {
       case DataType.enum_:
         bd.setInt32(offset, value as int, Endian.little);
         break;
+      case DataType.color:
+        bd.setUint32(offset, (value as num).toInt(), Endian.little);
+        break;
+      case DataType.theme:
+      case DataType.scale:
+        throw UnsupportedError(
+          'Theme and scale use stateful action queue serialization',
+        );
       case DataType.keyPress:
         final event = value as KeyEvent;
         bd.setUint32(offset, event.timestamp, Endian.little);
@@ -1128,14 +4092,11 @@ class LocalEndpoint extends EndpointInfo {
       case DataType.keyPosition:
         final pos = value as PosData;
         bd.setFloat32(offset, pos.vertical, Endian.little);
-        bd.setFloat32(offset + 4, pos.horizontal, Endian.little);
-        bd.setFloat32(offset + 8, pos.horizBlendAmt, Endian.little);
+        bd.setFloat32(offset + 4, pos.bend, Endian.little);
+        bd.setFloat32(offset + 8, pos.rawHorizontal, Endian.little);
         break;
       case DataType.voiceMessage:
-        final map = value as Map<String, dynamic>;
-        bd.setInt32(offset, map['type'] as int, Endian.little);
-        bd.setInt32(offset + 4, map['voiceIdx'] as int, Endian.little);
-        bd.setInt32(offset + 8, map['voiceId'] as int, Endian.little);
+        _serializeVoiceMessage(bd, offset, value as Map<String, dynamic>);
         break;
       case DataType.voiceOutputValue:
         final map = value as Map<String, dynamic>;
@@ -1154,17 +4115,23 @@ class LocalEndpoint extends EndpointInfo {
         bd.setFloat32(
             offset + 4, (map['value'] as num).toDouble(), Endian.little);
         break;
-      case DataType.dppParamQueue:
+      case DataType.dppEditorMessage:
         final map = value as Map<String, dynamic>;
-        bd.setUint16(offset, map['param_index'] as int, Endian.little);
+        bd.setUint8(offset, map['type'] as int);
+        bd.setUint8(offset + 1, map['channel'] as int? ?? 0);
+        bd.setUint8(offset + 2, map['note'] as int? ?? 0);
+        bd.setUint8(offset + 3, 0);
         bd.setUint16(
-          offset + 2,
-          (map['reserved'] as int?) ?? 0,
-          Endian.little,
-        );
+            offset + 4, map['param_index'] as int? ?? 0, Endian.little);
+        bd.setUint16(offset + 6, 0, Endian.little);
         bd.setFloat64(
           offset + 8,
           (map['value'] as num).toDouble(),
+          Endian.little,
+        );
+        bd.setFloat64(
+          offset + 16,
+          ((map['value2'] as num?) ?? 0.0).toDouble(),
           Endian.little,
         );
         break;
@@ -1288,6 +4255,13 @@ class LocalEndpoint extends EndpointInfo {
         return bd.getUint8(offset) != 0;
       case DataType.enum_:
         return bd.getInt32(offset, Endian.little);
+      case DataType.color:
+        return bd.getUint32(offset, Endian.little);
+      case DataType.theme:
+      case DataType.scale:
+        throw UnsupportedError(
+          'Theme and scale use stateful action queue deserialization',
+        );
       case DataType.keyPress:
         int timestamp = bd.getUint32(offset, Endian.little);
         int col = bd.getInt32(offset + 4, Endian.little);
@@ -1391,8 +4365,8 @@ class LocalEndpoint extends EndpointInfo {
       case DataType.keyPosition:
         return PosData(
           vertical: bd.getFloat32(offset, Endian.little),
-          horizontal: bd.getFloat32(offset + 4, Endian.little),
-          horizBlendAmt: bd.getFloat32(offset + 8, Endian.little),
+          bend: bd.getFloat32(offset + 4, Endian.little),
+          rawHorizontal: bd.getFloat32(offset + 8, Endian.little),
         );
       case DataType.noteControl:
         return {
@@ -1407,11 +4381,7 @@ class LocalEndpoint extends EndpointInfo {
           'd2': bd.getUint8(offset + 2),
         };
       case DataType.voiceMessage:
-        return {
-          'type': bd.getInt32(offset, Endian.little),
-          'voiceIdx': bd.getInt32(offset + 4, Endian.little),
-          'voiceId': bd.getInt32(offset + 8, Endian.little),
-        };
+        return _deserializeVoiceMessage(bd, offset);
       case DataType.voiceOutputValue:
         return {
           'region_id': bd.getInt32(offset, Endian.little),
@@ -1426,11 +4396,14 @@ class LocalEndpoint extends EndpointInfo {
           'output_index': bd.getUint32(offset, Endian.little),
           'value': bd.getFloat32(offset + 4, Endian.little),
         };
-      case DataType.dppParamQueue:
+      case DataType.dppEditorMessage:
         return {
-          'param_index': bd.getUint16(offset, Endian.little),
-          'reserved': bd.getUint16(offset + 2, Endian.little),
+          'type': bd.getUint8(offset),
+          'channel': bd.getUint8(offset + 1),
+          'note': bd.getUint8(offset + 2),
+          'param_index': bd.getUint16(offset + 4, Endian.little),
           'value': bd.getFloat64(offset + 8, Endian.little),
+          'value2': bd.getFloat64(offset + 16, Endian.little),
         };
       case DataType.custom:
         throw UnimplementedError(

@@ -6,6 +6,10 @@ import 'app.dart';
 import 'controllers/pond_controller.dart';
 import 'models/visual_settings.dart';
 
+/// Compose dependencies and launch Flutter.
+///
+/// Keep this file thin: entity + settings + controller, then hand UI to
+/// [RainPondApp]. Dog Paw connect/endpoints live in [PondKeyInputService].
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   dp.AppLogger.initialize('RainPond');

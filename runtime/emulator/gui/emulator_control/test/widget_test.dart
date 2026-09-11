@@ -205,6 +205,10 @@ void main() {
     expect(find.text('Emulator control guide'), findsOneWidget);
     expect(find.textContaining('Left click presses a key'), findsOneWidget);
     expect(find.textContaining('Right click sends the active state'), findsOneWidget);
+    expect(
+      find.textContaining('Middle click toggles a held press'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('renders the key grid without a scrollable grid view', (tester) async {
@@ -405,6 +409,149 @@ void main() {
     expect(requests[3]['state'], 'pressed');
     expect((requests[3]['horizontal'] as num) > 0, isTrue);
     expect(requests[4]['state'], 'rest');
+  });
+
+  testWidgets('middle click latches pressed until toggled off', (tester) async {
+    final List<Map<String, Object?>> requests = <Map<String, Object?>>[];
+    final client = EmulatorBridgeClient(
+      baseUri: Uri.parse('http://127.0.0.1:8765'),
+      transport: (method, uri, body) async {
+        if (uri.path == '/api/health') {
+          return const BridgeHttpResponse(
+            200,
+            '{"ok":true,"emulator":"default","instance":"default",'
+            '"sockets":{"keyGrid":{"available":true},'
+            '"buttonsAndKnobs":{"available":false},'
+            '"ledComms":{"available":false}}}',
+          );
+        }
+        if (uri.path == '/api/key/set') {
+          requests.add(
+            body == null
+                ? <String, Object?>{}
+                : Map<String, Object?>.from(jsonDecode(body) as Map),
+          );
+          return const BridgeHttpResponse(200, '{"ok":true}');
+        }
+        throw StateError('Unexpected request: ${uri.path}');
+      },
+    );
+
+    await tester.pumpWidget(EmulatorControlRoot(client: client));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final Finder tileListener = find.ancestor(
+      of: find.text('0,7'),
+      matching: find.byType(Listener),
+    );
+    final Rect tileRect = tester.getRect(tileListener.first);
+    final Offset clickPoint = tileRect.center;
+
+    final TestGesture latchOn = await tester.startGesture(
+      clickPoint,
+      kind: PointerDeviceKind.mouse,
+      buttons: kMiddleMouseButton,
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await latchOn.up();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(requests, hasLength(1));
+    expect(requests[0]['state'], 'pressed');
+    expect(requests[0]['col'], 0);
+    expect(requests[0]['row'], 7);
+    expect(requests[0]['velocity'], closeTo(0.5, 0.01));
+    expect(requests[0]['vertical'], closeTo(-0.5, 0.01));
+    expect(requests[0]['horizontal'], closeTo(0.0, 0.01));
+    expect(find.text('P'), findsOneWidget);
+
+    final TestGesture latchOff = await tester.startGesture(
+      clickPoint,
+      kind: PointerDeviceKind.mouse,
+      buttons: kMiddleMouseButton,
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await latchOff.up();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(requests, hasLength(2));
+    expect(requests[1]['state'], 'rest');
+    expect(find.text('P'), findsNothing);
+  });
+
+  testWidgets('left click clears a middle-click latch on release', (tester) async {
+    final List<Map<String, Object?>> requests = <Map<String, Object?>>[];
+    final client = EmulatorBridgeClient(
+      baseUri: Uri.parse('http://127.0.0.1:8765'),
+      transport: (method, uri, body) async {
+        if (uri.path == '/api/health') {
+          return const BridgeHttpResponse(
+            200,
+            '{"ok":true,"emulator":"default","instance":"default",'
+            '"sockets":{"keyGrid":{"available":true},'
+            '"buttonsAndKnobs":{"available":false},'
+            '"ledComms":{"available":false}}}',
+          );
+        }
+        if (uri.path == '/api/key/set') {
+          requests.add(
+            body == null
+                ? <String, Object?>{}
+                : Map<String, Object?>.from(jsonDecode(body) as Map),
+          );
+          return const BridgeHttpResponse(200, '{"ok":true}');
+        }
+        throw StateError('Unexpected request: ${uri.path}');
+      },
+    );
+
+    await tester.pumpWidget(EmulatorControlRoot(client: client));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final Finder tileListener = find.ancestor(
+      of: find.text('0,7'),
+      matching: find.byType(Listener),
+    );
+    final Offset clickPoint = tester.getRect(tileListener.first).center;
+
+    final TestGesture latchOn = await tester.startGesture(
+      clickPoint,
+      kind: PointerDeviceKind.mouse,
+      buttons: kMiddleMouseButton,
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await latchOn.up();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final TestGesture primary = await tester.startGesture(
+      clickPoint,
+      kind: PointerDeviceKind.mouse,
+      buttons: kPrimaryMouseButton,
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await primary.up();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(requests.map((request) => request['state']), <String>[
+      'pressed',
+      'pressed',
+      'rest',
+    ]);
+    expect(find.text('P'), findsNothing);
+
+    final TestGesture latchAgain = await tester.startGesture(
+      clickPoint,
+      kind: PointerDeviceKind.mouse,
+      buttons: kMiddleMouseButton,
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await latchAgain.up();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(requests.last['state'], 'pressed');
+    expect(find.text('P'), findsOneWidget);
   });
 
   testWidgets('polls LED snapshots faster than health and BAK', (tester) async {

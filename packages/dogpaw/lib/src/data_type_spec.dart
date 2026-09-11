@@ -4,6 +4,29 @@ import 'json_constants.dart';
 import 'json_utils.dart';
 import 'data_type_extensions.dart';
 
+/// One stable id/label option for an enum endpoint.
+class EnumOption {
+  final int id;
+  final String label;
+
+  const EnumOption({
+    required this.id,
+    required this.label,
+  });
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        JsonFields.ID: id,
+        JsonFields.LABEL: label,
+      };
+
+  factory EnumOption.fromJson(Map<String, dynamic> json) {
+    return EnumOption(
+      id: json[JsonFields.ID] as int? ?? 0,
+      label: json[JsonFields.LABEL] as String? ?? '',
+    );
+  }
+}
+
 /// Complete data type specification with constraints
 class DataTypeSpec {
   /// Base data type
@@ -15,8 +38,8 @@ class DataTypeSpec {
   /// Valid range for numeric types
   final Range? range;
 
-  /// Valid values for enum types
-  final List<String> enumValues;
+  /// Stable id/label metadata for enum types
+  final List<EnumOption> enumOptions;
 
   /// Name for custom types
   final String? customTypeName;
@@ -26,7 +49,7 @@ class DataTypeSpec {
     this.baseType, {
     this.indexSpec = const IndexSpecNone(),
     this.range,
-    this.enumValues = const [],
+    this.enumOptions = const <EnumOption>[],
     this.customTypeName,
   });
 
@@ -39,10 +62,10 @@ class DataTypeSpec {
   }
 
   /// Factory method to create an enum type with values
-  factory DataTypeSpec.createEnum(List<String> values) {
+  factory DataTypeSpec.createEnum(List<EnumOption> values) {
     return DataTypeSpec(
       DataType.enum_,
-      enumValues: values,
+      enumOptions: values,
     );
   }
 
@@ -61,12 +84,16 @@ class DataTypeSpec {
 
   /// Convert to JSON representation
   Map<String, dynamic> toJson() {
+    final Map<String, dynamic> constraints = <String, dynamic>{
+      JsonFields.RANGE: range?.toJson(),
+      JsonFields.ENUM_OPTIONS: enumOptions.map((option) => option.toJson()).toList(),
+      JsonFields.CUSTOM_SCHEMA: customTypeName,
+    }.toJsonClean();
+
     return <String, dynamic>{
       JsonFields.BASE_TYPE: baseType.toSnakeCase(),
       JsonFields.INDEX_SPEC: indexSpec.toJson(),
-      JsonFields.RANGE: range?.toJson(),
-      JsonFields.ENUM_VALUES: enumValues,
-      JsonFields.CUSTOM_SCHEMA: customTypeName,
+      JsonFields.CONSTRAINTS: constraints.isEmpty ? null : constraints,
     }.toJsonClean();
   }
 
@@ -78,6 +105,10 @@ class DataTypeSpec {
             json[JsonFields.INDEX_SPEC] as Map<String, dynamic>)
         : const IndexSpecNone();
 
+    final Map<String, dynamic> constraints =
+        json[JsonFields.CONSTRAINTS] as Map<String, dynamic>? ??
+            const <String, dynamic>{};
+
     return DataTypeSpec(
       DataType.values.firstWhere(
         (e) =>
@@ -86,11 +117,15 @@ class DataTypeSpec {
         orElse: () => DataType.float,
       ),
       indexSpec: indexSpec,
-      range: json[JsonFields.RANGE] != null
-          ? Range.fromJson(json[JsonFields.RANGE])
+      range: constraints[JsonFields.RANGE] != null
+          ? Range.fromJson(constraints[JsonFields.RANGE])
           : null,
-      enumValues: List<String>.from(json[JsonFields.ENUM_VALUES] ?? []),
-      customTypeName: json[JsonFields.CUSTOM_SCHEMA],
+      enumOptions: (constraints[JsonFields.ENUM_OPTIONS] as List<dynamic>? ??
+              const <dynamic>[])
+          .whereType<Map<String, dynamic>>()
+          .map(EnumOption.fromJson)
+          .toList(),
+      customTypeName: constraints[JsonFields.CUSTOM_SCHEMA] as String?,
     );
   }
 }

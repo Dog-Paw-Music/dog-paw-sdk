@@ -12,7 +12,7 @@
       }
     }
   },
-  "postCreateCommand": "flutter --disable-analytics && dart --disable-analytics",
+  "postCreateCommand": "flutter --disable-analytics && dart --disable-analytics && sudo ln -sfn \"${containerWorkspaceFolder}/tools/dogpaw\" /usr/local/bin/dogpaw",
   "remoteEnv": {
     "CI": "false"
   }

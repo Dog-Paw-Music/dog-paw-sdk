@@ -4,8 +4,15 @@ import 'package:test/test.dart';
 
 import '../test_support.dart';
 
-void main() {
-  IntegrationTestFixture.register();
+Future<void> main() async {
+  final DogpawAppInstallSource launchTestStub =
+      await buildLaunchTestStubInstallSource();
+
+  IntegrationTestFixture.register(
+    configuration: DogpawIntegrationTestConfiguration(
+      installedApps: <DogpawAppInstallSource>[launchTestStub],
+    ),
+  );
 
   group('Running Entity List Integration', () {
     test('listRunningEntities returns launched runtime entities with app names',

@@ -3,6 +3,7 @@ import 'json_constants.dart';
 import 'json_utils.dart';
 import 'data_reference.dart';
 import 'key_intent.dart';
+import 'layout_choice.dart';
 import 'theme.dart';
 import 'namespace_selector.dart';
 import 'scale.dart';
@@ -15,6 +16,12 @@ class LayoutData {
   /// Layout-level scope (`shared` or `targeted`)
   final String scope;
 
+  /// Layout-owned bend policy mode (`fixed` or `nextInScale`)
+  final String bendMode;
+
+  /// Layout-owned bend cap in semitones
+  final double bendRangeSemitones;
+
   /// Consumer-facing target key used when [scope] is `targeted`
   final String? targetKey;
 
@@ -24,30 +31,86 @@ class LayoutData {
   /// Fully composed key color mapping - supports theme color references
   final Map<String, dynamic> keyColors;
 
-  /// Optional theme reference
-  final DataReference<Theme>? themeRef;
+  /// Persisted theme-choice metadata for layout specs.
+  final LayoutThemeChoice? themeChoice;
 
-  /// Optional scale reference
-  final DataReference<Scale>? scaleRef;
+  /// Persisted scale-choice metadata for layout specs.
+  final LayoutScaleChoice? scaleChoice;
+
+  /// Active resolved theme reference returned by Epiphany responses.
+  final DataReference<Theme>? resolvedThemeRef;
+
+  /// Active resolved scale reference returned by Epiphany responses.
+  final DataReference<Scale>? resolvedScaleRef;
 
   const LayoutData({
     this.displayName = '',
     this.scope = 'shared',
+    this.bendMode = 'fixed',
+    this.bendRangeSemitones = 2.0,
     this.targetKey,
     this.keyIntents = const {},
     this.keyColors = const {},
-    this.themeRef,
-    this.scaleRef,
+    this.themeChoice,
+    this.scaleChoice,
+    this.resolvedThemeRef,
+    this.resolvedScaleRef,
   });
+
+  /// Purpose:
+  /// Return the active theme reference represented by this layout data.
+  ///
+  /// Parameters:
+  /// - None.
+  ///
+  /// Return value:
+  /// - Resolved theme reference when present, otherwise the active reference
+  ///   implied by `themeChoice`.
+  ///
+  /// Requirements/Preconditions:
+  /// - None.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Shared theme choices map to the named `System/shared_theme` reference.
+  ///
+  /// Invariants:
+  /// - Reading this getter does not mutate layout state.
+  DataReference<Theme>? get themeRef {
+    return resolvedThemeRef ?? themeChoice?.toDataReference();
+  }
+
+  /// Purpose:
+  /// Return the active scale reference represented by this layout data.
+  ///
+  /// Parameters:
+  /// - None.
+  ///
+  /// Return value:
+  /// - Resolved scale reference when present, otherwise the active reference
+  ///   implied by `scaleChoice`.
+  ///
+  /// Requirements/Preconditions:
+  /// - None.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Shared scale choices map to the named `System/shared_scale` reference.
+  ///
+  /// Invariants:
+  /// - Reading this getter does not mutate layout state.
+  DataReference<Scale>? get scaleRef {
+    return resolvedScaleRef ?? scaleChoice?.toDataReference();
+  }
 
   Map<String, dynamic> toJson() => {
         JsonFields.DISPLAY_NAME: displayName,
         JsonFields.SCOPE: scope,
+        JsonFields.BEND_MODE: bendMode,
+        JsonFields.BEND_RANGE_SEMITONES: bendRangeSemitones,
         JsonFields.TARGET_KEY: targetKey,
         JsonFields.KEY_INTENTS: keyIntentsToJson(keyIntents),
         JsonFields.KEY_COLORS: keyColors,
-        JsonFields.THEME_REF: themeRef?.toJson(),
-        JsonFields.SCALE_REF: scaleRef?.toJson(),
+        JsonFields.THEME_CHOICE: themeChoice?.toJson(),
+        JsonFields.SCALE_CHOICE: scaleChoice?.toJson(),
       }.toJsonClean();
 
   factory LayoutData.fromJson(Map<String, dynamic> json) {
@@ -85,16 +148,48 @@ class LayoutData {
     return LayoutData(
       displayName: json[JsonFields.DISPLAY_NAME] ?? '',
       scope: json[JsonFields.SCOPE] as String? ?? 'shared',
+      bendMode: json[JsonFields.BEND_MODE] as String? ?? 'fixed',
+      bendRangeSemitones:
+          (json[JsonFields.BEND_RANGE_SEMITONES] as num?)?.toDouble() ?? 2.0,
       targetKey: json[JsonFields.TARGET_KEY] as String?,
-      keyIntents: coerceKeyIntentsByKey(json[JsonFields.KEY_INTENTS] ?? <String, dynamic>{}),
+      keyIntents: coerceKeyIntentsByKey(
+          json[JsonFields.KEY_INTENTS] ?? <String, dynamic>{}),
       keyColors: normalizeKeyColors(rawKeyColors),
-      themeRef: json[JsonFields.THEME_REF] != null
+      themeChoice: json[JsonFields.THEME_CHOICE] is Map<String, dynamic>
+          ? LayoutThemeChoice.fromJson(
+              json[JsonFields.THEME_CHOICE] as Map<String, dynamic>,
+            )
+          : (json[JsonFields.THEME_REF] != null
+              ? LayoutThemeChoice.fromDataReference(
+                  DataReference.fromJson(
+                    json[JsonFields.THEME_REF],
+                    (j) => Theme.fromJson(j),
+                  ),
+                )
+              : null),
+      scaleChoice: json[JsonFields.SCALE_CHOICE] is Map<String, dynamic>
+          ? LayoutScaleChoice.fromJson(
+              json[JsonFields.SCALE_CHOICE] as Map<String, dynamic>,
+            )
+          : (json[JsonFields.SCALE_REF] != null
+              ? LayoutScaleChoice.fromDataReference(
+                  DataReference.fromJson(
+                    json[JsonFields.SCALE_REF],
+                    (j) => Scale.fromJson(j),
+                  ),
+                )
+              : null),
+      resolvedThemeRef: json[JsonFields.THEME_REF] != null
           ? DataReference.fromJson(
-              json[JsonFields.THEME_REF], (j) => Theme.fromJson(j))
+              json[JsonFields.THEME_REF],
+              (j) => Theme.fromJson(j),
+            )
           : null,
-      scaleRef: json[JsonFields.SCALE_REF] != null
+      resolvedScaleRef: json[JsonFields.SCALE_REF] != null
           ? DataReference.fromJson(
-              json[JsonFields.SCALE_REF], (j) => Scale.fromJson(j))
+              json[JsonFields.SCALE_REF],
+              (j) => Scale.fromJson(j),
+            )
           : null,
     );
   }

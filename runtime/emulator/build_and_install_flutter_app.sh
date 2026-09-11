@@ -161,7 +161,7 @@ fi
 if [[ "$DRY_RUN" == true ]]; then
     print_flutter_build_header "$APP_NAME" "$BUILD_MODE"
     echo "cd '$FLUTTER_PROJECT_DIR' && flutter pub get && flutter build linux --$BUILD_MODE"
-    INSTALL_COMMAND="python3 '$INSTALL_TOOL' --manifest '$MANIFEST_ABS' --app-root '$APP_ROOT' --bundle '$BUNDLE_DIR'"
+    INSTALL_COMMAND="python3 '$INSTALL_TOOL' --manifest '$MANIFEST_ABS' --app-root '$APP_ROOT' --bundle '$BUNDLE_DIR' --flutter-sdk-version \"\$(flutter --version | sed -n '1p')\""
     if [[ -n "$HOST_SOURCE_FINGERPRINT" ]]; then
         INSTALL_COMMAND+=" --host-source-fingerprint '$HOST_SOURCE_FINGERPRINT' --host-build-mode '$HOST_BUILD_MODE'"
     fi

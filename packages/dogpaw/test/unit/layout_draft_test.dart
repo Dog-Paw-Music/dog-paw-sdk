@@ -4,17 +4,18 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('LayoutDraft', () {
-    test('defaults to shared layout with current theme and scale', () {
+    test('defaults to shared layout with shared theme and scale choices', () {
       const LayoutDraft draft = LayoutDraft();
 
       expect(draft.scope, const LayoutScopeSettings.shared());
-      expect(draft.themeChoice, const LayoutThemeChoice.current());
-      expect(draft.scaleChoice, const LayoutScaleChoice.current());
+      expect(draft.themeChoice, const LayoutThemeChoice.shared());
+      expect(draft.scaleChoice, const LayoutScaleChoice.shared());
       expect(draft.settings, const LayoutSettings());
       expect(draft.colorStrategy, const LayoutColorStrategy.scaleCategories());
     });
 
-    test('serializes and restores editable draft state', () {
+    test('serializes and restores editable draft state with dormant overrides',
+        () {
       final LayoutDraft draft = LayoutDraft(
         settings: const LayoutSettings(
           layoutMode: 'chromatic',
@@ -26,8 +27,8 @@ void main() {
           semitoneTranspose: -2,
         ),
         scope: const LayoutScopeSettings.targeted('Voice2LED_2'),
-        themeChoice: LayoutThemeChoice.inline(
-          const ThemeData(
+        themeChoice: const LayoutThemeChoice.shared(
+          overrideTheme: ThemeData(
             displayName: 'Inline Theme',
             primaryColor: '#ff0000',
             secondaryColor: '#00ff00',
@@ -35,8 +36,8 @@ void main() {
             backgroundColor: '#101010',
           ),
         ),
-        scaleChoice: LayoutScaleChoice.inline(
-          const ScaleData(
+        scaleChoice: const LayoutScaleChoice.overrideValue(
+          ScaleData(
             displayName: 'Inline Scale',
             rootNote: 2,
             noteCategories: <int>[1, -1, 1, -1, 1, 1, -1, 1, -1, 1, -1, 1],
@@ -55,20 +56,21 @@ void main() {
       expect(restored, equals(draft));
     });
 
-    test('builds layout data from targeted inline draft values', () {
+    test('builds layout data from targeted draft values with choice metadata',
+        () {
       final LayoutDraft draft = LayoutDraft(
         scope: const LayoutScopeSettings.targeted('Voice2LED_2'),
-        themeChoice: LayoutThemeChoice.inline(
-          const ThemeData(
-            displayName: 'Inline Theme',
-            primaryColor: '#ff0000',
-            secondaryColor: '#00ff00',
-            accentColor: '#0000ff',
-            backgroundColor: '#101010',
+        themeChoice: const LayoutThemeChoice.shared(
+          overrideTheme: ThemeData(
+            displayName: 'Dormant Theme Override',
+            primaryColor: '#222222',
+            secondaryColor: '#333333',
+            accentColor: '#444444',
+            backgroundColor: '#111111',
           ),
         ),
-        scaleChoice: LayoutScaleChoice.inline(
-          const ScaleData(
+        scaleChoice: const LayoutScaleChoice.overrideValue(
+          ScaleData(
             displayName: 'Inline Scale',
             rootNote: 0,
             noteCategories: <int>[3, -1, 1, -1, 1, 1, -1, 1, -1, 1, -1, 1],
@@ -90,8 +92,53 @@ void main() {
       expect(layoutData.scope, equals('targeted'));
       expect(layoutData.targetKey, equals('Voice2LED_2'));
       expect(layoutData.keyIntents.length, equals(4));
-      expect(layoutData.themeRef, isNotNull);
+      expect(layoutData.themeChoice, equals(draft.themeChoice));
+      expect(layoutData.scaleChoice, equals(draft.scaleChoice));
+      expect(layoutData.themeRef, equals(sharedThemeDataReference()));
       expect(layoutData.scaleRef, isNotNull);
+      expect(layoutData.scaleRef!.type, equals(ReferenceType.inline));
+      expect(layoutData.bendMode, equals('nextInScale'));
+      expect(layoutData.bendRangeSemitones, equals(2.0));
+    });
+
+    test('builds chromatic drafts with fixed bend mode', () {
+      final LayoutDraft draft = LayoutDraft(
+        settings: const LayoutSettings(layoutMode: 'chromatic'),
+      );
+
+      final LayoutData layoutData = draft.toLayoutData(
+        displayName: 'Chromatic Layout',
+      );
+
+      expect(layoutData.bendMode, equals('fixed'));
+      expect(layoutData.bendRangeSemitones, equals(2.0));
+    });
+
+    test('builds layout data from active override theme choice', () {
+      final LayoutDraft draft = LayoutDraft(
+        themeChoice: const LayoutThemeChoice.overrideValue(
+          ThemeData(
+            displayName: 'Inline Theme',
+            primaryColor: '#ff0000',
+            secondaryColor: '#00ff00',
+            accentColor: '#0000ff',
+            backgroundColor: '#101010',
+          ),
+        ),
+      );
+
+      final LayoutData layoutData = draft.toLayoutData(
+        displayName: 'Override Layout',
+      );
+
+      expect(layoutData.themeChoice, equals(draft.themeChoice));
+      expect(layoutData.themeRef, isNotNull);
+      expect(layoutData.themeRef!.type, equals(ReferenceType.inline));
+      expect(layoutData.themeRef!.inlineData, isNotNull);
+      expect(
+        layoutData.themeRef!.inlineData!.spec!.primaryColor,
+        equals('#ff0000'),
+      );
     });
 
     test('writes note-number color strategies into layout output', () {
@@ -107,9 +154,11 @@ void main() {
         displayName: 'Color Layout',
       );
 
-      expect(layoutData.keyColors.containsKey(JsonFields.NOTE_NUMBER_MAP), isTrue);
       expect(
-        (layoutData.keyColors[JsonFields.NOTE_NUMBER_MAP] as Map<String, dynamic>)['0'],
+          layoutData.keyColors.containsKey(JsonFields.NOTE_NUMBER_MAP), isTrue);
+      expect(
+        (layoutData.keyColors[JsonFields.NOTE_NUMBER_MAP]
+            as Map<String, dynamic>)['0'],
         equals('accent'),
       );
     });

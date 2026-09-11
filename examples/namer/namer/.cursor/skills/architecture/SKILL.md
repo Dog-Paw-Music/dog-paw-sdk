@@ -4,9 +4,9 @@
 
 ## Overview
 
-Namer follows the standard Flutter UI app architecture established by monolithController. See `uiApps/apps/monolithController/monolith_controller/.cursor/skills/architecture/SKILL.md` for the full reference pattern.
+Namer follows the standard Flutter UI app architecture established by `simpleSynthController`. See `uiApps/apps/simpleSynthController/simple_synth_controller` for a current reference implementation of the shared controller pattern.
 
-## Key Differences from monolithController
+## Key Differences from `simpleSynthController`
 
 1. **Dual Services**: NamerService (IPC) + NamingSchemeService (persistence)
 2. **Callbacks in Service**: NamerService accepts callbacks via constructor for key events and layout updates

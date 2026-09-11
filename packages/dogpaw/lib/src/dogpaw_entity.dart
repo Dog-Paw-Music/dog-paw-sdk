@@ -43,6 +43,35 @@ class ConnectionResult {
         handle = null;
 }
 
+/// Purpose: Bundle the created stateful input and its matched committed-state
+/// output so callers can use both runtime handles without extra lookups.
+///
+/// Parameters:
+/// - [input]: Owned writable stateful input endpoint.
+/// - [matchedOutput]: Owned output endpoint that publishes committed state.
+///
+/// Return value:
+/// - None. This is a simple immutable data holder.
+///
+/// Requirements/Preconditions:
+/// - Both endpoints belong to the same owning `DogPawEntity`.
+///
+/// Guarantees/Postconditions:
+/// - Stores the two runtime handles exactly as provided.
+///
+/// Invariants:
+/// - [input] is the writable input surface and [matchedOutput] is the public
+///   committed-state publication surface.
+class StatefulEndpointPair {
+  final LocalEndpoint input;
+  final LocalEndpoint matchedOutput;
+
+  const StatefulEndpointPair({
+    required this.input,
+    required this.matchedOutput,
+  });
+}
+
 /// Purpose: Native-backed runtime adapter for one owned `LocalEndpoint`.
 ///
 /// Parameters:
@@ -71,6 +100,40 @@ class _NativeLocalEndpointRuntimeDelegate
   @override
   int get inputConnectionCount =>
       _client.listLocalEndpointConnectionNames(_endpointName).length;
+
+  @override
+  int get peerCount => _client.getLocalEndpointPeerCount(_endpointName);
+
+  @override
+  bool setContinuousFirstPeerPolicy(ContinuousFirstPeerPolicy policy) {
+    return _client.setLocalEndpointContinuousFirstPeerPolicy(
+      _endpointName,
+      policy,
+    );
+  }
+
+  @override
+  ContinuousFirstPeerPolicy? getContinuousFirstPeerPolicy() {
+    return _client.getLocalEndpointContinuousFirstPeerPolicy(_endpointName);
+  }
+
+  @override
+  EndpointRetainedStateSnapshot getRetainedStateSnapshot() =>
+      _client.queryLocalEndpointRetainedState(_endpointName);
+
+  @override
+  bool adoptRetainedStateSnapshot(
+    EndpointRetainedStateSnapshot snapshot, {
+    bool publishMatchedOutput = true,
+    EndpointSenderInfo? senderInfo,
+  }) {
+    return _client.adoptLocalEndpointRetainedState(
+      _endpointName,
+      snapshot,
+      publishMatchedOutput: publishMatchedOutput,
+      senderInfo: senderInfo,
+    );
+  }
 
   @override
   bool writeBytes(Uint8List bytes, {bool immediate = true}) {
@@ -226,6 +289,9 @@ class ConnectionHandle {
 /// - Dart-side callback and local endpoint tracking
 
 class DogPawEntity {
+  static const String _internalRetainedStateQueryCommand =
+      '__dogpaw_query_endpoint_retained_state';
+  static const String _retainedStateQueryEndpointNameField = 'endpointName';
   //=========================================================================
   // TEST INFRASTRUCTURE OVERRIDES
   //=========================================================================
@@ -278,6 +344,10 @@ class DogPawEntity {
       _presetRequestCallback;
   final Map<String, Function(String connectionName, IndexSpec newIndexSpec)>
       _indexSpecChangeCallbacks = {};
+  final Map<String,
+          EndpointRetainedStateSnapshot Function(LocalEndpoint endpoint)>
+      _endpointRetainedStateQueryCallbacks = <String,
+          EndpointRetainedStateSnapshot Function(LocalEndpoint endpoint)>{};
 
   // Endpoint registry (live local endpoints created by this entity)
   // Maps endpoint name to LocalEndpoint object
@@ -420,11 +490,37 @@ class DogPawEntity {
   /// [entityName] - Optional explicit entity-name override. When null, the
   /// name is resolved via [entityNameOverride] (for tests), then the
   /// `DOGPAW_ENTITY_NAME` environment variable (for launched apps).
+  /// Uses the default 5s native request timeout.
   DogPawEntity([
     String? entityName,
-  ])  : _entityName = _resolveEntityName(entityName),
+  ]) : this._configure(entityName, const Duration(seconds: 5));
+
+  /// Same as [DogPawEntity.new] with an explicit native request timeout.
+  ///
+  /// Purpose: Lets tests (and rare callers) raise the RPC deadline without
+  /// changing the global default. Used by layout CRUD integration tests while
+  /// concurrent `setLayout` latency is still under investigation.
+  ///
+  /// [entityName] - Optional explicit entity-name override (same rules as
+  /// [DogPawEntity.new]).
+  /// [timeout] - Default native request timeout for RPCs started by this
+  /// entity (connect, CRUD, etc.). Must be positive.
+  ///
+  /// @pre [timeout] is greater than zero
+  /// @post Entity uses [timeout] for native client requests
+  DogPawEntity.withRequestTimeout(
+    String? entityName, {
+    required Duration timeout,
+  }) : this._configure(entityName, timeout);
+
+  /// Shared construction for [DogPawEntity.new] and
+  /// [DogPawEntity.withRequestTimeout].
+  DogPawEntity._configure(
+    String? entityName,
+    Duration timeout,
+  )   : _entityName = _resolveEntityName(entityName),
         _serverUrl = "ws://localhost:8080",
-        _timeout = const Duration(seconds: 5);
+        _timeout = timeout;
 
   /// Resolve the entity name for this client instance.
   ///
@@ -806,8 +902,7 @@ class DogPawEntity {
     _layoutQuerySnapshotReadyCompleter = Completer<void>();
     _layoutQuerySnapshotError = null;
 
-    final Future<Result<bool>> subscriptionFuture =
-        (() async {
+    final Future<Result<bool>> subscriptionFuture = (() async {
       final Result<bool> subscribeResult = await client.subscribeToLayoutStack(
         (_, __, ___) {},
         includeResolved: true,
@@ -929,9 +1024,10 @@ class DogPawEntity {
       }
       final Map<String, dynamic> mergedKeyIntents =
           Map<String, dynamic>.from(merged.keyIntents);
-      for (final MapEntry<String, dynamic> entry in sourceData.keyIntents.entries) {
-        final List<dynamic> existingIntents =
-            List<dynamic>.from(mergedKeyIntents[entry.key] as List<dynamic>? ?? <dynamic>[]);
+      for (final MapEntry<String, dynamic> entry
+          in sourceData.keyIntents.entries) {
+        final List<dynamic> existingIntents = List<dynamic>.from(
+            mergedKeyIntents[entry.key] as List<dynamic>? ?? <dynamic>[]);
         final List<dynamic> sourceIntents =
             List<dynamic>.from(entry.value as List<dynamic>? ?? <dynamic>[]);
         mergedKeyIntents[entry.key] = <dynamic>[
@@ -947,10 +1043,14 @@ class DogPawEntity {
             ? sourceData.displayName
             : merged.displayName,
         scope: 'shared',
+        bendMode: sourceData.bendMode,
+        bendRangeSemitones: sourceData.bendRangeSemitones,
         keyIntents: mergedKeyIntents,
         keyColors: mergedKeyColors,
-        themeRef: sourceData.themeRef ?? merged.themeRef,
-        scaleRef: sourceData.scaleRef ?? merged.scaleRef,
+        themeChoice: sourceData.themeChoice ?? merged.themeChoice,
+        scaleChoice: sourceData.scaleChoice ?? merged.scaleChoice,
+        resolvedThemeRef: sourceData.themeRef ?? merged.themeRef,
+        resolvedScaleRef: sourceData.scaleRef ?? merged.scaleRef,
       );
     }
 
@@ -989,7 +1089,8 @@ class DogPawEntity {
     }
 
     final ScopedLayoutView view = ScopedLayoutView.fromResolvedLayout(
-      _composeResolvedScopedLayout(policy, snapshot, hydratedLayoutsResult.value!),
+      _composeResolvedScopedLayout(
+          policy, snapshot, hydratedLayoutsResult.value!),
       policy,
     );
     _cachedScopedLayoutViews[cacheKey] = view;
@@ -1227,7 +1328,7 @@ class DogPawEntity {
       );
       client.setErrorCallback(_errorCallback);
       client.setDirectMessageCallback(_directMessageCallback);
-      client.setCommandCallback(_commandCallback);
+      client.setCommandCallback(_handleIncomingCommand);
       client.setPresetRequestCallback(_presetRequestCallback);
       _nativeClient = client;
 
@@ -1401,7 +1502,113 @@ class DogPawEntity {
               String commandId)
           callback) {
     _commandCallback = callback;
-    _nativeClient?.setCommandCallback(callback);
+    _nativeClient?.setCommandCallback(_handleIncomingCommand);
+  }
+
+  /// Purpose: Register one manual retained-state query responder for an owned
+  /// endpoint.
+  ///
+  /// Parameters:
+  /// - [endpointName]: owned endpoint name whose retained-state queries should
+  ///   use [callback].
+  /// - [callback]: synchronous responder that receives the live local endpoint
+  ///   wrapper and returns the snapshot to send.
+  ///
+  /// Return value:
+  /// - None.
+  ///
+  /// Requirements/Preconditions:
+  /// - [endpointName] identifies a local endpoint when the callback is expected
+  ///   to run.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Future retained-state queries for [endpointName] use [callback] before
+  ///   the automatic mirrored-state responder.
+  ///
+  /// Invariants:
+  /// - Registration is scoped to this `DogPawEntity` instance only.
+  void registerEndpointRetainedStateQueryCallback(
+    String endpointName,
+    EndpointRetainedStateSnapshot Function(LocalEndpoint endpoint) callback,
+  ) {
+    _endpointRetainedStateQueryCallbacks[endpointName] = callback;
+  }
+
+  /// Purpose: Remove one manual retained-state query responder.
+  ///
+  /// Parameters:
+  /// - [endpointName]: endpoint name previously registered with
+  ///   [registerEndpointRetainedStateQueryCallback].
+  ///
+  /// Return value:
+  /// - None.
+  ///
+  /// Requirements/Preconditions:
+  /// - None.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Future retained-state queries for [endpointName] fall back to the
+  ///   automatic mirrored-state responder.
+  ///
+  /// Invariants:
+  /// - Removing one callback does not affect any other endpoint.
+  void clearEndpointRetainedStateQueryCallback(String endpointName) {
+    _endpointRetainedStateQueryCallbacks.remove(endpointName);
+  }
+
+  /// Purpose: Answer one incoming internal retained-state query or forward the
+  /// command to the user callback when it is not internal.
+  ///
+  /// Parameters:
+  /// - [senderEntity]: entity that sent the command.
+  /// - [command]: command name delivered by the native bridge.
+  /// - [params]: command payload.
+  /// - [commandId]: response correlation id.
+  ///
+  /// Return value:
+  /// - None.
+  ///
+  /// Requirements/Preconditions:
+  /// - None.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Internal retained-state queries receive one command response when
+  ///   possible.
+  /// - Other commands are forwarded unchanged to the user callback, if any.
+  ///
+  /// Invariants:
+  /// - Transport details for retained-state queries stay hidden from callers of
+  ///   the public query API.
+  void _handleIncomingCommand(
+    String senderEntity,
+    String command,
+    Map<String, dynamic> params,
+    String commandId,
+  ) {
+    if (command == _internalRetainedStateQueryCommand) {
+      final String endpointName =
+          params[_retainedStateQueryEndpointNameField] as String? ?? '';
+      final LocalEndpoint? endpoint = _myEndpoints[endpointName];
+      final EndpointRetainedStateSnapshot snapshot;
+      if (endpoint == null) {
+        snapshot = const EndpointRetainedStateSnapshot(hasState: false);
+      } else {
+        final responder = _endpointRetainedStateQueryCallbacks[endpointName];
+        snapshot = responder != null
+            ? responder(endpoint)
+            : _requireNativeClient()
+                .queryLocalEndpointRetainedState(endpointName);
+      }
+      sendCommandResponse(
+        senderEntity,
+        commandId,
+        success: true,
+        result: snapshot.toJson(),
+      );
+      return;
+    }
+
+    _commandCallback?.call(senderEntity, command, params, commandId);
   }
 
   /// Set preset request callback
@@ -1599,6 +1806,118 @@ class DogPawEntity {
             }
           }
         }
+      } else if (type == 'endpoint_peer_count_changed') {
+        final String? localName = message[JsonFields.NAME] as String?;
+        final dynamic connectionData = message[JsonFields.CONNECTION];
+        if (localName != null &&
+            connectionData is Map<String, dynamic> &&
+            _myEndpoints.containsKey(localName)) {
+          final dynamic peerCountValue = connectionData['peerCount'];
+          if (peerCountValue is int) {
+            _myEndpoints[localName]!.dispatchPeerCountChangedEvent(
+              peerCountValue,
+            );
+          }
+        }
+      } else if (type == 'stateful_input_action') {
+        final String? localName = message[JsonFields.NAME] as String?;
+        final dynamic connectionData = message[JsonFields.CONNECTION];
+        if (localName == null ||
+            connectionData is! Map<String, dynamic> ||
+            !_myEndpoints.containsKey(localName)) {
+          return;
+        }
+
+        final LocalEndpoint endpoint = _myEndpoints[localName]!;
+        final EndpointSpec? effectiveSpec = endpoint.spec ?? endpoint.resolved;
+        if (effectiveSpec == null) {
+          return;
+        }
+
+        final String connectionName =
+            connectionData[JsonFields.NAME] as String? ?? '';
+        final dynamic targetJson = connectionData[JsonFields.TARGET];
+        final dynamic actionJson = connectionData[JsonFields.ACTION_PAYLOAD];
+        if (connectionName.isEmpty ||
+            targetJson is! Map<String, dynamic> ||
+            actionJson is! Map<String, dynamic>) {
+          return;
+        }
+
+        final EndpointSenderInfo senderInfo = EndpointSenderInfo(
+          connectionName: connectionName,
+          sourceEndpointRef: DataItemRef.fromJson(targetJson),
+        );
+
+        switch (effectiveSpec.dataType.baseType) {
+          case DataType.float:
+            final double? retainedValue =
+                (connectionData[JsonFields.RETAINED_VALUE] as num?)?.toDouble();
+            endpoint.dispatchStatefulFloatActionEvent(
+              action: StatefulFloatAction.fromJson(actionJson),
+              senderInfo: senderInfo,
+              retainedValue: retainedValue,
+            );
+            break;
+          case DataType.int_:
+            final int? retainedValue =
+                connectionData[JsonFields.RETAINED_VALUE] as int?;
+            endpoint.dispatchStatefulIntActionEvent(
+              action: StatefulIntAction.fromJson(actionJson),
+              senderInfo: senderInfo,
+              retainedValue: retainedValue,
+            );
+            break;
+          case DataType.toggle:
+            final bool? retainedValue =
+                connectionData[JsonFields.RETAINED_VALUE] as bool?;
+            endpoint.dispatchStatefulToggleActionEvent(
+              action: StatefulToggleAction.fromJson(actionJson),
+              senderInfo: senderInfo,
+              retainedValue: retainedValue,
+            );
+            break;
+          case DataType.enum_:
+            final int? retainedValue =
+                connectionData[JsonFields.RETAINED_VALUE] as int?;
+            endpoint.dispatchStatefulEnumActionEvent(
+              action: StatefulEnumAction.fromJson(actionJson),
+              senderInfo: senderInfo,
+              retainedValue: retainedValue,
+            );
+            break;
+          case DataType.color:
+            final int? retainedValue =
+                connectionData[JsonFields.RETAINED_VALUE] as int?;
+            endpoint.dispatchStatefulColorActionEvent(
+              action: StatefulColorAction.fromJson(actionJson),
+              senderInfo: senderInfo,
+              retainedValue: retainedValue,
+            );
+            break;
+          case DataType.theme:
+            final Map<String, dynamic>? retainedValue =
+                connectionData[JsonFields.RETAINED_VALUE]
+                    as Map<String, dynamic>?;
+            endpoint.dispatchStatefulThemeActionEvent(
+              action: StatefulThemeAction.fromJson(actionJson),
+              senderInfo: senderInfo,
+              retainedValue: retainedValue,
+            );
+            break;
+          case DataType.scale:
+            final Map<String, dynamic>? retainedValue =
+                connectionData[JsonFields.RETAINED_VALUE]
+                    as Map<String, dynamic>?;
+            endpoint.dispatchStatefulScaleActionEvent(
+              action: StatefulScaleAction.fromJson(actionJson),
+              senderInfo: senderInfo,
+              retainedValue: retainedValue,
+            );
+            break;
+          default:
+            break;
+        }
       }
     } catch (e) {
       AppLogger.debug('Error handling endpoint notification: $e');
@@ -1702,6 +2021,72 @@ class DogPawEntity {
     } catch (e) {
       return CommandResponseResult.errorResult('Command error: $e');
     }
+  }
+
+  /// Purpose: Query one endpoint's retained-state snapshot through DogPawEntity
+  /// without exposing the internal command transport.
+  ///
+  /// Parameters:
+  /// - [name]: endpoint name to query.
+  /// - [namespaceSelector]: specific owner namespace for the endpoint.
+  /// - [timeout]: maximum time to wait for a remote response.
+  ///
+  /// Return value:
+  /// - `Future<Result<EndpointRetainedStateSnapshot>>` describing the current
+  ///   retained state, if any.
+  ///
+  /// Requirements/Preconditions:
+  /// - [namespaceSelector] must resolve to one specific entity.
+  ///
+  /// Guarantees/Postconditions:
+  /// - On success, callers receive one typed snapshot rather than raw command
+  ///   payload JSON.
+  ///
+  /// Invariants:
+  /// - The query itself does not mutate endpoint metadata or connection state.
+  Future<Result<EndpointRetainedStateSnapshot>> queryEndpointRetainedState(
+    String name, {
+    required NamespaceSelector namespaceSelector,
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    NamespaceSelector resolvedSelector = namespaceSelector;
+    if (namespaceSelector.isCurrentEntity) {
+      resolvedSelector = NamespaceSelector.specificEntity(_entityName);
+    }
+    if (!resolvedSelector.isSpecificEntity ||
+        resolvedSelector.sourceEntity == null) {
+      return Result<EndpointRetainedStateSnapshot>.error(
+        'Retained-state query requires a specific entity namespace',
+      );
+    }
+
+    if (resolvedSelector.sourceEntity == _entityName) {
+      final LocalEndpoint? endpoint = _myEndpoints[name];
+      if (endpoint == null) {
+        return Result<EndpointRetainedStateSnapshot>.success(
+          const EndpointRetainedStateSnapshot(hasState: false),
+        );
+      }
+      final responder = _endpointRetainedStateQueryCallbacks[name];
+      final EndpointRetainedStateSnapshot snapshot = responder != null
+          ? responder(endpoint)
+          : _requireNativeClient().queryLocalEndpointRetainedState(name);
+      return Result<EndpointRetainedStateSnapshot>.success(snapshot);
+    }
+
+    final CommandResponseResult commandResult = await sendCommand(
+      resolvedSelector.sourceEntity!,
+      _internalRetainedStateQueryCommand,
+      params: <String, dynamic>{_retainedStateQueryEndpointNameField: name},
+      timeout: timeout,
+      deliveryPolicy: const CommandDeliveryPolicy(waitForReady: false),
+    );
+    if (!commandResult.success) {
+      return Result<EndpointRetainedStateSnapshot>.error(commandResult.error);
+    }
+    return Result<EndpointRetainedStateSnapshot>.success(
+      EndpointRetainedStateSnapshot.fromJson(commandResult.result),
+    );
   }
 
   /// Send a response to a received command.
@@ -1999,9 +2384,168 @@ class DogPawEntity {
     );
   }
 
+  /**
+   * Purpose: List endpoints owned by this DogPawEntity facade.
+   *
+   * Parameters:
+   * - [namespaceSelector]: Current entity or this facade's specific entity.
+   * - [includeResolved]: Whether resolved endpoint fields should be returned.
+   * - [includeSpec]: Whether authored endpoint spec fields should be returned.
+   *
+   * Return value:
+   * - A future [Result] containing endpoint metadata snapshots on success.
+   *
+   * Requirements/Preconditions:
+   * - The entity is connected through the native bridge before use.
+   *
+   * Guarantees/Postconditions:
+   * - The local owned-endpoint cache is synchronized for returned items.
+   *
+   * Invariants:
+   * - Endpoint mutation state is unchanged; unsupported namespaces fail clearly.
+   */
+  Future<Result<List<EndpointInfo>>> listEndpoints({
+    NamespaceSelector namespaceSelector =
+        const NamespaceSelector.currentEntity(),
+    bool includeResolved = false,
+    bool includeSpec = false,
+  }) async {
+    final bool targetsCurrentEntity = namespaceSelector.isCurrentEntity ||
+        (namespaceSelector.isSpecificEntity &&
+            namespaceSelector.sourceEntity == _entityName);
+    if (!targetsCurrentEntity) {
+      return Result<List<EndpointInfo>>.error(
+        'Native endpoint list currently supports only this entity namespace.',
+      );
+    }
+
+    return _runNativeEndpointList(
+      (NativeDogPawEntityClient client) => client.listEndpoints(
+        includeResolved: includeResolved,
+        includeSpec: includeSpec,
+      ),
+    );
+  }
+
   Future<Result<LocalEndpoint>> createEndpoint(EndpointInfo endpoint) async {
     return _runNativeEndpointMutation(
       (NativeDogPawEntityClient client) => client.createEndpoint(endpoint),
+    );
+  }
+
+  /// Purpose: Create one stateful input and its matched committed-state output.
+  ///
+  /// Parameters:
+  /// - [endpoint]: Input endpoint whose `statefulInput.matchedOutput` declares
+  ///   the public output metadata to create alongside it.
+  ///
+  /// Return value:
+  /// - `Future<Result<StatefulEndpointPair>>` with both live owned endpoints on
+  ///   success.
+  ///
+  /// Requirements/Preconditions:
+  /// - [endpoint.spec] describes an input `MESSAGE_QUEUE` endpoint.
+  /// - [endpoint.spec.statefulInput.matchedOutput] exists and has a non-empty
+  ///   name.
+  ///
+  /// Guarantees/Postconditions:
+  /// - On success, both endpoints exist and native auto-reduced input handling
+  ///   publishes normalized committed-state updates through the matched output.
+  /// - On failure after the input was created, this helper attempts to delete
+  ///   the partially created input before returning the error.
+  ///
+  /// Invariants:
+  /// - This helper leaves the existing single-endpoint CRUD APIs unchanged.
+  Future<Result<StatefulEndpointPair>> createStatefulInputWithMatchedOutput(
+    EndpointInfo endpoint,
+  ) async {
+    final EndpointSpec? spec = endpoint.spec;
+    if (spec == null) {
+      return Result<StatefulEndpointPair>.error(
+        'Stateful input helper requires endpoint metadata',
+      );
+    }
+    final EndpointStatefulInputSpec? statefulInput = spec.statefulInput;
+    final MatchedStateOutputSpec? matchedOutputSpec =
+        statefulInput?.matchedOutput;
+
+    if (spec.direction != EndpointDirection.input) {
+      return Result<StatefulEndpointPair>.error(
+        'Stateful input helper requires an input endpoint',
+      );
+    }
+    if (spec.category != EndpointCategory.messageQueue) {
+      return Result<StatefulEndpointPair>.error(
+        'Stateful input helper currently supports only message-queue inputs',
+      );
+    }
+    if (statefulInput == null || matchedOutputSpec == null) {
+      return Result<StatefulEndpointPair>.error(
+        'Stateful input helper requires statefulInput.matchedOutput configuration',
+      );
+    }
+    if (matchedOutputSpec.name.isEmpty) {
+      return Result<StatefulEndpointPair>.error(
+        'Stateful input helper requires a non-empty matched output name',
+      );
+    }
+    if (statefulInput.consumptionMode ==
+        StatefulInputConsumptionMode.callbackOnly) {
+      return Result<StatefulEndpointPair>.error(
+        'Stateful input helper requires retained state so callback-only consumption is not supported',
+      );
+    }
+    switch (spec.dataType.baseType) {
+      case DataType.float:
+      case DataType.int_:
+      case DataType.toggle:
+      case DataType.enum_:
+      case DataType.color:
+      case DataType.theme:
+      case DataType.scale:
+        break;
+      default:
+        return Result<StatefulEndpointPair>.error(
+          'Stateful input helper currently supports FLOAT, INT, TOGGLE, ENUM, '
+          'COLOR, THEME, and SCALE only',
+        );
+    }
+
+    final Result<LocalEndpoint> inputResult = await createEndpoint(endpoint);
+    if (!inputResult.success || inputResult.value == null) {
+      return Result<StatefulEndpointPair>.error(inputResult.error);
+    }
+
+    final Result<LocalEndpoint> matchedOutputResult = await createEndpoint(
+      EndpointInfo(
+        name: matchedOutputSpec.name,
+        spec: EndpointSpec(
+          direction: EndpointDirection.output,
+          dataType: spec.dataType,
+          displayName: matchedOutputSpec.displayName,
+          description: matchedOutputSpec.description,
+          category: spec.category,
+          messageQueuePayloadContract: spec.messageQueuePayloadContract,
+          flags: matchedOutputSpec.flags,
+          groupKey: matchedOutputSpec.groupKey,
+          display: matchedOutputSpec.display,
+        ),
+      ),
+    );
+    if (!matchedOutputResult.success || matchedOutputResult.value == null) {
+      final Result<bool> rollbackResult = await deleteEndpoint(endpoint.name);
+      String error = matchedOutputResult.error;
+      if (!rollbackResult.success) {
+        error = '$error; rollback failed: ${rollbackResult.error}';
+      }
+      return Result<StatefulEndpointPair>.error(error);
+    }
+
+    return Result<StatefulEndpointPair>.success(
+      StatefulEndpointPair(
+        input: inputResult.value!,
+        matchedOutput: matchedOutputResult.value!,
+      ),
     );
   }
 
@@ -2069,36 +2613,106 @@ class DogPawEntity {
 
   // CONNECTIONS
 
-  Future<Result<bool>> createConnectionRequest(
-      ConnectionRequest connectionRequest) async {
+  /// Purpose: Create one standalone persistent connection rule using the
+  /// canonical rule-family vocabulary.
+  ///
+  /// Parameters:
+  /// - [connectionRule]: `ConnectionRule` describing the stored standalone
+  ///   routing intent.
+  ///
+  /// Return value:
+  /// - `Future<Result<bool>>` indicating whether the rule was stored.
+  ///
+  /// Requirements/Preconditions:
+  /// - This entity must be connected to Epiphany.
+  /// - `connectionRule.spec` must include both concrete endpoint refs.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Reuses the current request-backed native CRUD path.
+  ///
+  /// Invariants:
+  /// - Realized `Connection` data remains derived, read-only state.
+  Future<Result<bool>> createConnectionRule(
+      ConnectionRule connectionRule) async {
     return _runNativeCrudOperation<bool>(
       (NativeDogPawEntityClient client) =>
-          client.createConnectionRequest(connectionRequest),
+          client.createConnectionRule(connectionRule),
     );
   }
 
-  Future<Result<bool>> setConnectionRequest(
-      ConnectionRequest connectionRequest) async {
+  /// Purpose: Create or replace one standalone persistent connection rule.
+  ///
+  /// Parameters:
+  /// - [connectionRule]: `ConnectionRule` to upsert.
+  ///
+  /// Return value:
+  /// - `Future<Result<bool>>` indicating whether the rule was stored.
+  ///
+  /// Requirements/Preconditions:
+  /// - This entity must be connected to Epiphany.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Reuses the current request-backed native CRUD path.
+  ///
+  /// Invariants:
+  /// - Does not create a second routing storage model.
+  Future<Result<bool>> setConnectionRule(ConnectionRule connectionRule) async {
     return _runNativeCrudOperation<bool>(
       (NativeDogPawEntityClient client) =>
-          client.setConnectionRequest(connectionRequest),
+          client.setConnectionRule(connectionRule),
     );
   }
 
-  Future<Result<bool>> updateConnectionRequest(
-      ConnectionRequest connectionRequest) async {
+  /// Purpose: Update one existing standalone persistent connection rule.
+  ///
+  /// Parameters:
+  /// - [connectionRule]: Updated `ConnectionRule`.
+  ///
+  /// Return value:
+  /// - `Future<Result<bool>>` indicating whether the rule update succeeded.
+  ///
+  /// Requirements/Preconditions:
+  /// - This entity must be connected to Epiphany.
+  /// - The rule must already exist in the target namespace.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Reuses the current request-backed native CRUD path.
+  ///
+  /// Invariants:
+  /// - Realized `Connection` data remains derived, read-only state.
+  Future<Result<bool>> updateConnectionRule(
+      ConnectionRule connectionRule) async {
     return _runNativeCrudOperation<bool>(
       (NativeDogPawEntityClient client) =>
-          client.updateConnectionRequest(connectionRequest),
+          client.updateConnectionRule(connectionRule),
     );
   }
 
-  Future<Result<ConnectionRequest?>> readConnectionRequest(String name,
+  /// Purpose: Read one standalone persistent connection rule by name.
+  ///
+  /// Parameters:
+  /// - [name]: `String` rule name to read.
+  /// - [namespaceSelector]: optional namespace to read from.
+  /// - [includeResolved]: whether to include resolved server metadata.
+  /// - [includeSpec]: whether to include original stored spec data.
+  ///
+  /// Return value:
+  /// - `Future<Result<ConnectionRule?>>` containing the rule when found.
+  ///
+  /// Requirements/Preconditions:
+  /// - This entity must be connected to Epiphany.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Reuses the current request-backed native CRUD path.
+  ///
+  /// Invariants:
+  /// - Reading rules never mutates realized connection state.
+  Future<Result<ConnectionRule?>> readConnectionRule(String name,
       {NamespaceSelector? namespaceSelector,
       bool includeResolved = false,
       bool includeSpec = false}) async {
-    return _runNativeCrudOperation<ConnectionRequest?>(
-      (NativeDogPawEntityClient client) => client.readConnectionRequest(
+    return _runNativeCrudOperation<ConnectionRule?>(
+      (NativeDogPawEntityClient client) => client.readConnectionRule(
         name,
         namespaceSelector:
             namespaceSelector ?? const NamespaceSelector.currentEntity(),
@@ -2108,10 +2722,28 @@ class DogPawEntity {
     );
   }
 
-  Future<Result<bool>> deleteConnectionRequest(String name,
+  /// Purpose: Delete one standalone persistent connection rule by name.
+  ///
+  /// Parameters:
+  /// - [name]: `String` rule name to delete.
+  /// - [namespaceSelector]: optional namespace containing the rule.
+  ///
+  /// Return value:
+  /// - `Future<Result<bool>>` indicating whether the delete succeeded.
+  ///
+  /// Requirements/Preconditions:
+  /// - This entity must be connected to Epiphany.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Reuses the current request-backed native CRUD path.
+  ///
+  /// Invariants:
+  /// - Deleting one rule does not directly remove other rules that justify the
+  ///   same realized connection.
+  Future<Result<bool>> deleteConnectionRule(String name,
       {NamespaceSelector? namespaceSelector}) async {
     return _runNativeCrudOperation<bool>(
-      (NativeDogPawEntityClient client) => client.deleteConnectionRequest(
+      (NativeDogPawEntityClient client) => client.deleteConnectionRule(
         name,
         namespaceSelector:
             namespaceSelector ?? const NamespaceSelector.currentEntity(),
@@ -2119,12 +2751,31 @@ class DogPawEntity {
     );
   }
 
-  Future<Result<List<ConnectionRequest>>> listConnectionRequests(
+  /// Purpose: List standalone persistent connection rules in one namespace.
+  ///
+  /// Parameters:
+  /// - [namespaceSelector]: optional namespace to query.
+  /// - [includeResolved]: whether to include resolved server metadata.
+  /// - [includeSpec]: whether to include original stored spec data.
+  ///
+  /// Return value:
+  /// - `Future<Result<List<ConnectionRule>>>` containing matching rules.
+  ///
+  /// Requirements/Preconditions:
+  /// - This entity must be connected to Epiphany.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Reuses the current request-backed native CRUD path.
+  ///
+  /// Invariants:
+  /// - Returned items are writable standalone rule definitions, not realized
+  ///   connections.
+  Future<Result<List<ConnectionRule>>> listConnectionRules(
       {NamespaceSelector? namespaceSelector,
       bool includeResolved = false,
       bool includeSpec = false}) async {
-    return _runNativeCrudOperation<List<ConnectionRequest>>(
-      (NativeDogPawEntityClient client) => client.listConnectionRequests(
+    return _runNativeCrudOperation<List<ConnectionRule>>(
+      (NativeDogPawEntityClient client) => client.listConnectionRules(
         namespaceSelector:
             namespaceSelector ?? const NamespaceSelector.currentEntity(),
         includeResolved: includeResolved,
@@ -2133,33 +2784,101 @@ class DogPawEntity {
     );
   }
 
-  Future<Result<bool>> createFollowRequest(FollowRequest followRequest) async {
+  /// Purpose: Create one follow rule using the canonical rule-family
+  /// vocabulary for mirrored routing.
+  ///
+  /// Parameters:
+  /// - [followRule]: `FollowRule` describing the stored mirrored-routing
+  ///   intent.
+  ///
+  /// Return value:
+  /// - `Future<Result<bool>>` indicating whether the rule was stored.
+  ///
+  /// Requirements/Preconditions:
+  /// - This entity must be connected to Epiphany.
+  /// - `followRule.spec` must include a follower ref and leader criteria.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Reuses the current request-backed native CRUD path.
+  ///
+  /// Invariants:
+  /// - Realized `Connection` data remains derived, read-only state.
+  Future<Result<bool>> createFollowRule(FollowRule followRule) async {
     return _runNativeCrudOperation<bool>(
-      (NativeDogPawEntityClient client) =>
-          client.createFollowRequest(followRequest),
+      (NativeDogPawEntityClient client) => client.createFollowRule(followRule),
     );
   }
 
-  Future<Result<bool>> setFollowRequest(FollowRequest followRequest) async {
+  /// Purpose: Create or replace one follow rule.
+  ///
+  /// Parameters:
+  /// - [followRule]: `FollowRule` to upsert.
+  ///
+  /// Return value:
+  /// - `Future<Result<bool>>` indicating whether the rule was stored.
+  ///
+  /// Requirements/Preconditions:
+  /// - This entity must be connected to Epiphany.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Reuses the current request-backed native CRUD path.
+  ///
+  /// Invariants:
+  /// - Does not create a second mirrored-routing storage model.
+  Future<Result<bool>> setFollowRule(FollowRule followRule) async {
     return _runNativeCrudOperation<bool>(
-      (NativeDogPawEntityClient client) =>
-          client.setFollowRequest(followRequest),
+      (NativeDogPawEntityClient client) => client.setFollowRule(followRule),
     );
   }
 
-  Future<Result<bool>> updateFollowRequest(FollowRequest followRequest) async {
+  /// Purpose: Update one existing follow rule.
+  ///
+  /// Parameters:
+  /// - [followRule]: Updated `FollowRule`.
+  ///
+  /// Return value:
+  /// - `Future<Result<bool>>` indicating whether the rule update succeeded.
+  ///
+  /// Requirements/Preconditions:
+  /// - This entity must be connected to Epiphany.
+  /// - The rule must already exist in the target namespace.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Reuses the current request-backed native CRUD path.
+  ///
+  /// Invariants:
+  /// - Realized `Connection` data remains derived, read-only state.
+  Future<Result<bool>> updateFollowRule(FollowRule followRule) async {
     return _runNativeCrudOperation<bool>(
-      (NativeDogPawEntityClient client) =>
-          client.updateFollowRequest(followRequest),
+      (NativeDogPawEntityClient client) => client.updateFollowRule(followRule),
     );
   }
 
-  Future<Result<FollowRequest?>> readFollowRequest(String name,
+  /// Purpose: Read one follow rule by name.
+  ///
+  /// Parameters:
+  /// - [name]: `String` rule name to read.
+  /// - [namespaceSelector]: optional namespace to read from.
+  /// - [includeResolved]: whether to include resolved server metadata.
+  /// - [includeSpec]: whether to include original stored spec data.
+  ///
+  /// Return value:
+  /// - `Future<Result<FollowRule?>>` containing the rule when found.
+  ///
+  /// Requirements/Preconditions:
+  /// - This entity must be connected to Epiphany.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Reuses the current request-backed native CRUD path.
+  ///
+  /// Invariants:
+  /// - Reading rules never mutates realized connection state.
+  Future<Result<FollowRule?>> readFollowRule(String name,
       {NamespaceSelector? namespaceSelector,
       bool includeResolved = false,
       bool includeSpec = false}) async {
-    return _runNativeCrudOperation<FollowRequest?>(
-      (NativeDogPawEntityClient client) => client.readFollowRequest(
+    return _runNativeCrudOperation<FollowRule?>(
+      (NativeDogPawEntityClient client) => client.readFollowRule(
         name,
         namespaceSelector:
             namespaceSelector ?? const NamespaceSelector.currentEntity(),
@@ -2169,10 +2888,28 @@ class DogPawEntity {
     );
   }
 
-  Future<Result<bool>> deleteFollowRequest(String name,
+  /// Purpose: Delete one follow rule by name.
+  ///
+  /// Parameters:
+  /// - [name]: `String` rule name to delete.
+  /// - [namespaceSelector]: optional namespace containing the rule.
+  ///
+  /// Return value:
+  /// - `Future<Result<bool>>` indicating whether the delete succeeded.
+  ///
+  /// Requirements/Preconditions:
+  /// - This entity must be connected to Epiphany.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Reuses the current request-backed native CRUD path.
+  ///
+  /// Invariants:
+  /// - Deleting one rule does not directly remove other rules that justify the
+  ///   same realized connection.
+  Future<Result<bool>> deleteFollowRule(String name,
       {NamespaceSelector? namespaceSelector}) async {
     return _runNativeCrudOperation<bool>(
-      (NativeDogPawEntityClient client) => client.deleteFollowRequest(
+      (NativeDogPawEntityClient client) => client.deleteFollowRule(
         name,
         namespaceSelector:
             namespaceSelector ?? const NamespaceSelector.currentEntity(),
@@ -2180,12 +2917,31 @@ class DogPawEntity {
     );
   }
 
-  Future<Result<List<FollowRequest>>> listFollowRequests(
+  /// Purpose: List follow rules in one namespace.
+  ///
+  /// Parameters:
+  /// - [namespaceSelector]: optional namespace to query.
+  /// - [includeResolved]: whether to include resolved server metadata.
+  /// - [includeSpec]: whether to include original stored spec data.
+  ///
+  /// Return value:
+  /// - `Future<Result<List<FollowRule>>>` containing matching rules.
+  ///
+  /// Requirements/Preconditions:
+  /// - This entity must be connected to Epiphany.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Reuses the current request-backed native CRUD path.
+  ///
+  /// Invariants:
+  /// - Returned items are writable mirrored-routing rule definitions, not
+  ///   realized connections.
+  Future<Result<List<FollowRule>>> listFollowRules(
       {NamespaceSelector? namespaceSelector,
       bool includeResolved = false,
       bool includeSpec = false}) async {
-    return _runNativeCrudOperation<List<FollowRequest>>(
-      (NativeDogPawEntityClient client) => client.listFollowRequests(
+    return _runNativeCrudOperation<List<FollowRule>>(
+      (NativeDogPawEntityClient client) => client.listFollowRules(
         namespaceSelector:
             namespaceSelector ?? const NamespaceSelector.currentEntity(),
         includeResolved: includeResolved,
@@ -2211,6 +2967,85 @@ class DogPawEntity {
       (NativeDogPawEntityClient client) => client.listConnections(
         includeResolved: includeResolved,
         includeSpec: includeSpec,
+      ),
+    );
+  }
+
+  /// Purpose: Subscribe to realized connection change notifications so
+  /// clients can observe connection add/update/remove events without
+  /// polling `listConnections`.
+  ///
+  /// Parameters:
+  /// - [callback]: invoked with `(notificationType, dataItemRef, Connection)`
+  ///   for each matching notification.
+  /// - [connectionName]: optional realized connection name to watch, or
+  ///   `null` to watch all realized connections.
+  /// - [includeResolved]: whether notification payloads include resolved
+  ///   server metadata.
+  /// - [includeSpec]: whether notification payloads include original stored
+  ///   spec data (contributing rationales).
+  /// - [sendImmediately]: whether an immediate snapshot notification is sent
+  ///   for existing matching connections upon subscribing.
+  ///
+  /// Return value:
+  /// - `Future<Result<bool>>` indicating whether the subscription was
+  ///   established.
+  ///
+  /// Requirements/Preconditions:
+  /// - This entity must be connected to Epiphany.
+  ///
+  /// Guarantees/Postconditions:
+  /// - On success, [callback] fires for future connection add/update/remove
+  ///   events until `unsubscribeFromConnections` is called.
+  ///
+  /// Invariants:
+  /// - Realized connections are always global (there is no per-entity
+  ///   namespace scoping), matching `listConnections`/`readConnection`.
+  Future<Result<bool>> subscribeToConnections(
+    Function(String, DataItemRef, Connection) callback, {
+    String? connectionName,
+    bool includeResolved = false,
+    bool includeSpec = false,
+    bool sendImmediately = true,
+  }) async {
+    return _runNativeCrudOperation<bool>(
+      (NativeDogPawEntityClient client) => client.subscribeToConnections(
+        callback,
+        connectionName: connectionName,
+        includeResolved: includeResolved,
+        includeSpec: includeSpec,
+        sendImmediately: sendImmediately,
+      ),
+    );
+  }
+
+  /// Purpose: Stop receiving realized connection change notifications
+  /// previously requested via `subscribeToConnections`.
+  ///
+  /// Parameters:
+  /// - [connectionName]: optional realized connection name to stop watching,
+  ///   matching the value passed to `subscribeToConnections`, or `null` to
+  ///   remove the all-connections subscription.
+  ///
+  /// Return value:
+  /// - `Future<Result<bool>>` indicating whether the unsubscribe request
+  ///   succeeded.
+  ///
+  /// Requirements/Preconditions:
+  /// - This entity must be connected to Epiphany.
+  ///
+  /// Guarantees/Postconditions:
+  /// - After completion, the matching callback(s) no longer fire for
+  ///   subsequent connection notifications.
+  ///
+  /// Invariants:
+  /// - Mirrors `unsubscribeFromThemes`/`unsubscribeFromEndpoints` behavior.
+  Future<Result<bool>> unsubscribeFromConnections({
+    String? connectionName,
+  }) async {
+    return _runNativeCrudOperation<bool>(
+      (NativeDogPawEntityClient client) => client.unsubscribeFromConnections(
+        connectionName: connectionName,
       ),
     );
   }
@@ -2260,23 +3095,6 @@ class DogPawEntity {
         namespaceSelector:
             namespaceSelector ?? const NamespaceSelector.currentEntity(),
       ),
-    );
-  }
-
-  Future<Result<bool>> setCurrentTheme(String name,
-      {NamespaceSelector? namespaceSelector}) async {
-    return _runNativeCrudOperation<bool>(
-      (NativeDogPawEntityClient client) => client.setCurrentTheme(
-        name,
-        namespaceSelector:
-            namespaceSelector ?? const NamespaceSelector.currentEntity(),
-      ),
-    );
-  }
-
-  Future<Result<Theme?>> readCurrentTheme() async {
-    return _runNativeCrudOperation<Theme?>(
-      (NativeDogPawEntityClient client) => client.readCurrentTheme(),
     );
   }
 
@@ -2331,30 +3149,6 @@ class DogPawEntity {
     );
   }
 
-  Future<Result<bool>> subscribeToCurrentTheme(
-    Function(String, DataItemRef, dynamic) callback, {
-    bool includeResolved = true,
-    bool includeSpec = false,
-    bool sendImmediately = true,
-  }) async {
-    return _runNativeCrudOperation<bool>(
-      (NativeDogPawEntityClient client) => client.subscribeToCurrentTheme(
-        (String notificationType, DataItemRef dataItemRef, Theme theme) {
-          callback(notificationType, dataItemRef, theme);
-        },
-        includeResolved: includeResolved,
-        includeSpec: includeSpec,
-        sendImmediately: sendImmediately,
-      ),
-    );
-  }
-
-  Future<Result<bool>> unsubscribeFromCurrentTheme() async {
-    return _runNativeCrudOperation<bool>(
-      (NativeDogPawEntityClient client) => client.unsubscribeFromCurrentTheme(),
-    );
-  }
-
   // SCALES
 
   Future<Result<bool>> createScale(Scale scale) async {
@@ -2400,23 +3194,6 @@ class DogPawEntity {
         namespaceSelector:
             namespaceSelector ?? const NamespaceSelector.currentEntity(),
       ),
-    );
-  }
-
-  Future<Result<bool>> setCurrentScale(String name,
-      {NamespaceSelector? namespaceSelector}) async {
-    return _runNativeCrudOperation<bool>(
-      (NativeDogPawEntityClient client) => client.setCurrentScale(
-        name,
-        namespaceSelector:
-            namespaceSelector ?? const NamespaceSelector.currentEntity(),
-      ),
-    );
-  }
-
-  Future<Result<Scale?>> readCurrentScale() async {
-    return _runNativeCrudOperation<Scale?>(
-      (NativeDogPawEntityClient client) => client.readCurrentScale(),
     );
   }
 
@@ -2468,30 +3245,6 @@ class DogPawEntity {
         namespaceSelector:
             namespaceSelector ?? const NamespaceSelector.currentEntity(),
       ),
-    );
-  }
-
-  Future<Result<bool>> subscribeToCurrentScale(
-    Function(String, DataItemRef, dynamic) callback, {
-    bool includeResolved = true,
-    bool includeSpec = false,
-    bool sendImmediately = true,
-  }) async {
-    return _runNativeCrudOperation<bool>(
-      (NativeDogPawEntityClient client) => client.subscribeToCurrentScale(
-        (String notificationType, DataItemRef dataItemRef, Scale scale) {
-          callback(notificationType, dataItemRef, scale);
-        },
-        includeResolved: includeResolved,
-        includeSpec: includeSpec,
-        sendImmediately: sendImmediately,
-      ),
-    );
-  }
-
-  Future<Result<bool>> unsubscribeFromCurrentScale() async {
-    return _runNativeCrudOperation<bool>(
-      (NativeDogPawEntityClient client) => client.unsubscribeFromCurrentScale(),
     );
   }
 
@@ -2828,7 +3581,8 @@ class DogPawEntity {
   }) async {
     return _runNativeCrudOperation<bool>(
       (NativeDogPawEntityClient client) async {
-        final Result<bool> cacheResult = await _ensureLayoutQuerySnapshotCache();
+        final Result<bool> cacheResult =
+            await _ensureLayoutQuerySnapshotCache();
         if (!cacheResult.success) {
           return Result<bool>.error(cacheResult.error);
         }
@@ -2976,14 +3730,24 @@ class DogPawEntity {
   /// Singleton apps return their stable manifest name; multi-instance apps
   /// return the generated per-instance runtime entity name. Optional
   /// [launchMetadata] is forwarded to the launched app via its launch
-  /// metadata file.
+  /// metadata file. Optional [args] are appended after `--no-term` and any
+  /// manifest `args` (they do not replace manifest args). Optional
+  /// [displayName] sets the human-facing entity display name (collision
+  /// suffixes applied by Epiphany when needed); when omitted, the template
+  /// manifest display name is used.
   Future<Result<String>> launchApp(
     String appName, {
     Map<String, dynamic>? launchMetadata,
+    List<String>? args,
+    String? displayName,
   }) async {
     return _runNativeCrudOperation<String>(
-      (NativeDogPawEntityClient client) =>
-          client.launchApp(appName, launchMetadata: launchMetadata),
+      (NativeDogPawEntityClient client) => client.launchApp(
+        appName,
+        launchMetadata: launchMetadata,
+        args: args,
+        displayName: displayName,
+      ),
     );
   }
 

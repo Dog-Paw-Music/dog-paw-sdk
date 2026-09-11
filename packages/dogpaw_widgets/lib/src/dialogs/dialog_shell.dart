@@ -10,28 +10,30 @@ import 'package:flutter/material.dart';
 /// safely and consistently across all reusable widget launchers.
 ///
 /// Parameters:
-/// - `context`: Build context used to read the current screen size.
-/// - `child`: Main editor content placed in the expandable body region.
-/// - `actions`: Trailing action row widgets shown below the content.
+/// - [context]: Build context used to read the current screen size.
+/// - [child]: Main editor content placed in the expandable body region.
+/// - [actions]: Optional trailing action row widgets shown below the content.
+///   When null or empty, the bottom action row is omitted (e.g. connection
+///   picker, which owns dismiss in its top band).
 ///
 /// Return value:
 /// - A `Dialog` widget with consistent padding and bounded size.
 ///
 /// Requirements/Preconditions:
-/// - `context` must have an active `MediaQuery`.
-/// - `actions` should contain dialog-safe controls such as buttons.
+/// - [context] must have an active `MediaQuery`.
+/// - When provided, [actions] should contain dialog-safe controls such as buttons.
 ///
 /// Guarantees/Postconditions:
 /// - The returned shell constrains the dialog to a practical size for both
 ///   embedded editors and smaller screens.
-/// - `child` receives expandable vertical space inside the dialog body.
+/// - [child] receives expandable vertical space inside the dialog body.
 ///
 /// Invariants:
 /// - The helper does not own editor state or perform navigation.
 Widget buildEditorDialogShell({
   required BuildContext context,
   required Widget child,
-  required List<Widget> actions,
+  List<Widget>? actions,
 }) {
   final Size screenSize = MediaQuery.sizeOf(context);
   final double dialogWidth = math.max(
@@ -42,6 +44,8 @@ Widget buildEditorDialogShell({
     360,
     math.min(screenSize.height - 48, 760),
   );
+  final List<Widget> actionWidgets = actions ?? const <Widget>[];
+  final bool showActions = actionWidgets.isNotEmpty;
 
   return Dialog(
     insetPadding: const EdgeInsets.all(24),
@@ -49,16 +53,18 @@ Widget buildEditorDialogShell({
       width: dialogWidth,
       height: dialogHeight,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+        padding: EdgeInsets.fromLTRB(24, 24, 24, showActions ? 16 : 24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
             Expanded(child: child),
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: actions,
-            ),
+            if (showActions) ...<Widget>[
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: actionWidgets,
+              ),
+            ],
           ],
         ),
       ),

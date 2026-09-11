@@ -15,6 +15,7 @@ without installing Flutter directly on the host first.
 - Pi deployment workflows
 - full internal monorepo development
 - replacing the normal `tools/dogpaw` emulator flow
+- Windows/WSL audio (see `scripts/wsl-audio/` and `scripts/windows/`)
 
 Open the SDK repo in a Dev Container using `devcontainer/devcontainer.json`, then
 use the normal SDK commands from inside that environment.

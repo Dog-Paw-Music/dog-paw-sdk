@@ -1,4 +1,79 @@
 import 'package:dogpaw/dogpaw.dart';
+import 'package:dogpaw/src/json_constants.dart';
+
+/// Waits until Epiphany no longer reports the provided entity names as running.
+///
+/// Purpose:
+/// Prevents back-to-back integration tests from reconnecting the fixed
+/// `TestEntity*` names before the server has finished processing their
+/// disconnects.
+///
+/// Parameters:
+/// - [entityNames]: exact entity names that should disappear from the running
+///   entity list before cleanup is considered settled.
+///
+/// Return value:
+/// - Future that completes once none of the provided names appear in
+///   `listRunningEntities()`, or after the bounded timeout elapses.
+///
+/// Requirements/Preconditions:
+/// - Epiphany is still running and accepts one temporary probe connection.
+/// - [entityNames] contains the names that were just disconnected.
+///
+/// Guarantees/Postconditions:
+/// - Makes a best effort to observe server-side disconnect completion.
+/// - Disconnects the temporary probe entity before returning when the probe
+///   connected successfully.
+///
+/// Invariants:
+/// - Does not reconnect any of the managed test entities.
+/// - Polls only through public `DogPawEntity` APIs used elsewhere in tests.
+Future<void> _waitForEntityNamesToDisappear(List<String> entityNames) async {
+  final DogPawEntity probe = DogPawEntity(
+    'TestEntitiesCleanupProbe_${DateTime.now().microsecondsSinceEpoch}',
+  );
+  final ConnectionResult connectResult = await probe.connect();
+  if (!connectResult.success) {
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    return;
+  }
+  await connectResult.handle!.complete();
+
+  try {
+    final DateTime deadline =
+        DateTime.now().add(const Duration(seconds: 2));
+    while (DateTime.now().isBefore(deadline)) {
+      final Result<Map<String, dynamic>> runningEntitiesResult =
+          await probe.listRunningEntities();
+      if (runningEntitiesResult.success && runningEntitiesResult.value != null) {
+        final List<dynamic> entities = List<dynamic>.from(
+          runningEntitiesResult.value![JsonFields.ENTITIES] as List<dynamic>,
+        );
+        final Set<String> activeNames = <String>{};
+        for (final dynamic entity in entities) {
+          if (entity is Map<String, dynamic>) {
+            final dynamic entityName = entity[JsonFields.ENTITY_NAME];
+            if (entityName is String) {
+              activeNames.add(entityName);
+            }
+          }
+        }
+        final bool anyStillActive =
+            entityNames.any((String name) => activeNames.contains(name));
+        if (!anyStillActive) {
+          return;
+        }
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+  } finally {
+    if (probe.isConnected()) {
+      probe.disconnect();
+    }
+  }
+
+  await Future<void>.delayed(const Duration(milliseconds: 100));
+}
 
 /// Package-local multi-entity helper for `package:dogpaw` tests.
 ///
@@ -6,7 +81,7 @@ import 'package:dogpaw/dogpaw.dart';
 /// Provides the `dogpaw` package's own test suite with a small reusable bundle
 /// of connected entities so integration tests can exercise same-app and
 /// cross-entity behavior without depending on the repo-only
-/// `dart_test_infrastructure` package.
+/// `dogpaw_test_internal` package.
 ///
 /// Parameters:
 /// - None for the type itself. Use [create] to construct an instance.
@@ -65,7 +140,10 @@ class TestEntities {
   /// entities with deterministic names for CRUD, subscription, and
   /// cross-entity behavior checks.
   ///
-  /// Parameters: none.
+  /// Parameters:
+  /// - [timeout]: Default native request timeout for each entity. Pass a
+  ///   longer value for suites whose RPCs are known to be slower under load
+  ///   (see layout CRUD notes). Defaults to [DogPawEntity]'s 5s timeout.
   ///
   /// Return value:
   /// - Future resolving to a [TestEntities] bundle once all entities connect.
@@ -81,10 +159,15 @@ class TestEntities {
   /// Invariants:
   /// - Uses the long-standing `TestEntity1`, `TestEntity2`, and `TestEntity3`
   ///   names expected by the existing `dogpaw` integration suite.
-  static Future<TestEntities> create() async {
-    final DogPawEntity entity1 = DogPawEntity('TestEntity1');
-    final DogPawEntity entity2 = DogPawEntity('TestEntity2');
-    final DogPawEntity entity3 = DogPawEntity('TestEntity3');
+  static Future<TestEntities> create({
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    final DogPawEntity entity1 =
+        DogPawEntity.withRequestTimeout('TestEntity1', timeout: timeout);
+    final DogPawEntity entity2 =
+        DogPawEntity.withRequestTimeout('TestEntity2', timeout: timeout);
+    final DogPawEntity entity3 =
+        DogPawEntity.withRequestTimeout('TestEntity3', timeout: timeout);
 
     final ConnectionResult result1 = await entity1.connect();
     if (!result1.success) {
@@ -131,6 +214,11 @@ class TestEntities {
   /// Invariants:
   /// - Does not create new entities or reconnect existing ones.
   Future<void> dispose() async {
+    final List<String> entityNames = <String>[
+      entity1.getEntityName(),
+      entity2.getEntityName(),
+      entity3.getEntityName(),
+    ];
     if (entity1.isConnected()) {
       entity1.disconnect();
     }
@@ -140,5 +228,6 @@ class TestEntities {
     if (entity3.isConnected()) {
       entity3.disconnect();
     }
+    await _waitForEntityNamesToDisappear(entityNames);
   }
 }

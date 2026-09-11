@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../editors/scale_editor.dart';
 import '../models/editor_preview.dart';
+import '../models/shared_override_editor_value.dart';
 
 /// Show the reusable scale editor in a modal dialog.
 ///
@@ -12,6 +13,7 @@ import '../models/editor_preview.dart';
 /// - `context`: Build context used to present the dialog.
 /// - `initialValue`: Starting scale value shown to the user.
 /// - `previewController`: Optional host-owned live preview integration.
+/// - `showSourceSelector`: Whether to show the shared/override selector.
 ///
 /// Return value:
 /// - A future resolving to the final scale value when confirmed, or `null` when
@@ -25,15 +27,17 @@ import '../models/editor_preview.dart';
 ///
 /// Invariants:
 /// - The helper does not persist changes on its own.
-Future<dp.ScaleData?> showScaleEditorDialog({
+Future<SharedOverrideEditorValue<dp.ScaleData>?> showScaleEditorDialog({
   required BuildContext context,
-  required dp.ScaleData initialValue,
-  EditorPreviewController<dp.ScaleData>? previewController,
+  required SharedOverrideEditorValue<dp.ScaleData> initialValue,
+  EditorPreviewController<SharedOverrideEditorValue<dp.ScaleData>>?
+      previewController,
+  bool showSourceSelector = false,
 }) async {
-  final dp.ScaleData originalValue = initialValue;
-  dp.ScaleData currentValue = initialValue;
+  final SharedOverrideEditorValue<dp.ScaleData> originalValue = initialValue;
+  SharedOverrideEditorValue<dp.ScaleData> currentValue = initialValue;
 
-  return showDialog<dp.ScaleData>(
+  return showDialog<SharedOverrideEditorValue<dp.ScaleData>>(
     context: context,
     builder: (BuildContext dialogContext) {
       return StatefulBuilder(
@@ -65,12 +69,14 @@ Future<dp.ScaleData?> showScaleEditorDialog({
                     Expanded(
                       child: ScaleEditor(
                         value: currentValue,
-                        onChanged: (dp.ScaleData nextValue) {
+                        onChanged:
+                            (SharedOverrideEditorValue<dp.ScaleData> nextValue) {
                           setDialogState(() {
                             currentValue = nextValue;
                           });
                         },
                         previewController: previewController,
+                        showSourceSelector: showSourceSelector,
                       ),
                     ),
                     const SizedBox(height: 16),
@@ -93,6 +99,7 @@ Future<dp.ScaleData?> showScaleEditorDialog({
                         FilledButton(
                           onPressed: () async {
                             if (previewController != null) {
+                              await previewController.preview(currentValue);
                               await previewController.clear();
                             }
                             if (dialogContext.mounted) {

@@ -11,6 +11,10 @@ Use this package when you are writing:
 Some internal repo-only helpers such as `TestEntities` exist outside this
 public package surface and are intentionally not covered here.
 
+Layout CRUD in `package:dogpaw` currently uses a raised request timeout for
+concurrent `setLayout` flakes; see **Known layout CRUD timeout mitigation** in
+`packages/dogpaw_test_internal/README.md`.
+
 ## What It Exports
 
 - `IntegrationTestFixture` for Epiphany lifecycle management

@@ -22,6 +22,8 @@ extension DataTypeExtension on DataType {
         return JsonFields.DATA_TYPE_MOMENTARY;
       case DataType.enum_:
         return JsonFields.DATA_TYPE_ENUM;
+      case DataType.color:
+        return JsonFields.DATA_TYPE_COLOR;
       case DataType.audioStream:
         return JsonFields.DATA_TYPE_AUDIO_STREAM;
       case DataType.keyPress:
@@ -44,12 +46,16 @@ extension DataTypeExtension on DataType {
         return JsonFields.DATA_TYPE_VOICE_OUTPUT_VALUE;
       case DataType.globalOutputValue:
         return JsonFields.DATA_TYPE_GLOBAL_OUTPUT_VALUE;
-      case DataType.dppParamQueue:
-        return JsonFields.DATA_TYPE_DPP_PARAM_QUEUE;
+      case DataType.dppEditorMessage:
+        return JsonFields.DATA_TYPE_DPP_EDITOR_MESSAGE;
       case DataType.custom:
         return JsonFields.DATA_TYPE_CUSTOM;
       case DataType.scopeBuffer:
         return JsonFields.DATA_TYPE_SCOPE_BUFFER;
+      case DataType.theme:
+        return JsonFields.DATA_TYPE_THEME;
+      case DataType.scale:
+        return JsonFields.DATA_TYPE_SCALE;
     }
   }
 }

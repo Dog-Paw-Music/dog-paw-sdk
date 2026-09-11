@@ -1,6 +1,6 @@
 {
   "name": "HW2MPE",
-  "displayName": "Hardware to MPE",
+  "displayName": "Keys/MIDI Translator",
   "type": "headless",
   "visible": "never",
   "executable": "HW2MPE",

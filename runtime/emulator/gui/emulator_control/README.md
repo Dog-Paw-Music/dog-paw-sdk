@@ -4,8 +4,9 @@ Flutter desktop GUI for controlling the local Dog Paw emulator stack.
 
 This is a developer tool owned by `emulator/`, not a Dog Paw app registry entry.
 It talks to the Python emulator bridge over localhost HTTP and lets a desktop
-developer inspect bridge health, tap simulated key-grid keys, trigger
-ButtonsAndKnobs controls, and view LEDComms key colors.
+developer inspect bridge health, interact with simulated key-grid keys (left
+press, right active, middle-click latch), trigger ButtonsAndKnobs controls, and
+view LEDComms key colors.
 
 ## Run
 

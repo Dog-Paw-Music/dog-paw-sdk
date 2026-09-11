@@ -4,6 +4,7 @@ import 'package:dogpaw/dogpaw.dart' as dp;
 import 'package:flutter/material.dart';
 
 import '../models/editor_preview.dart';
+import '../models/shared_override_editor_value.dart';
 import '../primitives/hsv_color_picker.dart';
 
 /// Reusable musician-facing editor for one Dog Paw theme value.
@@ -13,13 +14,17 @@ import '../primitives/hsv_color_picker.dart';
 /// and preview ownership to the host app.
 class ThemeEditor extends StatefulWidget {
   /// Current theme value being edited.
-  final dp.ThemeData value;
+  final SharedOverrideEditorValue<dp.ThemeData> value;
 
   /// Callback that receives the next full theme value after user edits.
-  final ValueChanged<dp.ThemeData> onChanged;
+  final ValueChanged<SharedOverrideEditorValue<dp.ThemeData>> onChanged;
 
   /// Optional host-owned live preview integration.
-  final EditorPreviewController<dp.ThemeData>? previewController;
+  final EditorPreviewController<SharedOverrideEditorValue<dp.ThemeData>>?
+      previewController;
+
+  /// Whether the shared/override source selector should be shown.
+  final bool showSourceSelector;
 
   /// Create one reusable theme editor shell.
   ///
@@ -44,6 +49,7 @@ class ThemeEditor extends StatefulWidget {
     required this.value,
     required this.onChanged,
     this.previewController,
+    this.showSourceSelector = false,
   });
 
   @override
@@ -72,27 +78,48 @@ class _ThemeEditorState extends State<ThemeEditor> {
   ];
   String _selectedRoleLabel = 'Root';
 
-  /// Emit one next theme value through the public callback and optional preview.
+  /// Return the currently active editable theme value.
   ///
   /// Parameters:
-  /// - `nextValue`: Full next theme value after one user interaction.
+  /// - None.
+  ///
+  /// Return value:
+  /// - Shared theme when shared mode is active, otherwise the saved override.
+  ///
+  /// Requirements/Preconditions:
+  /// - None.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Never returns `null`.
+  ///
+  /// Invariants:
+  /// - Reading this getter does not mutate editor state.
+  dp.ThemeData get _activeTheme => widget.value.effectiveValue;
+
+  /// Emit one next editor value through the public callback and optional preview.
+  ///
+  /// Parameters:
+  /// - `nextValue`: Full next editor value after one user interaction.
   ///
   /// Return value:
   /// - None.
   ///
   /// Requirements/Preconditions:
-  /// - `nextValue` should describe a valid theme state.
+  /// - `nextValue` should describe a valid theme editor state.
   ///
   /// Guarantees/Postconditions:
   /// - `widget.onChanged` is invoked synchronously with `nextValue`.
-  /// - The preview controller receives a best-effort preview request when present.
+  /// - The preview controller receives the full shared/override editor value when
+  ///   present so hosts can preserve active source during live preview.
   ///
   /// Invariants:
   /// - The widget does not persist theme changes on its own.
-  void _emitValue(dp.ThemeData nextValue) {
+  /// - Preview requests stay unawaited so HSV picker throttling remains the
+  ///   rate limit; hosts must serialize/latest-wins their own I/O.
+  void _emitValue(SharedOverrideEditorValue<dp.ThemeData> nextValue) {
     widget.onChanged(nextValue);
-    final EditorPreviewController<dp.ThemeData>? controller =
-        widget.previewController;
+    final EditorPreviewController<SharedOverrideEditorValue<dp.ThemeData>>?
+        controller = widget.previewController;
     if (controller != null) {
       unawaited(controller.preview(nextValue));
     }
@@ -119,35 +146,35 @@ class _ThemeEditorState extends State<ThemeEditor> {
     switch (roleLabel) {
       case 'Root':
         return dp.ThemeData(
-          displayName: widget.value.displayName,
+          displayName: _activeTheme.displayName,
           primaryColor: hexColor,
-          secondaryColor: widget.value.secondaryColor,
-          accentColor: widget.value.accentColor,
-          backgroundColor: widget.value.backgroundColor,
+          secondaryColor: _activeTheme.secondaryColor,
+          accentColor: _activeTheme.accentColor,
+          backgroundColor: _activeTheme.backgroundColor,
         );
       case 'In Scale':
         return dp.ThemeData(
-          displayName: widget.value.displayName,
-          primaryColor: widget.value.primaryColor,
+          displayName: _activeTheme.displayName,
+          primaryColor: _activeTheme.primaryColor,
           secondaryColor: hexColor,
-          accentColor: widget.value.accentColor,
-          backgroundColor: widget.value.backgroundColor,
+          accentColor: _activeTheme.accentColor,
+          backgroundColor: _activeTheme.backgroundColor,
         );
       case 'Highlight':
         return dp.ThemeData(
-          displayName: widget.value.displayName,
-          primaryColor: widget.value.primaryColor,
-          secondaryColor: widget.value.secondaryColor,
+          displayName: _activeTheme.displayName,
+          primaryColor: _activeTheme.primaryColor,
+          secondaryColor: _activeTheme.secondaryColor,
           accentColor: hexColor,
-          backgroundColor: widget.value.backgroundColor,
+          backgroundColor: _activeTheme.backgroundColor,
         );
       case 'Background':
       default:
         return dp.ThemeData(
-          displayName: widget.value.displayName,
-          primaryColor: widget.value.primaryColor,
-          secondaryColor: widget.value.secondaryColor,
-          accentColor: widget.value.accentColor,
+          displayName: _activeTheme.displayName,
+          primaryColor: _activeTheme.primaryColor,
+          secondaryColor: _activeTheme.secondaryColor,
+          accentColor: _activeTheme.accentColor,
           backgroundColor: hexColor,
         );
     }
@@ -172,14 +199,14 @@ class _ThemeEditorState extends State<ThemeEditor> {
   String _hexColorForRole(String roleLabel) {
     switch (roleLabel) {
       case 'Root':
-        return widget.value.primaryColor;
+        return _activeTheme.primaryColor;
       case 'In Scale':
-        return widget.value.secondaryColor;
+        return _activeTheme.secondaryColor;
       case 'Highlight':
-        return widget.value.accentColor;
+        return _activeTheme.accentColor;
       case 'Background':
       default:
-        return widget.value.backgroundColor;
+        return _activeTheme.backgroundColor;
     }
   }
 
@@ -222,7 +249,79 @@ class _ThemeEditorState extends State<ThemeEditor> {
   /// Invariants:
   /// - Only the currently selected role changes.
   void _handlePickerColorChanged(String hexColor) {
-    _emitValue(_themeWithRoleColor(_selectedRoleLabel, hexColor));
+    _emitValue(
+      widget.value.withEffectiveValue(
+        _themeWithRoleColor(_selectedRoleLabel, hexColor),
+      ),
+    );
+  }
+
+  /// Purpose:
+  /// Switch the editor into shared-mode editing.
+  ///
+  /// Parameters:
+  /// - None.
+  ///
+  /// Return value:
+  /// - None.
+  ///
+  /// Requirements/Preconditions:
+  /// - None.
+  ///
+  /// Guarantees/Postconditions:
+  /// - The shared source becomes active while any saved override remains stored.
+  ///
+  /// Invariants:
+  /// - Theme payloads remain otherwise unchanged.
+  void _handleSharedSelected() {
+    _emitValue(
+      widget.value.copyWith(
+        activeSource: dp.LayoutChoiceActiveSource.shared,
+      ),
+    );
+  }
+
+  /// Purpose:
+  /// Switch the editor into override-mode editing, cloning the shared theme into
+  /// the override slot when needed.
+  ///
+  /// Parameters:
+  /// - None.
+  ///
+  /// Return value:
+  /// - None.
+  ///
+  /// Requirements/Preconditions:
+  /// - None.
+  ///
+  /// Guarantees/Postconditions:
+  /// - The override source becomes active and always has editable data.
+  ///
+  /// Invariants:
+  /// - Shared theme data remains unchanged.
+  void _handleOverrideSelected() {
+    _emitValue(widget.value.activateOverride());
+  }
+
+  /// Purpose:
+  /// Clear any saved override theme and return the editor to shared mode.
+  ///
+  /// Parameters:
+  /// - None.
+  ///
+  /// Return value:
+  /// - None.
+  ///
+  /// Requirements/Preconditions:
+  /// - None.
+  ///
+  /// Guarantees/Postconditions:
+  /// - The saved override is removed and the shared source becomes active.
+  ///
+  /// Invariants:
+  /// - Shared theme data remains unchanged.
+  void _handleResetOverride() {
+    _emitValue(widget.value.resetOverride());
   }
 
   /// Build the full musician-facing theme editor.
@@ -249,6 +348,43 @@ class _ThemeEditorState extends State<ThemeEditor> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
+          if (widget.showSourceSelector) ...<Widget>[
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: SourceToggleCard(
+                    key: const Key('theme-source-shared'),
+                    label: 'Shared',
+                    isSelected: widget.value.activeSource ==
+                        dp.LayoutChoiceActiveSource.shared,
+                    onTap: _handleSharedSelected,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: SourceToggleCard(
+                    key: const Key('theme-source-override'),
+                    label: 'Override',
+                    isSelected: widget.value.activeSource ==
+                        dp.LayoutChoiceActiveSource.overrideValue,
+                    onTap: _handleOverrideSelected,
+                  ),
+                ),
+              ],
+            ),
+            if (widget.value.overrideValue != null) ...<Widget>[
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  key: const Key('theme-reset-override'),
+                  onPressed: _handleResetOverride,
+                  child: const Text('Reset'),
+                ),
+              ),
+            ],
+            const SizedBox(height: 20),
+          ],
           Center(
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 860),
@@ -282,6 +418,48 @@ class _ThemeEditorState extends State<ThemeEditor> {
             showPreviewBar: false,
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Compact segmented-style source selector card used by theme and scale editors.
+class SourceToggleCard extends StatelessWidget {
+  final String label;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  const SourceToggleCard({
+    super.key,
+    required this.label,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    return Material(
+      color: isSelected
+          ? theme.colorScheme.primaryContainer
+          : theme.colorScheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: Text(
+            label,
+            textAlign: TextAlign.center,
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w700,
+              color: isSelected
+                  ? theme.colorScheme.onPrimaryContainer
+                  : theme.colorScheme.onSurface,
+            ),
+          ),
+        ),
       ),
     );
   }

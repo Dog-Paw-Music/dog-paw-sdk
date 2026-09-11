@@ -5,12 +5,25 @@
 // - Standard CRUD tests (via the reusable framework)
 //
 // RUN WITH: flutter test test/integration/layout_test.dart --concurrency=1
+//
+// Request timeout note:
+// Layout CRUD uses a longer DogPawEntity request timeout than the default 5s.
+// Concurrent `setLayout` (ManyCreatedConcurrently) has been observed to take
+// ~6s under suite load while Theme/Scale finish the same stress case in <1s,
+// causing default-timeout flakes (late replies logged as "No matching pending
+// request"). Raising the timeout unblocks the suite; investigating why
+// layout/set is so much slower under concurrency is still worthwhile.
 
 import '../test_support.dart';
 import 'package:dogpaw/dogpaw.dart';
 import 'package:test/test.dart';
 
 import 'crud/crud_test_framework.dart';
+
+/// Request timeout for layout CRUD entities.
+///
+/// Temporary mitigation for concurrent `setLayout` latency; see file header.
+const Duration _kLayoutCrudRequestTimeout = Duration(seconds: 30);
 
 // =============================================================================
 // Layout Traits Implementation
@@ -130,7 +143,7 @@ void main() {
     late TestEntities entities;
 
     setUp(() async {
-      entities = await TestEntities.create();
+      entities = await TestEntities.create(timeout: _kLayoutCrudRequestTimeout);
     });
 
     tearDown(() async {

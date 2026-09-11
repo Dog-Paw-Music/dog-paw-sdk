@@ -16,6 +16,7 @@ export 'src/range.dart';
 export 'src/data_type_spec.dart';
 export 'src/connection_policy.dart';
 export 'src/endpoint.dart';
+export 'src/default_endpoint_helpers.dart';
 export 'src/connection.dart';
 export 'src/mapping_config.dart';
 export 'src/modulation_config.dart';
@@ -23,7 +24,9 @@ export 'src/kv.dart';
 export 'src/theme.dart';
 export 'src/scale.dart';
 export 'src/scale_catalog.dart';
+export 'src/system_shared_theme_scale.dart';
 export 'src/key_intent.dart';
+export 'src/layout_choice.dart';
 export 'src/layout.dart';
 export 'src/layout_builder.dart';
 export 'src/layout_draft.dart';
@@ -45,6 +48,7 @@ export 'src/result.dart';
 // Core utilities
 export 'src/app_logger.dart';
 export 'src/home_screen_commands.dart';
+export 'src/json_constants.dart';
 export 'src/launch_metadata.dart';
 export 'src/path_utils.dart';
 

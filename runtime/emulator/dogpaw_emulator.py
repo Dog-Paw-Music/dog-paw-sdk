@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes.util
 import http.server
 import importlib.util
 import json
@@ -136,8 +137,8 @@ def helper_module_set_exists(candidate_dir: Path) -> bool:
         either the exported runtime directory or a nearby source checkout without
         naming repo-specific path prefixes in public code.
     Parameters:
-        candidate_dir: Directory that may contain `install_app.py` and
-            `install_fingerprint.py`.
+        candidate_dir: Directory that may contain `install_app.py`,
+            `install_fingerprint.py`, and `install_manifest_resolver.py`.
     Return value:
         `True` when both helper modules exist in `candidate_dir`.
     Requirements:
@@ -151,6 +152,7 @@ def helper_module_set_exists(candidate_dir: Path) -> bool:
     return (
         (candidate_dir / "install_app.py").is_file()
         and (candidate_dir / "install_fingerprint.py").is_file()
+        and (candidate_dir / "install_manifest_resolver.py").is_file()
     )
 
 
@@ -165,8 +167,8 @@ def resolve_helper_modules_dir(script_dir: Path, workspace_root: Path) -> Path:
         script_dir: Directory containing `dogpaw_emulator.py`.
         workspace_root: Logical workspace root for this emulator invocation.
     Return value:
-        Directory expected to contain `install_app.py` and
-        `install_fingerprint.py`.
+        Directory expected to contain `install_app.py`, `install_fingerprint.py`,
+        and `install_manifest_resolver.py`.
     Requirements:
         `script_dir` and `workspace_root` should be absolute paths.
     Guarantees:
@@ -285,6 +287,7 @@ RPI_TOOLS_DIR = RUNTIME_LAYOUT.rpi_tools_dir
 SOURCE_LAYOUT_ROOT = resolve_source_layout_root(RUNTIME_LAYOUT)
 install_app = load_helper_module("install_app", RPI_TOOLS_DIR)
 install_fingerprint = load_helper_module("install_fingerprint", RPI_TOOLS_DIR)
+install_manifest_resolver = load_helper_module("install_manifest_resolver", RPI_TOOLS_DIR)
 
 DEFAULT_STARTUP_PLAN = RUNTIME_LAYOUT.script_path.parent / "startup" / "emulator_stack.json"
 RPI_RESOURCE_ROOT = RUNTIME_LAYOUT.resource_root
@@ -309,6 +312,12 @@ DEFAULT_EXTRA_APP_NAMES = (
     "Namer",
     "Voice2LED",
 )
+FLUTTER_SHARED_PACKAGE_NAMES = (
+    "dogpaw",
+    "dogpaw_widgets",
+    "dogpaw_test",
+    "dogpaw_editor_host",
+)
 BRIDGE_INSTALL_NAME = "libdogpaw_bridge.so"
 DEFAULT_SPLASH_BACKGROUND_PATH = "~/.local/share/dogpaw/resources/images/splashScreen.png"
 EMULATOR_CONTROL_GUI_DIR = RUNTIME_LAYOUT.emulator_control_gui_dir
@@ -325,7 +334,7 @@ KEY_GRID_SIMULATOR_ENDPOINTS = (
     "mod_key_press",
     "near_press",
     "raw_sensors",
-    "body_button_input",
+    "mod_key_toggle",
 )
 LOG_HEALTH_SEVERITY_PATTERN = re.compile(
     r"\b(WARNING|ERROR|CRITICAL)\b|"
@@ -712,22 +721,29 @@ def choose_wlr_backends(env: Mapping[str, str], explicit: str | None) -> str:
 
     Purpose:
         Keeps the default faithful to a host-window emulator while allowing
-        callers to override backend choice for diagnostics or CI.
+        callers to override backend choice for diagnostics, CI, or Windows/WSL
+        installs that prefer X11 under WSLg.
     Parameters:
-        env: Environment mapping used to detect host display availability.
+        env: Environment mapping used to detect host display availability and
+            optional `DOGPAW_EMULATOR_WLR_BACKENDS` install default.
         explicit: Caller-provided backend string, or `None` for auto selection.
     Return value:
         Backend string suitable for the `WLR_BACKENDS` environment variable.
     Requirements:
         No external tools are required.
     Guarantees:
-        Prefers Wayland when available, then X11, then headless.
+        Explicit CLI values win. Otherwise a non-empty
+        `DOGPAW_EMULATOR_WLR_BACKENDS` install default wins. Otherwise prefers
+        Wayland when available, then X11, then headless.
     Invariants:
         Explicit values are returned unchanged.
     """
 
     if explicit:
         return explicit
+    configured = (env.get("DOGPAW_EMULATOR_WLR_BACKENDS") or "").strip()
+    if configured:
+        return configured
     if env.get("WAYLAND_DISPLAY"):
         return "wayland"
     if env.get("DISPLAY"):
@@ -1290,8 +1306,15 @@ def print_emulator_logs_summary(payload: Mapping[str, object]) -> None:
         raise ValueError("logs payload paths must be a mapping")
     print(f"Dog Paw emulator logs: {payload['name']}")
     print(f"Persistent emulator log dir: {paths['emulatorLogsDir']}")
-    print(f"Runtime app log dir: {paths['appLogsDir']}")
-    print(f"Epiphany stdout log: {paths['epiphanyStdoutLog']}")
+    print(f"Runtime app log dir (direct-launch fallback): {paths['appLogsDir']}")
+    print(
+        "Optional Epiphany stdout file "
+        f"(DOGPAW_APPLOGGER_STDOUT_FILE): {paths['epiphanyStdoutLog']}"
+    )
+    print(
+        "Production Pi logs use journalctl --user "
+        "(-u dogpaw.service / dogpaw-<instance>-app-<entity>.service)."
+    )
     existing_app_logs = payload.get("existingAppLogs")
     if isinstance(existing_app_logs, list) and existing_app_logs:
         print("Existing app logs:")
@@ -1571,6 +1594,8 @@ def install_default_apps(
             continue
 
         if manifest_is_flutter_app(manifest_path):
+            flutter_project_dir = resolve_flutter_project_dir(manifest_path)
+            ensure_flutter_dependency_overrides(flutter_project_dir)
             command = [
                 str(FLUTTER_INSTALL_WRAPPER),
                 "--manifest",
@@ -2014,6 +2039,29 @@ def resolve_cli_manifest_path(manifest: str) -> Path:
     return manifest_path.resolve()
 
 
+def resolve_cli_manifest_paths(manifest_values: Sequence[str] | None) -> list[Path]:
+    """Resolve one or more CLI `--manifest` values from the caller's cwd.
+
+    Purpose:
+        Supports repeated `--manifest` flags for unified emulator install while
+        preserving ordinary relative-path shell semantics.
+    Parameters:
+        manifest_values: Raw CLI manifest strings, or `None` when omitted.
+    Return value:
+        Absolute resolved manifest paths in the same order as the CLI values.
+    Requirements:
+        Every value must identify an existing manifest file.
+    Guarantees:
+        Raises `FileNotFoundError` for the first missing path.
+    Invariants:
+        Does not deduplicate or reorder beyond the caller-provided sequence.
+    """
+
+    if not manifest_values:
+        return []
+    return [resolve_cli_manifest_path(manifest) for manifest in manifest_values]
+
+
 def resolve_cli_existing_path(path_value: str, label: str) -> Path:
     """Resolve one existing CLI-supplied file or directory path.
 
@@ -2206,7 +2254,7 @@ def resolve_headless_install_binary_path(
             raise ValueError(f"Binary not found: {explicit_binary}")
         return binary_path
 
-    resolved_build_dir = resolve_cli_existing_path(build_dir, "build directory")
+    resolved_build_dir = resolve_emulator_headless_build_dir(build_dir)
     executable_name = resolve_manifest_required_string_field(manifest_path, "executable")
     candidate = resolved_build_dir / "bin" / executable_name
     if not candidate.is_file():
@@ -2215,6 +2263,37 @@ def resolve_headless_install_binary_path(
             "Build it first, or pass --binary PATH."
         )
     return candidate.resolve()
+
+
+def resolve_emulator_headless_build_dir(build_dir: str) -> Path:
+    """Resolve a headless install build directory with packaged-SDK guidance.
+
+    Purpose:
+        Gives custom headless installs a clear recovery path when the default
+        native build directory is absent in an exported SDK checkout.
+    Parameters:
+        build_dir: Absolute or cwd-relative build directory path.
+    Return value:
+        Absolute resolved build directory path.
+    Requirements:
+        `build_dir` must identify an existing directory for successful lookup.
+    Guarantees:
+        Raises `FileNotFoundError`. In packaged layouts the message mentions
+        `runtime/base_apps` seeds and the `--build-dir` escape hatch.
+    Invariants:
+        Does not create directories or run CMake.
+    """
+
+    try:
+        return resolve_cli_existing_path(build_dir, "build directory")
+    except FileNotFoundError as exc:
+        if SOURCE_LAYOUT_ROOT is None:
+            raise FileNotFoundError(
+                f"{exc}. Packaged SDK installs copy stock headless apps from "
+                "runtime/base_apps; for custom headless apps pass --build-dir to a "
+                "configured CMake build tree."
+            ) from exc
+        raise
 
 
 def resolve_headless_extra_binary_paths(manifest_path: Path, build_dir: str) -> list[Path]:
@@ -2243,7 +2322,7 @@ def resolve_headless_extra_binary_paths(manifest_path: Path, build_dir: str) -> 
     declared_names = install_app.declared_extra_binaries(manifest)
     if not declared_names:
         return []
-    resolved_build_dir = resolve_cli_existing_path(build_dir, "build directory")
+    resolved_build_dir = resolve_emulator_headless_build_dir(build_dir)
     paths: list[Path] = []
     for helper_name in declared_names:
         candidate = resolved_build_dir / "bin" / helper_name
@@ -2310,6 +2389,294 @@ def resolve_flutter_bundle_dir(manifest_path: Path, build_mode: str) -> Path:
     ).resolve()
 
 
+def existing_flutter_shared_package_names(shared_packages_root: Path) -> tuple[str, ...]:
+    """Return shared Flutter package names present under one packages root.
+
+    Purpose:
+        Lets override generation include catalog entries such as
+        `dogpaw_editor_host` only when the active checkout actually ships them.
+    Parameters:
+        shared_packages_root: Absolute directory that may contain shared Dog Paw
+            Flutter packages.
+    Return value:
+        Ordered package names from `FLUTTER_SHARED_PACKAGE_NAMES` whose
+        directories exist.
+    Requirements:
+        None.
+    Guarantees:
+        Missing catalog packages are omitted rather than inventing paths.
+    Invariants:
+        Does not create directories or write override files.
+    """
+
+    return tuple(
+        package_name
+        for package_name in FLUTTER_SHARED_PACKAGE_NAMES
+        if (shared_packages_root / package_name).is_dir()
+    )
+
+
+def flutter_shared_package_deps_from_pubspec(pubspec_path: Path) -> tuple[str, ...]:
+    """Return shared Dog Paw package names declared by one app pubspec.
+
+    Purpose:
+        Derives which catalog packages an app actually needs from its
+        `dependencies` / `dev_dependencies` so missing SDK packages fail for
+        that app instead of through a global hardcoded required list.
+    Parameters:
+        pubspec_path: Path to the app's `pubspec.yaml`.
+    Return value:
+        Ordered unique names from `FLUTTER_SHARED_PACKAGE_NAMES` that appear as
+        direct dependency keys.
+    Requirements:
+        `pubspec_path` must exist and be readable text.
+    Guarantees:
+        Ignores unrelated dependencies. Does not resolve transitive packages.
+    Invariants:
+        Does not modify the pubspec or inspect the packages root.
+    """
+
+    section_header = re.compile(r"^(dependencies|dev_dependencies):\s*$")
+    top_level_key = re.compile(r"^[^\s#].*:")
+    map_key = re.compile(r"^  ([A-Za-z0-9_]+):")
+    found: list[str] = []
+    seen: set[str] = set()
+    in_section = False
+    for raw_line in pubspec_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.split("#", 1)[0].rstrip()
+        if line == "":
+            continue
+        if section_header.match(line):
+            in_section = True
+            continue
+        if in_section and top_level_key.match(line):
+            in_section = False
+        if not in_section:
+            continue
+        key_match = map_key.match(line)
+        if key_match is None:
+            continue
+        package_name = key_match.group(1)
+        if package_name in FLUTTER_SHARED_PACKAGE_NAMES and package_name not in seen:
+            found.append(package_name)
+            seen.add(package_name)
+    return tuple(found)
+
+
+def require_flutter_shared_packages_for_app(
+    project_dir: Path,
+    shared_packages_root: Path,
+) -> None:
+    """Fail when one Flutter app needs shared packages absent from the checkout.
+
+    Purpose:
+        Makes missing public-SDK packages an app-scoped contract failure so
+        shipping a new shared dependency is caught when that app is installed,
+        not by maintaining a separate required-package allowlist.
+    Parameters:
+        project_dir: Flutter project directory containing `pubspec.yaml`.
+        shared_packages_root: Checkout packages root used for overrides.
+    Return value:
+        None.
+    Requirements:
+        `project_dir/pubspec.yaml` must exist.
+    Guarantees:
+        Raises `RuntimeError` listing every missing shared package the app
+        declares. Succeeds when all declared shared packages exist.
+    Invariants:
+        Does not write overrides or run Flutter.
+    """
+
+    pubspec_path = project_dir / "pubspec.yaml"
+    if not pubspec_path.is_file():
+        raise FileNotFoundError(f"pubspec.yaml not found: {pubspec_path}")
+    needed = flutter_shared_package_deps_from_pubspec(pubspec_path)
+    available = set(existing_flutter_shared_package_names(shared_packages_root))
+    missing = [name for name in needed if name not in available]
+    if missing:
+        raise RuntimeError(
+            f"Flutter app at {project_dir} depends on shared packages missing "
+            f"from {shared_packages_root}: {', '.join(missing)}"
+        )
+
+
+def resolve_flutter_shared_packages_root(
+    layout: RuntimeLayout,
+    source_layout_root: Path | None,
+) -> Path:
+    """Resolve the shared Flutter package root owned by this Dog Paw checkout.
+
+    Purpose:
+        Lets emulator-driven Flutter installs derive shared package paths from
+        the same SDK or source checkout that owns the invoking `dogpaw` tool.
+
+    Parameters:
+        layout: Runtime layout for the active emulator tool checkout.
+        source_layout_root: Development-checkout root when running from the
+            main Dog Paw source tree, otherwise `None`.
+
+    Return value:
+        Absolute directory containing the shared Dog Paw Flutter packages.
+
+    Requirements:
+        The active checkout must expose a `packages/` directory (packaged SDK)
+        or `uiApps/packages/` (source tree).
+
+    Guarantees:
+        Raises `RuntimeError` when the packages root cannot be resolved or does
+        not exist. Does not require every catalog package to be present.
+
+    Invariants:
+        Uses the tool's own checkout location only; it does not consult
+        user-provided SDK path arguments or environment variables.
+    """
+
+    if layout.packaged:
+        packages_root = (layout.workspace_root / "packages").resolve()
+    elif source_layout_root is not None:
+        packages_root = (source_layout_root / "uiApps" / "packages").resolve()
+    else:
+        raise RuntimeError(
+            "Could not resolve Dog Paw shared Flutter packages from this tool checkout."
+        )
+
+    if not packages_root.is_dir():
+        raise RuntimeError(
+            "Dog Paw shared Flutter packages root is missing from the tool checkout: "
+            f"{packages_root}"
+        )
+    return packages_root
+
+
+def render_flutter_dependency_overrides(shared_packages_root: Path) -> str:
+    """Render generated `pubspec_overrides.yaml` content for Dog Paw apps.
+
+    Purpose:
+        Encodes the machine-local Flutter package overrides needed to build apps
+        against the same SDK checkout that owns the invoking `dogpaw` tool.
+
+    Parameters:
+        shared_packages_root: Absolute directory containing the shared Dog Paw
+            Flutter packages.
+
+    Return value:
+        Complete `pubspec_overrides.yaml` file contents.
+
+    Requirements:
+        `shared_packages_root` should be the directory returned by
+        `resolve_flutter_shared_packages_root()`.
+
+    Guarantees:
+        Produces deterministic YAML suitable for direct equality comparison.
+        Only packages that exist under `shared_packages_root` are listed.
+
+    Invariants:
+        Uses literal absolute paths because Dart/Flutter path dependencies do
+        not support environment-variable interpolation.
+    """
+
+    shared_packages_root = shared_packages_root.resolve()
+    package_names = existing_flutter_shared_package_names(shared_packages_root)
+    lines = [
+        "# Generated by dogpaw. Do not edit.",
+        f"# sdk_packages_root: {shared_packages_root}",
+        "dependency_overrides:",
+    ]
+    for package_name in package_names:
+        lines.extend(
+            (
+                f"  {package_name}:",
+                f"    path: {shared_packages_root / package_name}",
+            )
+        )
+    return "\n".join(lines) + "\n"
+
+
+def write_flutter_dependency_overrides(
+    project_dir: Path,
+    shared_packages_root: Path,
+) -> bool:
+    """Write the generated Flutter dependency override file for one project.
+
+    Purpose:
+        Keeps checked-in `pubspec.yaml` files portable while letting the local
+        Dog Paw workflow materialize machine-specific SDK package paths right
+        before Flutter dependency resolution.
+
+    Parameters:
+        project_dir: Flutter project directory that owns `pubspec.yaml`.
+        shared_packages_root: Absolute directory containing the shared Dog Paw
+            Flutter packages.
+
+    Return value:
+        `True` when `pubspec_overrides.yaml` changed, otherwise `False`.
+
+    Requirements:
+        `project_dir` must already contain `pubspec.yaml`.
+
+    Guarantees:
+        Writes `pubspec_overrides.yaml` next to `pubspec.yaml` and rewrites it
+        whenever the desired SDK package paths change.
+
+    Invariants:
+        Never mutates `pubspec.yaml` itself.
+    """
+
+    pubspec_path = project_dir / "pubspec.yaml"
+    if not pubspec_path.is_file():
+        raise FileNotFoundError(f"pubspec.yaml not found: {pubspec_path}")
+    overrides_path = project_dir / "pubspec_overrides.yaml"
+    desired_text = render_flutter_dependency_overrides(shared_packages_root)
+    current_text = (
+        overrides_path.read_text(encoding="utf-8")
+        if overrides_path.is_file()
+        else None
+    )
+    if current_text == desired_text:
+        return False
+    overrides_path.write_text(desired_text, encoding="utf-8")
+    return True
+
+
+def ensure_flutter_dependency_overrides(project_dir: Path) -> bool:
+    """Ensure one Flutter project has Dog Paw SDK dependency overrides.
+
+    Purpose:
+        Provides the single supported way for Dog Paw workflows to connect an app
+        project to the SDK checkout that owns the invoking `dogpaw` tool.
+
+    Parameters:
+        project_dir: Flutter project directory that will run `flutter pub get`.
+
+    Return value:
+        `True` when the generated override file changed, otherwise `False`.
+
+    Requirements:
+        The active Dog Paw tool checkout must expose a shared packages root, and
+        every shared catalog package declared by the app pubspec must exist
+        there.
+
+    Guarantees:
+        Fails before writing overrides when the app needs a missing shared
+        package. Otherwise writes or refreshes `pubspec_overrides.yaml` for the
+        packages present in the checkout.
+
+    Invariants:
+        Derives the SDK package root from the tool's own checkout location rather
+        than from user-provided SDK path overrides.
+    """
+
+    shared_packages_root = resolve_flutter_shared_packages_root(
+        RUNTIME_LAYOUT,
+        SOURCE_LAYOUT_ROOT,
+    )
+    require_flutter_shared_packages_for_app(project_dir, shared_packages_root)
+    return write_flutter_dependency_overrides(
+        project_dir=project_dir,
+        shared_packages_root=shared_packages_root,
+    )
+
+
 def flutter_build_command(project_dir: Path, build_mode: str) -> list[str]:
     """Build the `flutter build linux` command for one install request.
 
@@ -2356,8 +2723,19 @@ def print_flutter_install_dry_run(manifest_path: Path, app_root: Path, build_mod
 
     project_dir = resolve_flutter_project_dir(manifest_path)
     bundle_dir = resolve_flutter_bundle_dir(manifest_path, build_mode)
+    shared_packages_root = resolve_flutter_shared_packages_root(
+        RUNTIME_LAYOUT,
+        SOURCE_LAYOUT_ROOT,
+    )
     install_tool_path = Path(install_app.__file__).resolve()
-    print(f"cd '{project_dir}' && flutter pub get && {' '.join(flutter_build_command(project_dir, build_mode))}")
+    print(
+        f"write '{project_dir / 'pubspec_overrides.yaml'}' from SDK packages at "
+        f"'{shared_packages_root}'"
+    )
+    print(
+        f"cd '{project_dir}' && flutter pub get && "
+        f"{' '.join(flutter_build_command(project_dir, build_mode))}"
+    )
     print(
         f"python3 '{install_tool_path}' --manifest '{manifest_path}' "
         f"--app-root '{app_root}' --bundle '{bundle_dir}'"
@@ -2663,29 +3041,125 @@ def install_headless_for_emulator(config: EmulatorConfig, args: argparse.Namespa
     if not args.manifest:
         print("Error: --manifest is required", file=sys.stderr)
         return 1
+    if len(args.manifest) != 1:
+        print(
+            "Error: legacy install-headless accepts exactly one --manifest; "
+            "use 'dogpaw emulator install --manifest PATH ...' for multiple apps",
+            file=sys.stderr,
+        )
+        return 1
     try:
-        manifest_path = resolve_cli_manifest_path(args.manifest)
-        binary_path = resolve_headless_install_binary_path(
+        manifest_path = resolve_cli_manifest_path(args.manifest[0])
+        installed_dir = install_headless_manifest_for_emulator(
+            config,
             manifest_path,
-            args.build_dir,
+            resolved_emulator_build_dir(args.build_dir),
             args.binary,
-        )
-        extra_binary_paths = resolve_headless_extra_binary_paths(
-            manifest_path,
-            args.build_dir,
-        )
-        installed_dir = install_app.install_app(
-            manifest_path,
-            config.app_dir,
-            binary_path,
-            None,
-            extra_binary_paths,
         )
     except (FileNotFoundError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     print(installed_dir)
     return 0
+
+
+def resolved_emulator_build_dir(build_dir: str) -> str:
+    """Resolve the build directory text for local emulator app installs.
+
+    Purpose:
+        Gives unified emulator install a deterministic native build directory
+        when the user does not provide `--build-dir`.
+    Parameters:
+        build_dir: Raw CLI build directory value, possibly empty.
+    Return value:
+        Build directory path string.
+    Requirements:
+        None.
+    Guarantees:
+        Empty input resolves to the source checkout's native build directory
+        when available, otherwise the current runtime workspace's native build
+        directory.
+    Invariants:
+        Does not check whether the directory exists or run a build.
+    """
+
+    if build_dir != "":
+        return build_dir
+    default_native_build_dir = "build" + "-native"
+    if SOURCE_LAYOUT_ROOT is not None:
+        return str(SOURCE_LAYOUT_ROOT / default_native_build_dir)
+    return str(WORKSPACE_ROOT / default_native_build_dir)
+
+
+def emulator_install_should_build_native(explicit_build_dir: str) -> bool:
+    """Return whether unified emulator install should run a native CMake rebuild.
+
+    Purpose:
+        Keeps packaged SDK installs on shipped Epiphany/bridge prebuilts unless
+        the caller explicitly opts into a native rebuild with `--build-dir`.
+    Parameters:
+        explicit_build_dir: Raw `--build-dir` CLI value. Empty string means the
+            flag was omitted.
+    Return value:
+        `True` when `cmake --build` should run for the resolved install target
+        union; otherwise `False`.
+    Requirements:
+        None.
+    Guarantees:
+        Explicit `--build-dir` always enables a rebuild. Otherwise rebuilds only
+        when a source layout root is available.
+    Invariants:
+        Does not inspect build outputs or start CMake.
+    """
+
+    if explicit_build_dir != "":
+        return True
+    return SOURCE_LAYOUT_ROOT is not None
+
+
+def install_headless_manifest_for_emulator(
+    config: EmulatorConfig,
+    manifest_path: Path,
+    build_dir: str,
+    explicit_binary: str | None,
+) -> Path:
+    """Install one resolved headless manifest into an emulator registry.
+
+    Purpose:
+        Provides the single-headless-app execution primitive used by both legacy
+        and unified emulator install commands.
+    Parameters:
+        config: Target emulator configuration.
+        manifest_path: Source or packaged headless app manifest.
+        build_dir: Native build directory containing the app executable.
+        explicit_binary: Optional direct binary override for this manifest.
+    Return value:
+        Installed app directory path.
+    Requirements:
+        The resolved binary and any helper binaries must exist.
+    Guarantees:
+        Copies the manifest, binary payload, assets, and install metadata through
+        the shared install core.
+    Invariants:
+        Does not install any dependency manifests by itself.
+    """
+
+    binary_path = resolve_headless_install_binary_path(
+        manifest_path,
+        build_dir,
+        explicit_binary,
+    )
+    extra_binary_paths = resolve_headless_extra_binary_paths(
+        manifest_path,
+        build_dir,
+    )
+    return install_app.install_app(
+        manifest_path,
+        config.app_dir,
+        binary_path,
+        None,
+        extra_binary_paths,
+    )
 
 
 def install_flutter_for_emulator(config: EmulatorConfig, args: argparse.Namespace) -> int:
@@ -2716,13 +3190,21 @@ def install_flutter_for_emulator(config: EmulatorConfig, args: argparse.Namespac
     if not args.manifest:
         print("Error: --manifest is required", file=sys.stderr)
         return 1
+    if len(args.manifest) != 1:
+        print(
+            "Error: legacy install-flutter accepts exactly one --manifest; "
+            "use 'dogpaw emulator install --manifest PATH ...' for multiple apps",
+            file=sys.stderr,
+        )
+        return 1
     try:
-        manifest_path = resolve_cli_manifest_path(args.manifest)
+        manifest_path = resolve_cli_manifest_path(args.manifest[0])
         if args.dry_run:
             print_flutter_install_dry_run(manifest_path, config.app_dir, args.build_mode)
             return 0
         flutter_project_dir = resolve_flutter_project_dir(manifest_path)
-    except (FileNotFoundError, ValueError) as exc:
+        ensure_flutter_dependency_overrides(flutter_project_dir)
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     try:
@@ -2762,6 +3244,320 @@ def install_flutter_for_emulator(config: EmulatorConfig, args: argparse.Namespac
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     print(installed_dir)
+    return 0
+
+
+def build_emulator_manifest_index(
+    seed_manifests: Sequence[install_manifest_resolver.DogpawAppManifest],
+) -> dict[str, install_manifest_resolver.DogpawAppManifest]:
+    """Build the manifest lookup index for emulator install dependency resolution.
+
+    Purpose:
+        Lets emulator installs resolve dependencies from packaged base apps,
+        packaged examples, source app trees, and the explicitly requested seed.
+    Parameters:
+        seed_manifests: User-requested manifests that should also be available
+            for dependency lookup.
+    Return value:
+        Mapping from app name to manifest facts.
+    Requirements:
+        Discoverable manifests must be valid Dog Paw app manifests.
+    Guarantees:
+        Packaged/source discovery keeps its existing precedence, while explicit
+        seeds override matching discovered names.
+    Invariants:
+        Reads manifests only; it does not build or install apps.
+    """
+
+    index = install_manifest_resolver.build_manifest_index(
+        list(default_app_manifest_index().values())
+    )
+    for manifest in seed_manifests:
+        index[manifest.name] = manifest
+    return index
+
+
+def resolve_emulator_install_manifests(
+    manifest_paths: Sequence[Path],
+) -> tuple[install_manifest_resolver.DogpawAppManifest, ...]:
+    """Resolve one or more emulator install manifests and their dependencies.
+
+    Purpose:
+        Provides the emulator's shared dependency expansion step before local app
+        build/install execution.
+    Parameters:
+        manifest_paths: User-selected manifest paths in request order.
+    Return value:
+        Dependency-expanded manifests in install order.
+    Requirements:
+        Every path and every dependency manifest must be valid.
+    Guarantees:
+        Dependencies appear before dependents. Duplicate apps across seeds are
+        installed once.
+    Invariants:
+        Does not build, copy, or install app payloads.
+    """
+
+    seed_manifests = tuple(
+        install_manifest_resolver.manifest_from_path(manifest_path)
+        for manifest_path in manifest_paths
+    )
+    manifest_index = build_emulator_manifest_index(seed_manifests)
+    return install_manifest_resolver.expand_manifests_with_install_dependencies(
+        seed_manifests,
+        manifest_index,
+    )
+
+
+def print_packaged_seed_install_dry_run(manifest_path: Path, app_root: Path) -> None:
+    """Print the packaged base-app seed copy step for dry-run mode.
+
+    Purpose:
+        Makes unified emulator install dry-runs show when a resolved dependency
+        would be installed from a shipped `runtime/base_apps` seed instead of a
+        native build directory.
+    Parameters:
+        manifest_path: Packaged seed manifest that would be copied.
+        app_root: Emulator app registry root that would receive the seed.
+    Return value:
+        None.
+    Requirements:
+        None.
+    Guarantees:
+        Prints a readable copy plan without touching the filesystem.
+    Invariants:
+        Does not create files, build targets, or install apps.
+    """
+
+    print(f"copy packaged seed '{manifest_path}' -> '{app_root}'")
+
+
+def print_headless_install_dry_run(manifest_path: Path, app_root: Path, build_dir: str) -> None:
+    """Print the local headless install steps for dry-run mode.
+
+    Purpose:
+        Makes unified emulator install dry-runs show how resolved headless
+        dependencies would be copied into the app registry.
+    Parameters:
+        manifest_path: Manifest that would be installed.
+        app_root: Emulator app registry root.
+        build_dir: Native build directory used for executable lookup.
+    Return value:
+        None.
+    Requirements:
+        `manifest_path` must describe a valid headless app.
+    Guarantees:
+        Prints readable commands without checking binary existence.
+    Invariants:
+        Does not create files, build targets, or install apps.
+    """
+
+    manifest = install_manifest_resolver.manifest_from_path(manifest_path)
+    executable = manifest.executable or ""
+    install_tool_path = Path(install_app.__file__).resolve()
+    print(
+        "python3 "
+        f"'{install_tool_path}' --manifest '{manifest_path}' --app-root '{app_root}' "
+        f"--binary '{Path(build_dir) / 'bin' / executable}'"
+    )
+
+
+def print_emulator_build_dry_run(build_dir: str, targets: Sequence[str]) -> None:
+    """Print the native CMake build command for emulator install dry-runs.
+
+    Purpose:
+        Shows the target union that unified emulator install would build before
+        copying resolved app payloads.
+    Parameters:
+        build_dir: Native CMake build directory.
+        targets: CMake targets in requested order.
+    Return value:
+        None.
+    Requirements:
+        `targets` may be empty.
+    Guarantees:
+        Prints nothing when no targets are requested.
+    Invariants:
+        Does not run CMake or inspect the build directory.
+    """
+
+    if not targets:
+        return
+    command = ["cmake", "--build", build_dir]
+    for target in targets:
+        command.extend(["--target", target])
+    print(shlex.join(command))
+
+
+def build_emulator_install_targets(build_dir: str, targets: Sequence[str]) -> int:
+    """Build native targets needed by a real emulator install.
+
+    Purpose:
+        Ensures headless dependencies and shared runtime artifacts exist before
+        local install copying begins.
+    Parameters:
+        build_dir: Native CMake build directory.
+        targets: CMake targets to build.
+    Return value:
+        Zero on success, otherwise the CMake process exit code.
+    Requirements:
+        `build_dir` must name a configured CMake build directory for real runs.
+    Guarantees:
+        Runs at most one CMake build command.
+    Invariants:
+        Does not install app registry entries.
+    """
+
+    if not targets:
+        return 0
+    command = ["cmake", "--build", build_dir]
+    for target in targets:
+        command.extend(["--target", target])
+    completed = subprocess.run(command, cwd=str(SOURCE_LAYOUT_ROOT or WORKSPACE_ROOT), check=False)
+    return int(completed.returncode)
+
+
+def install_resolved_manifest_for_emulator(
+    config: EmulatorConfig,
+    manifest: install_manifest_resolver.DogpawAppManifest,
+    args: argparse.Namespace,
+    build_dir: str,
+    explicit_binary: str | None,
+) -> Path:
+    """Install one resolved manifest into the emulator app registry.
+
+    Purpose:
+        Chooses the correct local install primitive after shared dependency
+        resolution has already selected the manifest order.
+    Parameters:
+        config: Target emulator configuration.
+        manifest: Resolved manifest facts for one app.
+        args: Parsed emulator CLI options.
+        build_dir: Native build directory used for headless payloads.
+        explicit_binary: Optional binary override for a single headless app.
+    Return value:
+        Installed app directory path.
+    Requirements:
+        Flutter apps must be buildable locally; headless binaries must exist
+        unless the manifest is a packaged base-app seed.
+    Guarantees:
+        Packaged `runtime/base_apps` seeds are copied directly. Flutter apps are
+        built locally. Other headless apps resolve binaries from `build_dir`.
+    Invariants:
+        Does not resolve or install dependencies by itself.
+    """
+
+    if manifest_is_packaged_app_seed(manifest.manifest_path):
+        return install_packaged_app_seed(manifest.manifest_path, config.app_dir)
+    if manifest.is_flutter:
+        flutter_project_dir = resolve_flutter_project_dir(manifest.manifest_path)
+        ensure_flutter_dependency_overrides(flutter_project_dir)
+        pub_get_result = subprocess.run(
+            ["flutter", "pub", "get"],
+            cwd=str(flutter_project_dir),
+            check=False,
+        )
+        if pub_get_result.returncode != 0:
+            raise RuntimeError(f"flutter pub get failed for {manifest.name}")
+        build_result = subprocess.run(
+            flutter_build_command(flutter_project_dir, args.build_mode),
+            cwd=str(flutter_project_dir),
+            check=False,
+        )
+        if build_result.returncode != 0:
+            raise RuntimeError(f"flutter build failed for {manifest.name}")
+        bundle_dir = resolve_flutter_bundle_dir(manifest.manifest_path, args.build_mode)
+        if not bundle_dir.is_dir():
+            raise ValueError(f"expected Flutter bundle not found: {bundle_dir}")
+        return install_app.install_app(
+            manifest.manifest_path,
+            config.app_dir,
+            None,
+            bundle_dir,
+            [],
+        )
+    return install_headless_manifest_for_emulator(
+        config,
+        manifest.manifest_path,
+        build_dir,
+        explicit_binary,
+    )
+
+
+def install_manifest_set_for_emulator(config: EmulatorConfig, args: argparse.Namespace) -> int:
+    """Install a manifest and its dependencies into one emulator.
+
+    Purpose:
+        Implements the unified `dogpaw emulator install` command using shared
+        dependency resolution and local app install primitives.
+    Parameters:
+        config: Target emulator configuration.
+        args: Parsed emulator CLI options.
+    Return value:
+        Zero on success, otherwise non-zero failure status.
+    Requirements:
+        The emulator must exist and at least one `--manifest` must be provided.
+    Guarantees:
+        Installs dependencies before dependents across every requested seed
+        manifest. Dry-run prints the build/install plan without modifying the
+        filesystem. Native CMake rebuild runs for source checkouts or explicit
+        `--build-dir`; packaged SDK installs skip that rebuild and keep shipped
+        prebuilts.
+    Invariants:
+        Does not install into any emulator other than `config.emulator_name`.
+    """
+
+    if not require_existing_emulator(config):
+        return 1
+    if not args.manifest:
+        print("Error: --manifest is required", file=sys.stderr)
+        return 1
+    try:
+        manifest_paths = resolve_cli_manifest_paths(args.manifest)
+        scoped_manifests = resolve_emulator_install_manifests(manifest_paths)
+    except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    should_build_native = emulator_install_should_build_native(args.build_dir)
+    build_dir = resolved_emulator_build_dir(args.build_dir)
+    headless_manifests = tuple(manifest for manifest in scoped_manifests if not manifest.is_flutter)
+    if args.binary is not None and len(headless_manifests) != 1:
+        print(
+            "Error: --binary is only supported when the resolved install set has one headless app",
+            file=sys.stderr,
+        )
+        return 1
+    build_targets = install_manifest_resolver.build_targets_for_manifests(scoped_manifests)
+    if args.dry_run:
+        if should_build_native:
+            print_emulator_build_dry_run(build_dir, build_targets)
+        for manifest in scoped_manifests:
+            if manifest_is_packaged_app_seed(manifest.manifest_path):
+                print_packaged_seed_install_dry_run(manifest.manifest_path, config.app_dir)
+            elif manifest.is_flutter:
+                print_flutter_install_dry_run(manifest.manifest_path, config.app_dir, args.build_mode)
+            else:
+                print_headless_install_dry_run(manifest.manifest_path, config.app_dir, build_dir)
+        return 0
+
+    if should_build_native:
+        build_result = build_emulator_install_targets(build_dir, build_targets)
+        if build_result != 0:
+            return build_result
+    try:
+        for manifest in scoped_manifests:
+            installed_dir = install_resolved_manifest_for_emulator(
+                config,
+                manifest,
+                args,
+                build_dir,
+                args.binary if len(headless_manifests) == 1 and not manifest.is_flutter else None,
+            )
+            print(installed_dir)
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -2920,7 +3716,7 @@ def bak_control_socket_path(config: EmulatorConfig) -> Path:
     Parameters:
         config: Resolved emulator configuration.
     Return value:
-        Path to the Unix socket used by running `buttonsAndKnobs --simulator`.
+        Path to the Unix socket used by running `buttonsAndKnobs --simulate`.
     Requirements:
         The simulator must be running for the socket to exist.
     Guarantees:
@@ -3149,7 +3945,7 @@ def bak_control_payload(args: argparse.Namespace) -> dict[str, object]:
 
     Purpose:
         Converts `dogpaw_emulator.py bak ...` syntax into the private JSON-lines
-        protocol consumed by `buttonsAndKnobs --simulator`.
+        protocol consumed by `buttonsAndKnobs --simulate`.
     Parameters:
         args: Parsed CLI namespace with `key_action`, `key_args`, and optional
             `bak_duration_ms`.
@@ -3281,7 +4077,7 @@ def send_bak_control(config: EmulatorConfig, args: argparse.Namespace) -> int:
         Process exit code: 0 on simulator acceptance, 1 on validation or socket
         failure.
     Requirements:
-        The named emulator must be running with `buttonsAndKnobs --simulator`.
+        The named emulator must be running with `buttonsAndKnobs --simulate`.
     Guarantees:
         Sends exactly one JSON-line control payload when validation succeeds.
     Invariants:
@@ -5041,6 +5837,149 @@ def run_diagnostic_command(command: list[str]) -> subprocess.CompletedProcess[st
     )
 
 
+def run_diagnostic_command_raw(command: Sequence[str]) -> subprocess.CompletedProcess[bytes]:
+    """Run one read-only host diagnostic command without newline normalization.
+
+    Purpose:
+        Supports doctor checks that need exact byte-level output, such as
+        detecting carriage returns that can reveal Windows command leakage into a
+        Linux/WSL workflow.
+    Parameters:
+        command: Argument vector for the command to run.
+    Return value:
+        Completed process with raw stdout/stderr bytes.
+    Requirements:
+        The command should be read-only and safe to run during `doctor`.
+    Guarantees:
+        Does not raise for non-zero command exit status.
+    Invariants:
+        Does not mutate emulator roots or runtime state.
+    """
+
+    return subprocess.run(
+        list(command),
+        text=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+
+WINDOWS_PATH_LEAKAGE_COMMANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("python3", ("python3", "--version")),
+    ("sed", ("sed", "--version")),
+    ("realpath", ("realpath", "--version")),
+    ("sway", ("sway", "--help")),
+    ("swaymsg", ("swaymsg", "--help")),
+    ("jack_lsp", ("jack_lsp", "--help")),
+    ("flutter", ("flutter", "--version")),
+)
+
+
+def looks_like_windows_host_path(path_text: str) -> bool:
+    """Return whether one resolved command path appears to come from Windows.
+
+    Purpose:
+        Detects the common WSL failure mode where Linux command lookup resolves
+        into `/mnt/<drive>/...` or a Windows executable extension instead of a
+        native Linux binary.
+    Parameters:
+        path_text: Resolved executable path from command lookup.
+    Return value:
+        `True` when the path looks like a Windows-host executable path.
+    Requirements:
+        `path_text` should be a non-empty absolute or relative executable path.
+    Guarantees:
+        Treats mount-backed Windows paths and standard Windows executable
+        extensions as leakage indicators.
+    Invariants:
+        Pure string inspection only; does not touch the filesystem.
+    """
+
+    normalized = path_text.replace("\\", "/").lower()
+    if re.match(r"^/mnt/[a-z]/", normalized):
+        return True
+    return normalized.endswith((".exe", ".cmd", ".bat", ".com"))
+
+
+def windows_path_leakage_report(
+    env: Mapping[str, str] | None = None,
+    commands_to_check: Sequence[tuple[str, Sequence[str]]] = WINDOWS_PATH_LEAKAGE_COMMANDS,
+    runner: Callable[[Sequence[str]], subprocess.CompletedProcess[bytes]] = run_diagnostic_command_raw,
+) -> dict[str, object]:
+    """Check whether key emulator commands leak to Windows executables or CRLF output.
+
+    Purpose:
+        Gives `dogpaw emulator doctor` an early WSL-focused sanity check for the
+        misleading case where command resolution escapes into Windows PATH
+        entries, often producing carriage-return output or permission errors
+        instead of normal Linux tool behavior.
+    Parameters:
+        env: Optional environment mapping whose `PATH` should be used for command
+            resolution. When omitted, inherits the current process environment.
+        commands_to_check: Pairs of command labels and read-only diagnostic
+            command vectors used to probe those tools.
+        runner: Raw command runner used for test injection and byte-accurate
+            diagnostic output capture.
+    Return value:
+        JSON-serializable report with `ok`, `failures`, and per-command `details`.
+    Requirements:
+        Diagnostic commands should be safe to invoke in a read-only environment.
+    Guarantees:
+        Missing commands are skipped here so normal dependency checks remain the
+        source of truth for "not installed" failures.
+    Invariants:
+        Does not mutate environment variables, PATH entries, or emulator state.
+    """
+
+    failures: list[str] = []
+    details: list[dict[str, object]] = []
+    path_override = env.get("PATH") if env is not None else None
+    for command_name, diagnostic_command in commands_to_check:
+        resolved_path = shutil.which(command_name, path=path_override)
+        if resolved_path is None:
+            continue
+
+        windows_path = looks_like_windows_host_path(resolved_path)
+        carriage_return_detected = False
+        try:
+            result = runner(list(diagnostic_command))
+        except FileNotFoundError:
+            result = subprocess.CompletedProcess(list(diagnostic_command), 127, b"", b"")
+        except OSError as exception:
+            result = subprocess.CompletedProcess(
+                list(diagnostic_command),
+                1,
+                b"",
+                str(exception).encode("utf-8", errors="replace"),
+            )
+
+        stdout_bytes = result.stdout if isinstance(result.stdout, bytes) else b""
+        stderr_bytes = result.stderr if isinstance(result.stderr, bytes) else b""
+        carriage_return_detected = b"\r" in stdout_bytes or b"\r" in stderr_bytes
+        if not windows_path and not carriage_return_detected:
+            continue
+
+        if windows_path:
+            failures.append(f"{command_name}_resolves_to_windows_path")
+        if carriage_return_detected:
+            failures.append(f"{command_name}_output_contains_carriage_return")
+        details.append(
+            {
+                "command": command_name,
+                "resolvedPath": resolved_path,
+                "windowsPath": windows_path,
+                "carriageReturnDetected": carriage_return_detected,
+            }
+        )
+
+    return {
+        "ok": not failures,
+        "failures": failures,
+        "details": details,
+    }
+
+
 def parse_jack_lsp_typed_ports(output: str) -> dict[str, list[str]]:
     """Parse `jack_lsp -t` output into audio and MIDI port lists.
 
@@ -5215,6 +6154,28 @@ def audio_midi_report(
     }
 
 
+def gtk_layer_shell_library_available() -> bool:
+    """Return whether the GTK layer-shell shared library is findable.
+
+    Purpose:
+        Lets emulator doctor detect the status-bar runtime dependency before
+        `dog_paw_status_bar` fails at process start with a missing `.so`.
+    Parameters:
+        None.
+    Return value:
+        `True` when `libgtk-layer-shell` resolves via the dynamic linker search
+        path; otherwise `False`.
+    Requirements/Preconditions:
+        None.
+    Guarantees/Postconditions:
+        Never raises for a missing library.
+    Invariants:
+        Does not load the library into the current process beyond linker lookup.
+    """
+
+    return ctypes.util.find_library("gtk-layer-shell") is not None
+
+
 def dependency_report(config: EmulatorConfig, env: Mapping[str, str] | None = None) -> dict[str, object]:
     """Check external executables needed for emulator startup.
 
@@ -5244,13 +6205,23 @@ def dependency_report(config: EmulatorConfig, env: Mapping[str, str] | None = No
     staged_bridge = emulator_bridge_library_path(config)
     if not staged_bridge.is_file() and resolve_bridge_source_library() is None:
         missing.append("dogpaw_bridge")
-    display_report = host_display_report(env or os.environ)
+    if not gtk_layer_shell_library_available():
+        missing.append("libgtk-layer-shell")
+    resolved_env = env or os.environ
+    display_report = host_display_report(resolved_env)
     audio_report = audio_midi_report()
+    path_leakage_report = windows_path_leakage_report(resolved_env)
     return {
-        "ok": not missing and display_report["mode"] != "none" and bool(audio_report["ok"]),
+        "ok": (
+            not missing
+            and display_report["mode"] != "none"
+            and bool(audio_report["ok"])
+            and bool(path_leakage_report["ok"])
+        ),
         "missing": missing,
         "hostDisplay": display_report,
         "audioMidi": audio_report,
+        "pathLeakage": path_leakage_report,
         "warnings": list(audio_report["warnings"]),
     }
 
@@ -5279,6 +6250,7 @@ def print_dependency_report_summary(report: Mapping[str, object], stream: object
     audio_midi = report["audioMidi"]
     jack = audio_midi["jack"]
     host_audio_stack = audio_midi["hostAudioStack"]
+    path_leakage = report["pathLeakage"]
     warnings = ", ".join(audio_midi["warnings"]) if audio_midi["warnings"] else "none"
     failures = ", ".join(audio_midi["failures"]) if audio_midi["failures"] else "none"
 
@@ -5293,6 +6265,48 @@ def print_dependency_report_summary(report: Mapping[str, object], stream: object
     print(f"Host audio stack: {host_audio_stack['jackProvider']}", file=stream)
     print(f"Audio/MIDI failures: {failures}", file=stream)
     print(f"Audio/MIDI warnings: {warnings}", file=stream)
+    if "jack_server_unavailable" in audio_midi["failures"]:
+        print(
+            "JACK remediation: start a JACK server, for example: jackd -d dummy",
+            file=stream,
+        )
+        print(
+            "WSL audio remediation: enable ./scripts/wsl-audio/install-user-units.sh "
+            "(or scripts/windows/Setup-DogPawWsl.ps1 for an isolated DogPaw distro).",
+            file=stream,
+        )
+    if "libgtk-layer-shell" in report["missing"]:
+        print(
+            "Status bar remediation: install libgtk-layer-shell0 "
+            "(sudo apt install libgtk-layer-shell0).",
+            file=stream,
+        )
+    print(
+        "WSLg screen remediation: if the nested screen window has no title bar, "
+        "rerun with --wlr-backends x11.",
+        file=stream,
+    )
+    print(
+        "Windows path leakage: "
+        + ("clear" if path_leakage["ok"] else "detected"),
+        file=stream,
+    )
+    if not path_leakage["ok"]:
+        for detail in path_leakage["details"]:
+            issue_fragments: list[str] = []
+            if detail["windowsPath"]:
+                issue_fragments.append("resolves to a Windows path")
+            if detail["carriageReturnDetected"]:
+                issue_fragments.append("diagnostic output contains carriage returns")
+            print(
+                f"{detail['command']}: {'; '.join(issue_fragments)}"
+                f" ({detail['resolvedPath']})",
+                file=stream,
+            )
+        print(
+            "WSL remediation: set [interop] appendWindowsPath=false in /etc/wsl.conf and restart WSL.",
+            file=stream,
+        )
 
 
 def config_payload(config: EmulatorConfig) -> dict[str, str]:
@@ -6272,6 +7286,7 @@ def build_parser() -> argparse.ArgumentParser:
             "info",
             "logs",
             "delete",
+            "install",
             "install-headless",
             "install-flutter",
             "smoke",
@@ -6303,7 +7318,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--hardware-profile",
         help="Hardware profile whose Sway config should be used by the emulator.",
     )
-    parser.add_argument("--manifest", help="Dog Paw app manifest for install commands.")
+    parser.add_argument(
+        "--manifest",
+        action="append",
+        help="Dog Paw app manifest for install commands. May be repeated.",
+    )
     parser.add_argument(
         "--build-dir",
         default="",
@@ -6494,10 +7513,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Deleted Dog Paw emulator '{config.emulator_name}'")
         return 0
 
+    if args.command == "install":
+        return install_manifest_set_for_emulator(config, args)
+
     if args.command == "install-headless":
+        print(
+            "Warning: 'dogpaw emulator install-headless' is deprecated; use "
+            "'dogpaw emulator install --manifest PATH' instead.",
+            file=sys.stderr,
+        )
         return install_headless_for_emulator(config, args)
 
     if args.command == "install-flutter":
+        print(
+            "Warning: 'dogpaw emulator install-flutter' is deprecated; use "
+            "'dogpaw emulator install --manifest PATH' instead.",
+            file=sys.stderr,
+        )
         return install_flutter_for_emulator(config, args)
 
     if args.command == "smoke":

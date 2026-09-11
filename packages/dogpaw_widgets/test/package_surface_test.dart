@@ -82,29 +82,37 @@ dp.EndpointInfo _buildFocusedEndpoint() {
 
 void main() {
   test('package exports shared editor surface', () async {
-    final _RecordingPreviewController<dp.ScaleData> scalePreviewController =
-        _RecordingPreviewController<dp.ScaleData>();
-    final _RecordingPreviewController<dp.ThemeData> themePreviewController =
-        _RecordingPreviewController<dp.ThemeData>();
+    final _RecordingPreviewController<SharedOverrideEditorValue<dp.ScaleData>>
+        scalePreviewController =
+        _RecordingPreviewController<SharedOverrideEditorValue<dp.ScaleData>>();
+    final _RecordingPreviewController<SharedOverrideEditorValue<dp.ThemeData>>
+        themePreviewController =
+        _RecordingPreviewController<SharedOverrideEditorValue<dp.ThemeData>>();
     final _RecordingPreviewController<dp.LayoutDraft> layoutPreviewController =
         _RecordingPreviewController<dp.LayoutDraft>();
 
     final Widget scaleEditor = ScaleEditor(
-      value: const dp.ScaleData(
-        rootNote: 0,
-        noteCategories: <int>[1, -1, 1, -1, 1, 1, -1, 1, -1, 1, -1, 1],
+      value: const SharedOverrideEditorValue<dp.ScaleData>(
+        activeSource: dp.LayoutChoiceActiveSource.shared,
+        sharedValue: dp.ScaleData(
+          rootNote: 0,
+          noteCategories: <int>[1, -1, 1, -1, 1, 1, -1, 1, -1, 1, -1, 1],
+        ),
       ),
       onChanged: (_) {},
       previewController: scalePreviewController,
     );
 
     final Widget themeEditor = ThemeEditor(
-      value: const dp.ThemeData(
-        displayName: 'Test Theme',
-        primaryColor: '#ff0000',
-        secondaryColor: '#00ff00',
-        accentColor: '#0000ff',
-        backgroundColor: '#101010',
+      value: const SharedOverrideEditorValue<dp.ThemeData>(
+        activeSource: dp.LayoutChoiceActiveSource.shared,
+        sharedValue: dp.ThemeData(
+          displayName: 'Test Theme',
+          primaryColor: '#ff0000',
+          secondaryColor: '#00ff00',
+          accentColor: '#0000ff',
+          backgroundColor: '#101010',
+        ),
       ),
       onChanged: (_) {},
       previewController: themePreviewController,
@@ -114,6 +122,20 @@ void main() {
       value: const dp.LayoutDraft(),
       onChanged: (_) {},
       previewController: layoutPreviewController,
+      sharedTheme: const dp.ThemeData(
+        displayName: 'Shared Theme',
+        primaryColor: '#ff0000',
+        secondaryColor: '#00ff00',
+        accentColor: '#0000ff',
+        backgroundColor: '#101010',
+      ),
+      sharedScale: const dp.ScaleData(
+        displayName: 'Shared Scale',
+        rootNote: 0,
+        noteCategories: <int>[1, -1, 1, -1, 1, 1, -1, 1, -1, 1, -1, 1],
+      ),
+      onSharedThemeChanged: (_) {},
+      onSharedScaleChanged: (_) {},
     );
 
     final Widget hsvColorPicker = HsvColorPicker(
@@ -134,9 +156,12 @@ void main() {
     expect(connectionPicker, isA<Widget>());
 
     await scalePreviewController.preview(
-      const dp.ScaleData(
-        rootNote: 7,
-        noteCategories: <int>[1, -1, 1, -1, 1, 1, -1, 1, -1, 1, -1, 1],
+      const SharedOverrideEditorValue<dp.ScaleData>(
+        activeSource: dp.LayoutChoiceActiveSource.shared,
+        sharedValue: dp.ScaleData(
+          rootNote: 7,
+          noteCategories: <int>[1, -1, 1, -1, 1, 1, -1, 1, -1, 1, -1, 1],
+        ),
       ),
     );
     await themePreviewController.clear();

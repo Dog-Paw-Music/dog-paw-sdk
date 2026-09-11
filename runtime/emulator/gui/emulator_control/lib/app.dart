@@ -494,7 +494,9 @@ class EmulatorControlScreen extends StatelessWidget {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
-                                      'Left click presses a key. Right click sends the active state.',
+                                      'Left click presses a key. Right click sends the active state. '
+                                      'Middle click toggles a held press so you can click elsewhere '
+                                      'and middle-click again to release.',
                                     ),
                                     SizedBox(height: 12),
                                     Text(
@@ -747,6 +749,7 @@ class _PointerSession {
 class _KeyGridState extends State<_KeyGrid> {
   final Map<int, _PointerSession> _pointerSessions = <int, _PointerSession>{};
   final Map<String, EmulatorKeyState> _visualStates = <String, EmulatorKeyState>{};
+  final Set<String> _latchedKeys = <String>{};
 
   /// Build the 8x8 Dog Paw key grid.
   ///
@@ -807,13 +810,15 @@ class _KeyGridState extends State<_KeyGrid> {
 
   /// Handle the start of one key-pointer interaction.
   ///
-  /// Purpose: chooses active-only or pressed mode from the mouse button and
-  /// forwards the initial key-state request to the bridge callback.
+  /// Purpose: chooses latch toggle, active-only, or pressed mode from the mouse
+  /// button and forwards the initial key-state request to the bridge callback.
   /// Parameters: [col], [row], and [event] identify the key tile and pointer.
   /// Return value: future completed after any bridge callback finishes.
   /// Requirements: [event.localPosition] must be relative to the tile bounds.
-  /// Guarantees: primary button overrules secondary button when both are down.
-  /// Invariants: disabled grids do not create pointer sessions.
+  /// Guarantees: middle click toggles a sticky press without a hold session;
+  /// primary/secondary clear any latch on that key then create a momentary
+  /// session; primary overrules secondary when both are down.
+  /// Invariants: disabled grids do not create pointer sessions or latch keys.
   Future<void> _handlePointerDown(
     int col,
     int row,
@@ -823,10 +828,15 @@ class _KeyGridState extends State<_KeyGrid> {
     if (!widget.enabled) {
       return;
     }
+    if (_isMiddleButton(event.buttons)) {
+      await _toggleLatchedPress(col, row, tileSize);
+      return;
+    }
     final EmulatorKeyState? state = _stateForButtons(event.buttons);
     if (state == null) {
       return;
     }
+    _latchedKeys.remove(_keyId(col, row));
     final _PointerSession session = _PointerSession(
       col: col,
       row: row,
@@ -836,6 +846,55 @@ class _KeyGridState extends State<_KeyGrid> {
     );
     _pointerSessions[event.pointer] = session;
     await _sendSessionState(session);
+  }
+
+  /// Toggle a sticky pressed latch for one key via middle click.
+  ///
+  /// Purpose: lets the operator hold a key without keeping the mouse button
+  /// down, then click elsewhere and middle-click again to release.
+  /// Parameters: [col] and [row] identify the key; [tileSize] sizes mid-tile
+  /// default pressure/bend values.
+  /// Return value: future completed after the bridge callback finishes.
+  /// Requirements: the grid must be enabled; coordinates in range 0..7.
+  /// Guarantees: latch-on sends `pressed` with mid-tile defaults and keeps the
+  /// local `P` badge; latch-off sends `rest` and clears the badge; no pointer
+  /// session is created, so pointer-up does not release the latch.
+  /// Invariants: only middle-click and primary/secondary down on the same key
+  /// change membership of [_latchedKeys].
+  Future<void> _toggleLatchedPress(int col, int row, Size tileSize) async {
+    final String keyId = _keyId(col, row);
+    final Offset midTile = Offset(tileSize.width / 2.0, tileSize.height / 2.0);
+    final _PointerSession syntheticSession = _PointerSession(
+      col: col,
+      row: row,
+      state: EmulatorKeyState.pressed,
+      tileSize: tileSize,
+      lastLocalPosition: midTile,
+    );
+    if (_latchedKeys.contains(keyId)) {
+      _latchedKeys.remove(keyId);
+      await _sendState(
+        syntheticSession,
+        EmulatorKeyState.rest,
+        clearVisualState: true,
+      );
+      return;
+    }
+    _latchedKeys.add(keyId);
+    await _sendState(syntheticSession, EmulatorKeyState.pressed);
+  }
+
+  /// True when the pointer button mask includes the middle (tertiary) button.
+  ///
+  /// Purpose: detects middle-click latch gestures separately from momentary
+  /// left/right hold sessions.
+  /// Parameters: [buttons] is a Flutter pointer button bitmask.
+  /// Return value: true when the middle mouse button bit is set.
+  /// Requirements: [buttons] must come from a Flutter pointer event.
+  /// Guarantees: does not interpret primary or secondary bits.
+  /// Invariants: none.
+  bool _isMiddleButton(int buttons) {
+    return (buttons & kMiddleMouseButton) != 0;
   }
 
   /// Handle pointer motion for one held key.
@@ -905,8 +964,10 @@ class _KeyGridState extends State<_KeyGrid> {
   /// Parameters: [col], [row], and [event] identify the tile and pointer.
   /// Return value: future completed after local cleanup finishes.
   /// Requirements: none.
-  /// Guarantees: clears any stored session and visual state for that key.
-  /// Invariants: does not attempt a bridge request after cancellation.
+  /// Guarantees: clears any stored session and visual state for that key unless
+  /// the key remains middle-click latched.
+  /// Invariants: does not attempt a bridge request after cancellation; does not
+  /// clear [_latchedKeys] membership.
   Future<void> _handlePointerCancel(
     int col,
     int row,
@@ -917,8 +978,12 @@ class _KeyGridState extends State<_KeyGrid> {
     if (!mounted) {
       return;
     }
+    final String keyId = _keyId(col, row);
+    if (_latchedKeys.contains(keyId)) {
+      return;
+    }
     setState(() {
-      _visualStates.remove(_keyId(col, row));
+      _visualStates.remove(keyId);
     });
   }
 
@@ -1019,16 +1084,17 @@ class _KeyGridState extends State<_KeyGrid> {
     }
   }
 
-  /// Choose the desired key state from one mouse-button bitmask.
+  /// Choose the desired momentary key state from one mouse-button bitmask.
   ///
   /// Purpose: implements the phase rule that left click presses while right
-  /// click activates, and that left click overrules right click.
+  /// click activates, and that left click overrules right click. Middle click
+  /// is handled separately as a latch toggle.
   /// Parameters: [buttons] is the Flutter pointer button mask.
-  /// Return value: desired [EmulatorKeyState], or null when no relevant button
+  /// Return value: desired [EmulatorKeyState], or null when no momentary button
   /// is active.
   /// Requirements: [buttons] must come from a Flutter pointer event.
   /// Guarantees: primary wins when both primary and secondary are present.
-  /// Invariants: only primary and secondary buttons affect key state.
+  /// Invariants: only primary and secondary buttons affect momentary key state.
   EmulatorKeyState? _stateForButtons(int buttons) {
     if ((buttons & kPrimaryMouseButton) != 0) {
       return EmulatorKeyState.pressed;

@@ -196,6 +196,7 @@ class NativeDogPawEntityClient {
       String commandId)? _commandCallback;
   Future<bool> Function(String serverRequestId, Map<String, dynamic> content)?
       _presetRequestCallback;
+  void Function(Map<String, dynamic> event)? _debugProbeEventCallback;
   final Map<int, OnAcceptedCallback> _pendingCommandAcceptedCallbacks =
       <int, OnAcceptedCallback>{};
 
@@ -468,6 +469,31 @@ class NativeDogPawEntityClient {
     _presetRequestCallback = callback;
   }
 
+  /// Purpose: Store the Dart callback that receives synthetic bridge probe
+  /// events.
+  ///
+  /// Parameters:
+  /// - [callback]: optional callback invoked with the full debug-probe event
+  ///   envelope, or `null` to clear it.
+  ///
+  /// Return value: None.
+  ///
+  /// Requirements/Preconditions:
+  /// - The wrapper has not been disposed.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Future native `debugProbe` envelopes are forwarded to [callback] when
+  ///   set.
+  ///
+  /// Invariants:
+  /// - This test hook is for bridge integration probes only.
+  void setDebugProbeEventCallback(
+    void Function(Map<String, dynamic> event)? callback,
+  ) {
+    _ensureNotDisposed();
+    _debugProbeEventCallback = callback;
+  }
+
   /// Purpose: Normalize entity lifecycle filters for native requests and local
   /// matching.
   ///
@@ -626,86 +652,6 @@ class NativeDogPawEntityClient {
       namespaceSelector: resolvedNamespace,
       name: name,
     );
-    _savedCallbacks.removeWhere(
-      (CallbackInfo callbackInfo) => callbackInfo.matches(subscriptionKey),
-    );
-    return _runBooleanRequest(methodName, launchRequest);
-  }
-
-  /// Purpose: Register one current-item subscription through the native bridge.
-  ///
-  /// Parameters:
-  /// - [methodName]: `String` diagnostic method name.
-  /// - [notificationTopic]: `String` topic used to match posted notifications.
-  /// - [callback]: local Dart callback wrapper that receives decoded items.
-  /// - [responseField]: `String` JSON field that carries the changed item.
-  /// - [launchRequest]: native launcher invoked with the allocated request id.
-  ///
-  /// Return value: `Future<Result<bool>>` indicating subscribe success or
-  /// failure.
-  ///
-  /// Requirements/Preconditions:
-  /// - The wrapper has not been disposed.
-  /// - [launchRequest] must launch the corresponding native subscribe request.
-  ///
-  /// Guarantees/Postconditions:
-  /// - On success, matching current-item notifications are dispatched to
-  ///   [callback] until the subscription is removed.
-  /// - On failure, the provisional callback registration is removed.
-  ///
-  /// Invariants:
-  /// - Current subscriptions match by topic only, mirroring the websocket
-  ///   client's wildcard behavior.
-  Future<Result<bool>> _subscribeToCurrentItem(
-    String methodName,
-    String notificationTopic,
-    Function(String, DataItemRef, dynamic) callback, {
-    required String responseField,
-    required bool Function(int requestId) launchRequest,
-  }) async {
-    final CallbackInfo callbackInfo = CallbackInfo(
-      key: SubscriptionKey(notificationTopic),
-      valueJsonKey: responseField,
-      handler: callback,
-    );
-    _savedCallbacks.add(callbackInfo);
-
-    final Result<bool> result =
-        await _runBooleanRequest(methodName, launchRequest);
-    if (!result.success) {
-      _savedCallbacks.remove(callbackInfo);
-    }
-    return result;
-  }
-
-  /// Purpose: Remove one current-item subscription through the native bridge.
-  ///
-  /// Parameters:
-  /// - [methodName]: `String` diagnostic method name.
-  /// - [notificationTopic]: `String` topic used to match stored callbacks.
-  /// - [launchRequest]: native launcher invoked with the allocated request id.
-  ///
-  /// Return value: `Future<Result<bool>>` indicating unsubscribe success or
-  /// failure.
-  ///
-  /// Requirements/Preconditions:
-  /// - The wrapper has not been disposed.
-  /// - [launchRequest] must launch the corresponding native unsubscribe
-  ///   request.
-  ///
-  /// Guarantees/Postconditions:
-  /// - Matching local callbacks are removed before the unsubscribe request is
-  ///   launched.
-  ///
-  /// Invariants:
-  /// - Current subscriptions match by topic only, mirroring the websocket
-  ///   client's wildcard behavior.
-  Future<Result<bool>> _unsubscribeFromCurrentItem(
-    String methodName,
-    String notificationTopic, {
-    required bool Function(int requestId) launchRequest,
-  }) async {
-    final SubscriptionKey subscriptionKey = SubscriptionKey(notificationTopic);
     _savedCallbacks.removeWhere(
       (CallbackInfo callbackInfo) => callbackInfo.matches(subscriptionKey),
     );
@@ -1001,6 +947,52 @@ class NativeDogPawEntityClient {
       success: success,
       errorMessage: errorMessage,
     );
+  }
+
+  /// Purpose: Launch the native dispatcher-order probe for bridge integration
+  /// tests.
+  ///
+  /// Parameters: None.
+  ///
+  /// Return value:
+  /// - `bool` indicating whether the native probe started successfully.
+  ///
+  /// Requirements/Preconditions:
+  /// - The wrapper has not been disposed.
+  /// - A debug-probe callback should already be registered if the caller needs
+  ///   to observe the emitted events.
+  ///
+  /// Guarantees/Postconditions:
+  /// - On success, the native bridge will emit synthetic `debugProbe` events.
+  ///
+  /// Invariants:
+  /// - This helper is reserved for bridge integration probes.
+  bool runDebugDispatcherOrderProbe() {
+    _ensureNotDisposed();
+    return _bridge.dpeDebugRunDispatcherOrderProbeManaged(_nativeHandle);
+  }
+
+  /// Purpose: Launch the native shutdown-drain probe for bridge integration
+  /// tests.
+  ///
+  /// Parameters: None.
+  ///
+  /// Return value:
+  /// - `bool` indicating whether the native probe started successfully.
+  ///
+  /// Requirements/Preconditions:
+  /// - The wrapper has not been disposed.
+  /// - A debug-probe callback should already be registered if the caller needs
+  ///   to observe the emitted events.
+  ///
+  /// Guarantees/Postconditions:
+  /// - On success, the native bridge runs its shutdown path before returning.
+  ///
+  /// Invariants:
+  /// - This helper is reserved for bridge integration probes.
+  bool runDebugShutdownDrainProbe() {
+    _ensureNotDisposed();
+    return _bridge.dpeDebugRunShutdownDrainProbeManaged(_nativeHandle);
   }
 
   /// Purpose: Save one global preset through the native DogPawEntity bridge.
@@ -1301,6 +1293,9 @@ class NativeDogPawEntityClient {
   /// - [appName]: app template name (must match a registered `dogpawapp.json`).
   /// - [launchMetadata]: optional JSON-compatible metadata forwarded to the
   ///   launched app via its launch metadata file.
+  /// - [args]: optional extra argv entries appended after `--no-term` and
+  ///   manifest args.
+  /// - [displayName]: optional human-facing runtime entity display name.
   ///
   /// Return value: `Future<Result<String>>` containing the runtime entity name
   /// assigned by Epiphany. Singleton apps return their stable manifest name;
@@ -1319,10 +1314,13 @@ class NativeDogPawEntityClient {
   Future<Result<String>> launchApp(
     String appName, {
     Map<String, dynamic>? launchMetadata,
+    List<String>? args,
+    String? displayName,
   }) async {
     try {
       final String? metadataJson =
           launchMetadata != null ? jsonEncode(launchMetadata) : null;
+      final String? argsJson = args != null ? jsonEncode(args) : null;
       final Map<String, dynamic> response = await _invokeRequest(
         'launchApp',
         (int requestId) => _bridge.dpeLaunchAppAsyncManaged(
@@ -1330,6 +1328,8 @@ class NativeDogPawEntityClient {
           requestId,
           appName,
           launchMetadataJson: metadataJson,
+          launchArgsJson: argsJson,
+          displayName: displayName,
         ),
       );
       if (response[JsonFields.SUCCESS] != true) {
@@ -1591,110 +1591,6 @@ class NativeDogPawEntityClient {
     );
   }
 
-  /// Purpose: Push one theme onto the current-theme stack through the native bridge.
-  ///
-  /// Parameters:
-  /// - [name]: `String` theme name to set current.
-  /// - [namespaceSelector]: `NamespaceSelector` scope that owns the named theme.
-  ///
-  /// Return value: `Future<Result<bool>>` indicating success or failure.
-  ///
-  /// Requirements/Preconditions:
-  /// - The wrapper has not been disposed.
-  ///
-  /// Guarantees/Postconditions:
-  /// - On success, the native current-theme stack has been updated.
-  ///
-  /// Invariants:
-  /// - The calling Dart isolate is not blocked waiting for the Epiphany
-  ///   response.
-  Future<Result<bool>> setCurrentTheme(
-    String name, {
-    NamespaceSelector namespaceSelector =
-        const NamespaceSelector.currentEntity(),
-  }) async {
-    return _runBooleanRequest(
-      'setCurrentTheme',
-      (int requestId) => _bridge.dpeSetCurrentThemeAsyncManaged(
-        _nativeHandle,
-        requestId,
-        name,
-        jsonEncode(namespaceSelector.toJson()),
-      ),
-    );
-  }
-
-  /// Purpose: Read the current theme through the native DogPawEntity bridge.
-  ///
-  /// Parameters:
-  /// - [includeResolved]: `bool` forwarded to the native request.
-  /// - [includeSpec]: `bool` forwarded to the native request.
-  ///
-  /// Return value: `Future<Result<Theme?>>` with a typed current `Theme` or
-  /// `null`.
-  ///
-  /// Requirements/Preconditions:
-  /// - The wrapper has not been disposed.
-  ///
-  /// Guarantees/Postconditions:
-  /// - On success, the returned theme is decoded from the native C++ current
-  ///   theme result, or `null` if absent.
-  ///
-  /// Invariants:
-  /// - The calling Dart isolate is not blocked waiting for the Epiphany
-  ///   response.
-  Future<Result<Theme?>> readCurrentTheme({
-    bool includeResolved = true,
-    bool includeSpec = false,
-  }) async {
-    try {
-      final Map<String, dynamic> response = await _invokeRequest(
-        'readCurrentTheme',
-        (int requestId) => _bridge.dpeReadCurrentThemeAsyncManaged(
-          _nativeHandle,
-          requestId,
-          includeResolved: includeResolved,
-          includeSpec: includeSpec,
-        ),
-      );
-      if (response[JsonFields.SUCCESS] != true) {
-        return Result<Theme?>.error(
-          response[JsonFields.ERROR] as String? ?? 'readCurrentTheme failed',
-        );
-      }
-      return Result<Theme?>.success(
-        _decodeThemeFromResultPayload(response),
-      );
-    } catch (exception) {
-      return Result<Theme?>.error(exception.toString());
-    }
-  }
-
-  /// Purpose: Pop the current-theme stack through the native DogPawEntity bridge.
-  ///
-  /// Parameters: None.
-  ///
-  /// Return value: `Future<Result<bool>>` indicating success or failure.
-  ///
-  /// Requirements/Preconditions:
-  /// - The wrapper has not been disposed.
-  ///
-  /// Guarantees/Postconditions:
-  /// - On success, the native current-theme stack has been popped.
-  ///
-  /// Invariants:
-  /// - The calling Dart isolate is not blocked waiting for the Epiphany
-  ///   response.
-  Future<Result<bool>> removeCurrentTheme() async {
-    return _runBooleanRequest(
-      'removeCurrentTheme',
-      (int requestId) => _bridge.dpeRemoveCurrentThemeAsyncManaged(
-        _nativeHandle,
-        requestId,
-      ),
-    );
-  }
-
   /// Purpose: Request the list of themes through the native DogPawEntity.
   ///
   /// Parameters:
@@ -1847,85 +1743,6 @@ class NativeDogPawEntityClient {
         requestId,
         name: themeName,
         namespaceSelectorJson: jsonEncode(namespaceSelector.toJson()),
-      ),
-    );
-  }
-
-  /// Purpose: Subscribe to current-theme notifications through the native
-  /// DogPawEntity bridge.
-  ///
-  /// Parameters:
-  /// - [callback]: callback invoked with each matching current-theme
-  ///   notification.
-  /// - [includeResolved]: `bool` forwarded to the native request.
-  /// - [includeSpec]: `bool` forwarded to the native request.
-  /// - [sendImmediately]: `bool` forwarded to the native request.
-  ///
-  /// Return value: `Future<Result<bool>>` indicating subscribe success or
-  /// failure.
-  ///
-  /// Requirements/Preconditions:
-  /// - The wrapper has not been disposed.
-  ///
-  /// Guarantees/Postconditions:
-  /// - On success, matching native current-theme notifications are decoded to
-  ///   Dart `Theme` values and delivered to [callback] until unsubscribed.
-  ///
-  /// Invariants:
-  /// - The calling Dart isolate is not blocked waiting for the Epiphany
-  ///   response.
-  Future<Result<bool>> subscribeToCurrentTheme(
-    Function(String, DataItemRef, Theme) callback, {
-    bool includeResolved = true,
-    bool includeSpec = false,
-    bool sendImmediately = true,
-  }) async {
-    return _subscribeToCurrentItem(
-      'subscribeToCurrentTheme',
-      JsonFields.THEME_NOTIFICATION,
-      (String notificationType, DataItemRef dataItemRef, dynamic data) {
-        if (data is Map<String, dynamic>) {
-          callback(notificationType, dataItemRef, Theme.fromJson(data));
-        }
-      },
-      responseField: JsonFields.THEME,
-      launchRequest: (int requestId) =>
-          _bridge.dpeSubscribeCurrentThemeAsyncManaged(
-        _nativeHandle,
-        requestId,
-        includeResolved: includeResolved,
-        includeSpec: includeSpec,
-        sendImmediately: sendImmediately,
-      ),
-    );
-  }
-
-  /// Purpose: Unsubscribe from current-theme notifications through the native
-  /// DogPawEntity bridge.
-  ///
-  /// Parameters: None.
-  ///
-  /// Return value: `Future<Result<bool>>` indicating unsubscribe success or
-  /// failure.
-  ///
-  /// Requirements/Preconditions:
-  /// - The wrapper has not been disposed.
-  ///
-  /// Guarantees/Postconditions:
-  /// - Matching local current-theme callbacks are removed before the native
-  ///   unsubscribe request is launched.
-  ///
-  /// Invariants:
-  /// - The calling Dart isolate is not blocked waiting for the Epiphany
-  ///   response.
-  Future<Result<bool>> unsubscribeFromCurrentTheme() async {
-    return _unsubscribeFromCurrentItem(
-      'unsubscribeFromCurrentTheme',
-      JsonFields.THEME_NOTIFICATION,
-      launchRequest: (int requestId) =>
-          _bridge.dpeUnsubscribeCurrentThemeAsyncManaged(
-        _nativeHandle,
-        requestId,
       ),
     );
   }
@@ -2101,110 +1918,6 @@ class NativeDogPawEntityClient {
     );
   }
 
-  /// Purpose: Push one scale onto the current-scale stack through the native bridge.
-  ///
-  /// Parameters:
-  /// - [name]: `String` scale name to set current.
-  /// - [namespaceSelector]: `NamespaceSelector` scope that owns the named scale.
-  ///
-  /// Return value: `Future<Result<bool>>` indicating success or failure.
-  ///
-  /// Requirements/Preconditions:
-  /// - The wrapper has not been disposed.
-  ///
-  /// Guarantees/Postconditions:
-  /// - On success, the native current-scale stack has been updated.
-  ///
-  /// Invariants:
-  /// - The calling Dart isolate is not blocked waiting for the Epiphany
-  ///   response.
-  Future<Result<bool>> setCurrentScale(
-    String name, {
-    NamespaceSelector namespaceSelector =
-        const NamespaceSelector.currentEntity(),
-  }) async {
-    return _runBooleanRequest(
-      'setCurrentScale',
-      (int requestId) => _bridge.dpeSetCurrentScaleAsyncManaged(
-        _nativeHandle,
-        requestId,
-        name,
-        jsonEncode(namespaceSelector.toJson()),
-      ),
-    );
-  }
-
-  /// Purpose: Read the current scale through the native DogPawEntity bridge.
-  ///
-  /// Parameters:
-  /// - [includeResolved]: `bool` forwarded to the native request.
-  /// - [includeSpec]: `bool` forwarded to the native request.
-  ///
-  /// Return value: `Future<Result<Scale?>>` with a typed current `Scale` or
-  /// `null`.
-  ///
-  /// Requirements/Preconditions:
-  /// - The wrapper has not been disposed.
-  ///
-  /// Guarantees/Postconditions:
-  /// - On success, the returned scale is decoded from the native C++ current
-  ///   scale result, or `null` if absent.
-  ///
-  /// Invariants:
-  /// - The calling Dart isolate is not blocked waiting for the Epiphany
-  ///   response.
-  Future<Result<Scale?>> readCurrentScale({
-    bool includeResolved = true,
-    bool includeSpec = false,
-  }) async {
-    try {
-      final Map<String, dynamic> response = await _invokeRequest(
-        'readCurrentScale',
-        (int requestId) => _bridge.dpeReadCurrentScaleAsyncManaged(
-          _nativeHandle,
-          requestId,
-          includeResolved: includeResolved,
-          includeSpec: includeSpec,
-        ),
-      );
-      if (response[JsonFields.SUCCESS] != true) {
-        return Result<Scale?>.error(
-          response[JsonFields.ERROR] as String? ?? 'readCurrentScale failed',
-        );
-      }
-      return Result<Scale?>.success(
-        _decodeScaleFromResultPayload(response),
-      );
-    } catch (exception) {
-      return Result<Scale?>.error(exception.toString());
-    }
-  }
-
-  /// Purpose: Pop the current-scale stack through the native DogPawEntity bridge.
-  ///
-  /// Parameters: None.
-  ///
-  /// Return value: `Future<Result<bool>>` indicating success or failure.
-  ///
-  /// Requirements/Preconditions:
-  /// - The wrapper has not been disposed.
-  ///
-  /// Guarantees/Postconditions:
-  /// - On success, the native current-scale stack has been popped.
-  ///
-  /// Invariants:
-  /// - The calling Dart isolate is not blocked waiting for the Epiphany
-  ///   response.
-  Future<Result<bool>> removeCurrentScale() async {
-    return _runBooleanRequest(
-      'removeCurrentScale',
-      (int requestId) => _bridge.dpeRemoveCurrentScaleAsyncManaged(
-        _nativeHandle,
-        requestId,
-      ),
-    );
-  }
-
   /// Purpose: Request the list of scales through the native DogPawEntity.
   ///
   /// Parameters:
@@ -2357,85 +2070,6 @@ class NativeDogPawEntityClient {
         requestId,
         name: scaleName,
         namespaceSelectorJson: jsonEncode(namespaceSelector.toJson()),
-      ),
-    );
-  }
-
-  /// Purpose: Subscribe to current-scale notifications through the native
-  /// DogPawEntity bridge.
-  ///
-  /// Parameters:
-  /// - [callback]: callback invoked with each matching current-scale
-  ///   notification.
-  /// - [includeResolved]: `bool` forwarded to the native request.
-  /// - [includeSpec]: `bool` forwarded to the native request.
-  /// - [sendImmediately]: `bool` forwarded to the native request.
-  ///
-  /// Return value: `Future<Result<bool>>` indicating subscribe success or
-  /// failure.
-  ///
-  /// Requirements/Preconditions:
-  /// - The wrapper has not been disposed.
-  ///
-  /// Guarantees/Postconditions:
-  /// - On success, matching native current-scale notifications are decoded to
-  ///   Dart `Scale` values and delivered to [callback] until unsubscribed.
-  ///
-  /// Invariants:
-  /// - The calling Dart isolate is not blocked waiting for the Epiphany
-  ///   response.
-  Future<Result<bool>> subscribeToCurrentScale(
-    Function(String, DataItemRef, Scale) callback, {
-    bool includeResolved = true,
-    bool includeSpec = false,
-    bool sendImmediately = true,
-  }) async {
-    return _subscribeToCurrentItem(
-      'subscribeToCurrentScale',
-      JsonFields.SCALE_NOTIFICATION,
-      (String notificationType, DataItemRef dataItemRef, dynamic data) {
-        if (data is Map<String, dynamic>) {
-          callback(notificationType, dataItemRef, Scale.fromJson(data));
-        }
-      },
-      responseField: JsonFields.SCALE,
-      launchRequest: (int requestId) =>
-          _bridge.dpeSubscribeCurrentScaleAsyncManaged(
-        _nativeHandle,
-        requestId,
-        includeResolved: includeResolved,
-        includeSpec: includeSpec,
-        sendImmediately: sendImmediately,
-      ),
-    );
-  }
-
-  /// Purpose: Unsubscribe from current-scale notifications through the native
-  /// DogPawEntity bridge.
-  ///
-  /// Parameters: None.
-  ///
-  /// Return value: `Future<Result<bool>>` indicating unsubscribe success or
-  /// failure.
-  ///
-  /// Requirements/Preconditions:
-  /// - The wrapper has not been disposed.
-  ///
-  /// Guarantees/Postconditions:
-  /// - Matching local current-scale callbacks are removed before the native
-  ///   unsubscribe request is launched.
-  ///
-  /// Invariants:
-  /// - The calling Dart isolate is not blocked waiting for the Epiphany
-  ///   response.
-  Future<Result<bool>> unsubscribeFromCurrentScale() async {
-    return _unsubscribeFromCurrentItem(
-      'unsubscribeFromCurrentScale',
-      JsonFields.SCALE_NOTIFICATION,
-      launchRequest: (int requestId) =>
-          _bridge.dpeUnsubscribeCurrentScaleAsyncManaged(
-        _nativeHandle,
-        requestId,
       ),
     );
   }
@@ -3399,6 +3033,61 @@ class NativeDogPawEntityClient {
     );
   }
 
+  /// Purpose: List endpoints owned by this native DogPawEntity bridge.
+  ///
+  /// Parameters:
+  /// - [includeResolved]: Whether resolved endpoint fields should be returned.
+  /// - [includeSpec]: Whether authored endpoint spec fields should be returned.
+  ///
+  /// Return value:
+  /// - `Future<Result<List<EndpointInfo>>>` with typed endpoints on success.
+  ///
+  /// Requirements/Preconditions:
+  /// - The wrapper has not been disposed.
+  ///
+  /// Guarantees/Postconditions:
+  /// - On success, returned endpoints are decoded from native C++ result JSON.
+  ///
+  /// Invariants:
+  /// - The calling Dart isolate is not blocked waiting for the Epiphany
+  ///   response.
+  Future<Result<List<EndpointInfo>>> listEndpoints({
+    bool includeResolved = false,
+    bool includeSpec = false,
+  }) async {
+    try {
+      final Map<String, dynamic> response = await _invokeRequest(
+        'listEndpoints',
+        (int requestId) => _bridge.dpeListEndpointsAsyncManaged(
+          _nativeHandle,
+          requestId,
+          includeResolved: includeResolved,
+          includeSpec: includeSpec,
+        ),
+      );
+      if (response[JsonFields.SUCCESS] != true) {
+        return Result<List<EndpointInfo>>.error(
+          response[JsonFields.ERROR] as String? ?? 'listEndpoints failed',
+        );
+      }
+
+      final Map<String, dynamic> result =
+          Map<String, dynamic>.from(response[JsonFields.RESULT] as Map);
+      final List<dynamic> endpointsJson =
+          List<dynamic>.from(result[JsonFields.ENDPOINTS] as List);
+      final List<EndpointInfo> endpoints = endpointsJson
+          .map(
+            (dynamic item) => EndpointInfo.fromJson(
+              Map<String, dynamic>.from(item as Map),
+            ),
+          )
+          .toList();
+      return Result<List<EndpointInfo>>.success(endpoints);
+    } catch (exception) {
+      return Result<List<EndpointInfo>>.error(exception.toString());
+    }
+  }
+
   /// Purpose: Search endpoints through the native DogPawEntity bridge.
   ///
   /// Parameters:
@@ -3591,6 +3280,112 @@ class NativeDogPawEntityClient {
     } finally {
       malloc.free(dataPtr);
     }
+  }
+
+  /// Purpose: Read the native retained-state snapshot for one owned local
+  /// endpoint.
+  ///
+  /// Parameters:
+  /// - [endpointName]: `String` owned endpoint name in the current entity.
+  ///
+  /// Return value:
+  /// - `EndpointRetainedStateSnapshot` reported by the native local endpoint
+  ///   runtime, or `hasState: false` when the snapshot cannot be read.
+  ///
+  /// Requirements/Preconditions:
+  /// - This wrapper has not been disposed.
+  ///
+  /// Guarantees/Postconditions:
+  /// - The returned snapshot comes directly from the native runtime rather than
+  ///   a Dart-side mirror.
+  ///
+  /// Invariants:
+  /// - This helper does not mutate wrapper state.
+  EndpointRetainedStateSnapshot queryLocalEndpointRetainedState(
+      String endpointName) {
+    _ensureNotDisposed();
+    final int requiredSize =
+        _bridge.dpeLocalEndpointGetRetainedStateJsonManaged(
+      _nativeHandle,
+      endpointName: endpointName,
+      maxSize: 0,
+    );
+    if (requiredSize <= 0) {
+      return const EndpointRetainedStateSnapshot(hasState: false);
+    }
+
+    final Pointer<Utf8> bufferPtr = malloc<Uint8>(requiredSize).cast<Utf8>();
+    try {
+      final int writeResult =
+          _bridge.dpeLocalEndpointGetRetainedStateJsonManaged(
+        _nativeHandle,
+        endpointName: endpointName,
+        outJson: bufferPtr,
+        maxSize: requiredSize,
+      );
+      if (writeResult <= 0) {
+        return const EndpointRetainedStateSnapshot(hasState: false);
+      }
+      final String jsonText = bufferPtr.toDartString();
+      final dynamic decoded = jsonDecode(jsonText);
+      if (decoded is! Map<String, dynamic>) {
+        return const EndpointRetainedStateSnapshot(hasState: false);
+      }
+      return EndpointRetainedStateSnapshot.fromJson(decoded);
+    } catch (_) {
+      return const EndpointRetainedStateSnapshot(hasState: false);
+    } finally {
+      malloc.free(bufferPtr);
+    }
+  }
+
+  /// Purpose: Adopt one retained-state snapshot into the native runtime for one
+  /// owned local endpoint.
+  ///
+  /// Parameters:
+  /// - [endpointName]: `String` owned endpoint name in the current entity.
+  /// - [snapshot]: `EndpointRetainedStateSnapshot` to commit into native
+  ///   retained state.
+  /// - [publishMatchedOutput]: `bool` controlling whether any linked matched
+  ///   output publishes the committed state immediately.
+  /// - [senderInfo]: optional `EndpointSenderInfo` describing the upstream
+  ///   request identity associated with this accepted commit.
+  ///
+  /// Return value:
+  /// - `true` when the native runtime accepted and applied [snapshot],
+  ///   otherwise `false`.
+  ///
+  /// Requirements/Preconditions:
+  /// - This wrapper has not been disposed.
+  ///
+  /// Guarantees/Postconditions:
+  /// - On success, future native retained-state reads for [endpointName]
+  ///   reflect [snapshot].
+  /// - When [publishMatchedOutput] is `true`, linked matched output publication
+  ///   follows the native endpoint path.
+  ///
+  /// Invariants:
+  /// - This helper does not mutate Dart-side metadata caches directly.
+  bool adoptLocalEndpointRetainedState(
+    String endpointName,
+    EndpointRetainedStateSnapshot snapshot, {
+    bool publishMatchedOutput = true,
+    EndpointSenderInfo? senderInfo,
+  }) {
+    _ensureNotDisposed();
+    final String? senderInfoJson = senderInfo == null
+        ? null
+        : jsonEncode(<String, dynamic>{
+            JsonFields.NAME: senderInfo.connectionName,
+            JsonFields.TARGET: senderInfo.sourceEndpointRef.toJson(),
+          });
+    return _bridge.dpeLocalEndpointAdoptRetainedStateJsonManaged(
+      _nativeHandle,
+      endpointName: endpointName,
+      snapshotJson: jsonEncode(snapshot.toJson()),
+      publishMatchedOutput: publishMatchedOutput,
+      senderInfoJson: senderInfoJson,
+    );
   }
 
   /// Purpose: Poll serialized bytes from the native-owned runtime for one local
@@ -3819,11 +3614,107 @@ class NativeDogPawEntityClient {
     return _listLocalEndpointConnections(endpointName);
   }
 
-  /// Purpose: Create a connection request through the native DogPawEntity
+  /// Purpose: Read the current OUTPUT peer count for one native-owned
+  /// CONTINUOUS or MESSAGE_QUEUE local endpoint.
+  ///
+  /// Parameters:
+  /// - [endpointName]: owned endpoint name in the current entity namespace.
+  ///
+  /// Return value: non-negative connected-reader / attached-consumer count,
+  /// or 0 if the native call reports an error (e.g. the endpoint's category
+  /// does not define a peer count).
+  ///
+  /// Requirements/Preconditions: wrapper not disposed.
+  ///
+  /// Guarantees/Postconditions: no native or wrapper state is mutated.
+  ///
+  /// Invariants:
+  /// - This helper does not mutate wrapper state.
+  int getLocalEndpointPeerCount(String endpointName) {
+    _ensureNotDisposed();
+    final int result = _bridge.dpeLocalEndpointGetPeerCountManaged(
+      _nativeHandle,
+      endpointName: endpointName,
+    );
+    return result < 0 ? 0 : result;
+  }
+
+  /// Purpose: Set the runtime `ContinuousFirstPeerPolicy` override for one
+  /// native-owned CONTINUOUS output local endpoint.
+  ///
+  /// Parameters:
+  /// - [endpointName]: owned endpoint name in the current entity namespace.
+  /// - [policy]: the desired runtime override.
+  ///
+  /// Return value: true if the native endpoint accepted the override, false
+  /// if the endpoint is not CONTINUOUS.
+  ///
+  /// Requirements/Preconditions: wrapper not disposed.
+  ///
+  /// Guarantees/Postconditions: on success, subsequent idle-publish decisions
+  /// on the native endpoint use [policy] until overridden again.
+  bool setLocalEndpointContinuousFirstPeerPolicy(
+    String endpointName,
+    ContinuousFirstPeerPolicy policy,
+  ) {
+    _ensureNotDisposed();
+    return _bridge.dpeLocalEndpointSetContinuousFirstPeerPolicyManaged(
+      _nativeHandle,
+      endpointName: endpointName,
+      policy: continuousFirstPeerPolicyToWireValue(policy),
+    );
+  }
+
+  /// Purpose: Read the effective `ContinuousFirstPeerPolicy` for one
+  /// native-owned CONTINUOUS local endpoint.
+  ///
+  /// Parameters:
+  /// - [endpointName]: owned endpoint name in the current entity namespace.
+  ///
+  /// Return value: the effective policy (spec-time default, or the runtime
+  /// override set via [setLocalEndpointContinuousFirstPeerPolicy]), or null
+  /// if the endpoint is not CONTINUOUS.
+  ///
+  /// Requirements/Preconditions: wrapper not disposed.
+  ///
+  /// Guarantees/Postconditions: no native or wrapper state is mutated.
+  ContinuousFirstPeerPolicy? getLocalEndpointContinuousFirstPeerPolicy(
+    String endpointName,
+  ) {
+    _ensureNotDisposed();
+    final int requiredSize =
+        _bridge.dpeLocalEndpointGetContinuousFirstPeerPolicyManaged(
+      _nativeHandle,
+      endpointName: endpointName,
+      maxSize: 0,
+    );
+    if (requiredSize <= 0) {
+      return null;
+    }
+
+    final Pointer<Utf8> policyPtr = malloc<Uint8>(requiredSize).cast<Utf8>();
+    try {
+      final int writeResult =
+          _bridge.dpeLocalEndpointGetContinuousFirstPeerPolicyManaged(
+        _nativeHandle,
+        endpointName: endpointName,
+        outPolicy: policyPtr,
+        maxSize: requiredSize,
+      );
+      if (writeResult <= 0) {
+        return null;
+      }
+      return continuousFirstPeerPolicyFromWireValue(policyPtr.toDartString());
+    } finally {
+      malloc.free(policyPtr);
+    }
+  }
+
+  /// Purpose: Create a connection rule through the native DogPawEntity
   /// bridge.
   ///
   /// Parameters:
-  /// - [connectionRequest]: typed connection request payload.
+  /// - [connectionRule]: typed connection rule payload.
   ///
   /// Return value: `Future<Result<bool>>` indicating whether the native
   /// operation succeeded.
@@ -3833,79 +3724,79 @@ class NativeDogPawEntityClient {
   /// Guarantees/Postconditions: on success, Epiphany accepted the create.
   ///
   /// Invariants: isolate not blocked on server I/O.
-  Future<Result<bool>> createConnectionRequest(
-    ConnectionRequest connectionRequest,
+  Future<Result<bool>> createConnectionRule(
+    ConnectionRule connectionRule,
   ) async {
     return _runBooleanRequest(
-      'createConnectionRequest',
-      (int requestId) => _bridge.dpeCreateConnectionRequestAsyncManaged(
+      'createConnectionRule',
+      (int requestId) => _bridge.dpeCreateConnectionRuleAsyncManaged(
         _nativeHandle,
         requestId,
-        jsonEncode(connectionRequest.toJson()),
+        jsonEncode(connectionRule.toJson()),
       ),
     );
   }
 
-  /// Purpose: Set (upsert) a connection request through the native bridge.
+  /// Purpose: Set (upsert) a connection rule through the native bridge.
   ///
   /// Parameters:
-  /// - [connectionRequest]: typed connection request payload.
+  /// - [connectionRule]: typed connection rule payload.
   ///
   /// Return value: `Future<Result<bool>>`.
   ///
   /// Requirements/Preconditions: wrapper not disposed.
   ///
   /// Invariants: isolate not blocked on server I/O.
-  Future<Result<bool>> setConnectionRequest(
-    ConnectionRequest connectionRequest,
+  Future<Result<bool>> setConnectionRule(
+    ConnectionRule connectionRule,
   ) async {
     return _runBooleanRequest(
-      'setConnectionRequest',
-      (int requestId) => _bridge.dpeSetConnectionRequestAsyncManaged(
+      'setConnectionRule',
+      (int requestId) => _bridge.dpeSetConnectionRuleAsyncManaged(
         _nativeHandle,
         requestId,
-        jsonEncode(connectionRequest.toJson()),
+        jsonEncode(connectionRule.toJson()),
       ),
     );
   }
 
-  /// Purpose: Update an existing connection request through the native bridge.
+  /// Purpose: Update an existing connection rule through the native bridge.
   ///
   /// Parameters:
-  /// - [connectionRequest]: typed connection request payload.
+  /// - [connectionRule]: typed connection rule payload.
   ///
   /// Return value: `Future<Result<bool>>`.
   ///
   /// Requirements/Preconditions: wrapper not disposed.
   ///
   /// Invariants: isolate not blocked on server I/O.
-  Future<Result<bool>> updateConnectionRequest(
-    ConnectionRequest connectionRequest,
+  Future<Result<bool>> updateConnectionRule(
+    ConnectionRule connectionRule,
   ) async {
     return _runBooleanRequest(
-      'updateConnectionRequest',
-      (int requestId) => _bridge.dpeUpdateConnectionRequestAsyncManaged(
+      'updateConnectionRule',
+      (int requestId) => _bridge.dpeUpdateConnectionRuleAsyncManaged(
         _nativeHandle,
         requestId,
-        jsonEncode(connectionRequest.toJson()),
+        jsonEncode(connectionRule.toJson()),
       ),
     );
   }
 
-  /// Purpose: Read one connection request through the native bridge.
+  /// Purpose: Read one connection rule through the native bridge.
   ///
   /// Parameters:
   /// - [name]: request name.
   /// - [namespaceSelector]: namespace scope.
   /// - [includeResolved], [includeSpec]: forwarded to native read.
   ///
-  /// Return value: `Future<Result<ConnectionRequest?>>` with decoded data or
+  /// Return value: `Future<Result<ConnectionRule?>>` with decoded data or
   /// null when absent.
   ///
   /// Requirements/Preconditions: wrapper not disposed.
   ///
   /// Invariants: isolate not blocked on server I/O.
-  Future<Result<ConnectionRequest?>> readConnectionRequest(
+  Future<Result<ConnectionRule?>> readConnectionRule(
     String name, {
     NamespaceSelector namespaceSelector =
         const NamespaceSelector.currentEntity(),
@@ -3914,8 +3805,8 @@ class NativeDogPawEntityClient {
   }) async {
     try {
       final Map<String, dynamic> response = await _invokeRequest(
-        'readConnectionRequest',
-        (int requestId) => _bridge.dpeReadConnectionRequestAsyncManaged(
+        'readConnectionRule',
+        (int requestId) => _bridge.dpeReadConnectionRuleAsyncManaged(
           _nativeHandle,
           requestId,
           name,
@@ -3925,20 +3816,19 @@ class NativeDogPawEntityClient {
         ),
       );
       if (response[JsonFields.SUCCESS] != true) {
-        return Result<ConnectionRequest?>.error(
-          response[JsonFields.ERROR] as String? ??
-              'readConnectionRequest failed',
+        return Result<ConnectionRule?>.error(
+          response[JsonFields.ERROR] as String? ?? 'readConnectionRule failed',
         );
       }
-      return Result<ConnectionRequest?>.success(
-        _decodeConnectionRequestFromResultPayload(response),
+      return Result<ConnectionRule?>.success(
+        _decodeConnectionRuleFromResultPayload(response),
       );
     } catch (exception) {
-      return Result<ConnectionRequest?>.error(exception.toString());
+      return Result<ConnectionRule?>.error(exception.toString());
     }
   }
 
-  /// Purpose: Delete a connection request through the native bridge.
+  /// Purpose: Delete a connection rule through the native bridge.
   ///
   /// Parameters:
   /// - [name]: request name.
@@ -3949,14 +3839,14 @@ class NativeDogPawEntityClient {
   /// Requirements/Preconditions: wrapper not disposed.
   ///
   /// Invariants: isolate not blocked on server I/O.
-  Future<Result<bool>> deleteConnectionRequest(
+  Future<Result<bool>> deleteConnectionRule(
     String name, {
     NamespaceSelector namespaceSelector =
         const NamespaceSelector.currentEntity(),
   }) async {
     return _runBooleanRequest(
-      'deleteConnectionRequest',
-      (int requestId) => _bridge.dpeDeleteConnectionRequestAsyncManaged(
+      'deleteConnectionRule',
+      (int requestId) => _bridge.dpeDeleteConnectionRuleAsyncManaged(
         _nativeHandle,
         requestId,
         name,
@@ -3965,19 +3855,19 @@ class NativeDogPawEntityClient {
     );
   }
 
-  /// Purpose: List connection requests in a namespace through the native
+  /// Purpose: List connection rules in a namespace through the native
   /// bridge.
   ///
   /// Parameters:
   /// - [namespaceSelector]: namespace scope.
   /// - [includeResolved], [includeSpec]: forwarded to native list.
   ///
-  /// Return value: `Future<Result<List<ConnectionRequest>>>`.
+  /// Return value: `Future<Result<List<ConnectionRule>>>`.
   ///
   /// Requirements/Preconditions: wrapper not disposed.
   ///
   /// Invariants: isolate not blocked on server I/O.
-  Future<Result<List<ConnectionRequest>>> listConnectionRequests({
+  Future<Result<List<ConnectionRule>>> listConnectionRules({
     NamespaceSelector namespaceSelector =
         const NamespaceSelector.currentEntity(),
     bool includeResolved = false,
@@ -3985,8 +3875,8 @@ class NativeDogPawEntityClient {
   }) async {
     try {
       final Map<String, dynamic> response = await _invokeRequest(
-        'listConnectionRequests',
-        (int requestId) => _bridge.dpeListConnectionRequestsAsyncManaged(
+        'listConnectionRules',
+        (int requestId) => _bridge.dpeListConnectionRulesAsyncManaged(
           _nativeHandle,
           requestId,
           jsonEncode(namespaceSelector.toJson()),
@@ -3995,33 +3885,32 @@ class NativeDogPawEntityClient {
         ),
       );
       if (response[JsonFields.SUCCESS] != true) {
-        return Result<List<ConnectionRequest>>.error(
-          response[JsonFields.ERROR] as String? ??
-              'listConnectionRequests failed',
+        return Result<List<ConnectionRule>>.error(
+          response[JsonFields.ERROR] as String? ?? 'listConnectionRules failed',
         );
       }
       final Map<String, dynamic> result =
           Map<String, dynamic>.from(response[JsonFields.RESULT] as Map);
       final List<dynamic> items =
-          List<dynamic>.from(result[JsonFields.CONNECTION_REQUESTS] as List);
-      return Result<List<ConnectionRequest>>.success(
+          List<dynamic>.from(result[JsonFields.CONNECTION_RULES] as List);
+      return Result<List<ConnectionRule>>.success(
         items
             .map(
-              (dynamic e) => ConnectionRequest.fromJson(
+              (dynamic e) => ConnectionRule.fromJson(
                 Map<String, dynamic>.from(e as Map),
               ),
             )
             .toList(),
       );
     } catch (exception) {
-      return Result<List<ConnectionRequest>>.error(exception.toString());
+      return Result<List<ConnectionRule>>.error(exception.toString());
     }
   }
 
-  /// Purpose: Create a follow request through the native DogPawEntity bridge.
+  /// Purpose: Create a follow rule through the native DogPawEntity bridge.
   ///
   /// Parameters:
-  /// - [followRequest]: typed follow request payload.
+  /// - [followRule]: typed follow rule payload.
   ///
   /// Return value: `Future<Result<bool>>` for native operation success.
   ///
@@ -4030,72 +3919,72 @@ class NativeDogPawEntityClient {
   /// Guarantees/Postconditions: on success, Epiphany accepted the create.
   ///
   /// Invariants: isolate not blocked on server I/O.
-  Future<Result<bool>> createFollowRequest(FollowRequest followRequest) async {
+  Future<Result<bool>> createFollowRule(FollowRule followRule) async {
     return _runBooleanRequest(
-      'createFollowRequest',
-      (int requestId) => _bridge.dpeCreateFollowRequestAsyncManaged(
+      'createFollowRule',
+      (int requestId) => _bridge.dpeCreateFollowRuleAsyncManaged(
         _nativeHandle,
         requestId,
-        jsonEncode(followRequest.toJson()),
+        jsonEncode(followRule.toJson()),
       ),
     );
   }
 
-  /// Purpose: Set (upsert) a follow request through the native bridge.
+  /// Purpose: Set (upsert) a follow rule through the native bridge.
   ///
   /// Parameters:
-  /// - [followRequest]: typed follow request payload.
+  /// - [followRule]: typed follow rule payload.
   ///
   /// Return value: `Future<Result<bool>>`.
   ///
   /// Requirements/Preconditions: wrapper not disposed.
   ///
   /// Invariants: isolate not blocked on server I/O.
-  Future<Result<bool>> setFollowRequest(FollowRequest followRequest) async {
+  Future<Result<bool>> setFollowRule(FollowRule followRule) async {
     return _runBooleanRequest(
-      'setFollowRequest',
-      (int requestId) => _bridge.dpeSetFollowRequestAsyncManaged(
+      'setFollowRule',
+      (int requestId) => _bridge.dpeSetFollowRuleAsyncManaged(
         _nativeHandle,
         requestId,
-        jsonEncode(followRequest.toJson()),
+        jsonEncode(followRule.toJson()),
       ),
     );
   }
 
-  /// Purpose: Update a follow request through the native bridge.
+  /// Purpose: Update a follow rule through the native bridge.
   ///
   /// Parameters:
-  /// - [followRequest]: typed follow request payload.
+  /// - [followRule]: typed follow rule payload.
   ///
   /// Return value: `Future<Result<bool>>`.
   ///
   /// Requirements/Preconditions: wrapper not disposed.
   ///
   /// Invariants: isolate not blocked on server I/O.
-  Future<Result<bool>> updateFollowRequest(FollowRequest followRequest) async {
+  Future<Result<bool>> updateFollowRule(FollowRule followRule) async {
     return _runBooleanRequest(
-      'updateFollowRequest',
-      (int requestId) => _bridge.dpeUpdateFollowRequestAsyncManaged(
+      'updateFollowRule',
+      (int requestId) => _bridge.dpeUpdateFollowRuleAsyncManaged(
         _nativeHandle,
         requestId,
-        jsonEncode(followRequest.toJson()),
+        jsonEncode(followRule.toJson()),
       ),
     );
   }
 
-  /// Purpose: Read one follow request through the native bridge.
+  /// Purpose: Read one follow rule through the native bridge.
   ///
   /// Parameters:
-  /// - [name]: request name.
+  /// - [name]: rule name.
   /// - [namespaceSelector]: namespace scope.
   /// - [includeResolved], [includeSpec]: forwarded to native read.
   ///
-  /// Return value: `Future<Result<FollowRequest?>>` or null when absent.
+  /// Return value: `Future<Result<FollowRule?>>` or null when absent.
   ///
   /// Requirements/Preconditions: wrapper not disposed.
   ///
   /// Invariants: isolate not blocked on server I/O.
-  Future<Result<FollowRequest?>> readFollowRequest(
+  Future<Result<FollowRule?>> readFollowRule(
     String name, {
     NamespaceSelector namespaceSelector =
         const NamespaceSelector.currentEntity(),
@@ -4104,8 +3993,8 @@ class NativeDogPawEntityClient {
   }) async {
     try {
       final Map<String, dynamic> response = await _invokeRequest(
-        'readFollowRequest',
-        (int requestId) => _bridge.dpeReadFollowRequestAsyncManaged(
+        'readFollowRule',
+        (int requestId) => _bridge.dpeReadFollowRuleAsyncManaged(
           _nativeHandle,
           requestId,
           name,
@@ -4115,22 +4004,22 @@ class NativeDogPawEntityClient {
         ),
       );
       if (response[JsonFields.SUCCESS] != true) {
-        return Result<FollowRequest?>.error(
-          response[JsonFields.ERROR] as String? ?? 'readFollowRequest failed',
+        return Result<FollowRule?>.error(
+          response[JsonFields.ERROR] as String? ?? 'readFollowRule failed',
         );
       }
-      return Result<FollowRequest?>.success(
-        _decodeFollowRequestFromResultPayload(response),
+      return Result<FollowRule?>.success(
+        _decodeFollowRuleFromResultPayload(response),
       );
     } catch (exception) {
-      return Result<FollowRequest?>.error(exception.toString());
+      return Result<FollowRule?>.error(exception.toString());
     }
   }
 
-  /// Purpose: Delete a follow request through the native bridge.
+  /// Purpose: Delete a follow rule through the native bridge.
   ///
   /// Parameters:
-  /// - [name]: request name.
+  /// - [name]: rule name.
   /// - [namespaceSelector]: namespace scope.
   ///
   /// Return value: `Future<Result<bool>>`.
@@ -4138,14 +4027,14 @@ class NativeDogPawEntityClient {
   /// Requirements/Preconditions: wrapper not disposed.
   ///
   /// Invariants: isolate not blocked on server I/O.
-  Future<Result<bool>> deleteFollowRequest(
+  Future<Result<bool>> deleteFollowRule(
     String name, {
     NamespaceSelector namespaceSelector =
         const NamespaceSelector.currentEntity(),
   }) async {
     return _runBooleanRequest(
-      'deleteFollowRequest',
-      (int requestId) => _bridge.dpeDeleteFollowRequestAsyncManaged(
+      'deleteFollowRule',
+      (int requestId) => _bridge.dpeDeleteFollowRuleAsyncManaged(
         _nativeHandle,
         requestId,
         name,
@@ -4154,18 +4043,18 @@ class NativeDogPawEntityClient {
     );
   }
 
-  /// Purpose: List follow requests through the native bridge.
+  /// Purpose: List follow rules through the native bridge.
   ///
   /// Parameters:
   /// - [namespaceSelector]: namespace scope.
   /// - [includeResolved], [includeSpec]: forwarded to native list.
   ///
-  /// Return value: `Future<Result<List<FollowRequest>>>`.
+  /// Return value: `Future<Result<List<FollowRule>>>`.
   ///
   /// Requirements/Preconditions: wrapper not disposed.
   ///
   /// Invariants: isolate not blocked on server I/O.
-  Future<Result<List<FollowRequest>>> listFollowRequests({
+  Future<Result<List<FollowRule>>> listFollowRules({
     NamespaceSelector namespaceSelector =
         const NamespaceSelector.currentEntity(),
     bool includeResolved = false,
@@ -4173,8 +4062,8 @@ class NativeDogPawEntityClient {
   }) async {
     try {
       final Map<String, dynamic> response = await _invokeRequest(
-        'listFollowRequests',
-        (int requestId) => _bridge.dpeListFollowRequestsAsyncManaged(
+        'listFollowRules',
+        (int requestId) => _bridge.dpeListFollowRulesAsyncManaged(
           _nativeHandle,
           requestId,
           jsonEncode(namespaceSelector.toJson()),
@@ -4183,25 +4072,25 @@ class NativeDogPawEntityClient {
         ),
       );
       if (response[JsonFields.SUCCESS] != true) {
-        return Result<List<FollowRequest>>.error(
-          response[JsonFields.ERROR] as String? ?? 'listFollowRequests failed',
+        return Result<List<FollowRule>>.error(
+          response[JsonFields.ERROR] as String? ?? 'listFollowRules failed',
         );
       }
       final Map<String, dynamic> result =
           Map<String, dynamic>.from(response[JsonFields.RESULT] as Map);
       final List<dynamic> items =
-          List<dynamic>.from(result[JsonFields.FOLLOW_REQUESTS] as List);
-      return Result<List<FollowRequest>>.success(
+          List<dynamic>.from(result[JsonFields.FOLLOW_RULES] as List);
+      return Result<List<FollowRule>>.success(
         items
             .map(
-              (dynamic e) => FollowRequest.fromJson(
+              (dynamic e) => FollowRule.fromJson(
                 Map<String, dynamic>.from(e as Map),
               ),
             )
             .toList(),
       );
     } catch (exception) {
-      return Result<List<FollowRequest>>.error(exception.toString());
+      return Result<List<FollowRule>>.error(exception.toString());
     }
   }
 
@@ -4292,6 +4181,102 @@ class NativeDogPawEntityClient {
     } catch (exception) {
       return Result<List<Connection>>.error(exception.toString());
     }
+  }
+
+  /// Purpose: Subscribe to realized connection change notifications through
+  /// the native DogPawEntity bridge.
+  ///
+  /// Parameters:
+  /// - [callback]: callback invoked with each matching connection
+  ///   notification.
+  /// - [connectionName]: optional `String` realized connection name to watch,
+  ///   or `null` to watch all realized connections.
+  /// - [includeResolved]: `bool` forwarded to the native request.
+  /// - [includeSpec]: `bool` forwarded to the native request.
+  /// - [sendImmediately]: `bool` forwarded to the native request.
+  ///
+  /// Return value: `Future<Result<bool>>` indicating subscribe success or
+  /// failure.
+  ///
+  /// Requirements/Preconditions:
+  /// - The wrapper has not been disposed.
+  ///
+  /// Guarantees/Postconditions:
+  /// - On success, matching native connection notifications are decoded to
+  ///   Dart `Connection` values and delivered to [callback] until
+  ///   unsubscribed.
+  /// - On failure, the provisional callback registration is removed.
+  ///
+  /// Invariants:
+  /// - Realized connections are always global, matching
+  ///   `listConnections`/`readConnection`; no namespace parameter is exposed.
+  /// - The calling Dart isolate is not blocked waiting for the Epiphany
+  ///   response.
+  Future<Result<bool>> subscribeToConnections(
+    Function(String, DataItemRef, Connection) callback, {
+    String? connectionName,
+    bool includeResolved = false,
+    bool includeSpec = false,
+    bool sendImmediately = true,
+  }) async {
+    return _subscribeToItem(
+      'subscribeToConnections',
+      JsonFields.CONNECTION_NOTIFICATION,
+      (String notificationType, DataItemRef dataItemRef, dynamic data) {
+        if (data is Map<String, dynamic>) {
+          callback(notificationType, dataItemRef, Connection.fromJson(data));
+        }
+      },
+      name: connectionName,
+      namespaceSelector: const NamespaceSelector.global(),
+      responseField: JsonFields.CONNECTION,
+      launchRequest: (int requestId) =>
+          _bridge.dpeSubscribeConnectionsAsyncManaged(
+        _nativeHandle,
+        requestId,
+        name: connectionName,
+        includeResolved: includeResolved,
+        includeSpec: includeSpec,
+        sendImmediately: sendImmediately,
+      ),
+    );
+  }
+
+  /// Purpose: Unsubscribe from realized connection change notifications
+  /// through the native DogPawEntity bridge.
+  ///
+  /// Parameters:
+  /// - [connectionName]: optional `String` realized connection name to stop
+  ///   watching, or `null` to remove the all-connections subscription.
+  ///
+  /// Return value: `Future<Result<bool>>` indicating unsubscribe success or
+  /// failure.
+  ///
+  /// Requirements/Preconditions:
+  /// - The wrapper has not been disposed.
+  ///
+  /// Guarantees/Postconditions:
+  /// - Matching local connection callbacks are removed before the native
+  ///   unsubscribe request is launched.
+  ///
+  /// Invariants:
+  /// - The calling Dart isolate is not blocked waiting for the Epiphany
+  ///   response.
+  Future<Result<bool>> unsubscribeFromConnections({
+    String? connectionName,
+  }) async {
+    return _unsubscribeFromItem(
+      'unsubscribeFromConnections',
+      JsonFields.CONNECTION_NOTIFICATION,
+      name: connectionName,
+      namespaceSelector: const NamespaceSelector.global(),
+      launchRequest: (int requestId) =>
+          _bridge.dpeUnsubscribeConnectionsAsyncManaged(
+        _nativeHandle,
+        requestId,
+        name: connectionName,
+      ),
+    );
   }
 
   /// Purpose: Subscribe to KV change notifications through the native
@@ -4436,6 +4421,7 @@ class NativeDogPawEntityClient {
     _directMessageCallback = null;
     _commandCallback = null;
     _presetRequestCallback = null;
+    _debugProbeEventCallback = null;
   }
 
   /// Purpose: Run one native request that returns only success or failure.
@@ -4586,7 +4572,7 @@ class NativeDogPawEntityClient {
     );
   }
 
-  /// Purpose: Decode optional `ConnectionRequest` from bridge result payload.
+  /// Purpose: Decode optional `ConnectionRule` from bridge result payload.
   ///
   /// Parameters: [response] request-result envelope from native.
   ///
@@ -4595,40 +4581,40 @@ class NativeDogPawEntityClient {
   /// Requirements/Preconditions: envelope shape matches other read-* bridges.
   ///
   /// Invariants: does not mutate [response].
-  ConnectionRequest? _decodeConnectionRequestFromResultPayload(
+  ConnectionRule? _decodeConnectionRuleFromResultPayload(
     Map<String, dynamic> response,
   ) {
     final Map<String, dynamic> result =
         Map<String, dynamic>.from(response[JsonFields.RESULT] as Map);
-    if (!result.containsKey(JsonFields.CONNECTION_REQUEST_ITEM) ||
-        result[JsonFields.CONNECTION_REQUEST_ITEM] == null) {
+    if (!result.containsKey(JsonFields.CONNECTION_RULE_ITEM) ||
+        result[JsonFields.CONNECTION_RULE_ITEM] == null) {
       return null;
     }
-    return ConnectionRequest.fromJson(
+    return ConnectionRule.fromJson(
       Map<String, dynamic>.from(
-        result[JsonFields.CONNECTION_REQUEST_ITEM] as Map,
+        result[JsonFields.CONNECTION_RULE_ITEM] as Map,
       ),
     );
   }
 
-  /// Purpose: Decode optional `FollowRequest` from bridge result payload.
+  /// Purpose: Decode optional `FollowRule` from bridge result payload.
   ///
   /// Parameters: [response] request-result envelope from native.
   ///
   /// Return value: decoded item or null.
   ///
   /// Invariants: does not mutate [response].
-  FollowRequest? _decodeFollowRequestFromResultPayload(
+  FollowRule? _decodeFollowRuleFromResultPayload(
     Map<String, dynamic> response,
   ) {
     final Map<String, dynamic> result =
         Map<String, dynamic>.from(response[JsonFields.RESULT] as Map);
-    if (!result.containsKey(JsonFields.FOLLOW_REQUEST_ITEM) ||
-        result[JsonFields.FOLLOW_REQUEST_ITEM] == null) {
+    if (!result.containsKey(JsonFields.FOLLOW_RULE_ITEM) ||
+        result[JsonFields.FOLLOW_RULE_ITEM] == null) {
       return null;
     }
-    return FollowRequest.fromJson(
-      Map<String, dynamic>.from(result[JsonFields.FOLLOW_REQUEST_ITEM] as Map),
+    return FollowRule.fromJson(
+      Map<String, dynamic>.from(result[JsonFields.FOLLOW_RULE_ITEM] as Map),
     );
   }
 
@@ -5185,6 +5171,15 @@ class NativeDogPawEntityClient {
 
     if (eventType == 'presetRequest') {
       _handlePresetRequestEvent(decoded);
+      return;
+    }
+
+    if (eventType == 'debugProbe') {
+      final void Function(Map<String, dynamic> event)? callback =
+          _debugProbeEventCallback;
+      if (callback != null) {
+        callback(decoded);
+      }
       return;
     }
 

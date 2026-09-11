@@ -42,6 +42,7 @@ class _BufferedLogEntry {
 /// the buffered messages.
 class AppLogger {
   static const bool _isDebugMode = !bool.fromEnvironment('dart.vm.product');
+  static final bool _mirrorReleaseLogsToStdout = Platform.isLinux;
   static String _appName = 'FlutterApp';
   static bool _enableSourceLocation = false;
   static bool _buffering = false;
@@ -131,9 +132,10 @@ class AppLogger {
     if (_buffering) {
       _buffer.add(_BufferedLogEntry(level, formattedMessage));
     } else {
-      if (_isDebugMode) {
+      if (_isDebugMode || _mirrorReleaseLogsToStdout) {
         stdout.writeln(formattedMessage);
-      } else {
+      }
+      if (!_isDebugMode) {
         developer.log(formattedMessage, name: _appName);
       }
     }
@@ -190,11 +192,12 @@ class AppLogger {
 
     // Output all buffered messages
     for (final entry in _buffer) {
-      if (_isDebugMode) {
+      if (_isDebugMode || _mirrorReleaseLogsToStdout) {
         stdout.writeln(entry.formattedMessage);
-      } else {
-        developer.log(entry.formattedMessage, name: _appName);
       }
+      if (!_isDebugMode) {
+        developer.log(entry.formattedMessage, name: _appName);
+      } 
     }
 
     // Clear the buffer after flushing
@@ -261,9 +264,10 @@ class AppLogger {
   /// Log an info message without source location (for performance)
   static void infoFast(String message, [String? tag]) {
     final prefix = tag != null ? '[$tag] ' : '';
-    if (_isDebugMode) {
+    if (_isDebugMode || _mirrorReleaseLogsToStdout) {
       stdout.writeln('INFO: $prefix$message');
-    } else {
+    }
+    if (!_isDebugMode) {
       developer.log('$prefix$message', name: _appName);
     }
   }
@@ -277,9 +281,10 @@ class AppLogger {
   /// Log a warning message without source location (for performance)
   static void warningFast(String message, [String? tag]) {
     final prefix = tag != null ? '[$tag] ' : '';
-    if (_isDebugMode) {
+    if (_isDebugMode || _mirrorReleaseLogsToStdout) {
       stdout.writeln('WARNING: $prefix$message');
-    } else {
+    }
+    if (!_isDebugMode) {
       developer.log(
         '$prefix$message',
         name: _appName,
@@ -295,11 +300,12 @@ class AppLogger {
         ? ' [${location.fileName}:${location.lineNumber}] [${location.functionName}]'
         : '';
 
-    if (_isDebugMode) {
+    if (_isDebugMode || _mirrorReleaseLogsToStdout) {
       stdout.writeln('ERROR: $message$locationSuffix');
       if (error != null) stdout.writeln('Error details: $error');
       if (stackTrace != null) stdout.writeln('Stack trace: $stackTrace');
-    } else {
+    }
+    if (!_isDebugMode) {
       developer.log(
         '$message$locationSuffix',
         name: _appName,
@@ -316,11 +322,12 @@ class AppLogger {
     Object? error,
     StackTrace? stackTrace,
   ]) {
-    if (_isDebugMode) {
+    if (_isDebugMode || _mirrorReleaseLogsToStdout) {
       stdout.writeln('ERROR: $message');
       if (error != null) stdout.writeln('Error details: $error');
       if (stackTrace != null) stdout.writeln('Stack trace: $stackTrace');
-    } else {
+    }
+    if (!_isDebugMode) {
       developer.log(
         message,
         name: _appName,
@@ -344,12 +351,13 @@ class AppLogger {
         ? ' [${location.fileName}:${location.lineNumber}] [${location.functionName}]'
         : '';
 
-    if (_isDebugMode) {
+    if (_isDebugMode || _mirrorReleaseLogsToStdout) {
       final levelText = level != null ? 'LEVEL $level: ' : '';
       stdout.writeln('$levelText$message$locationSuffix');
       if (error != null) stdout.writeln('Error details: $error');
       if (stackTrace != null) stdout.writeln('Stack trace: $stackTrace');
-    } else {
+    }
+    if (!_isDebugMode) {
       developer.log(
         '$message$locationSuffix',
         name: name ?? _appName,
@@ -368,12 +376,13 @@ class AppLogger {
     Object? error,
     StackTrace? stackTrace,
   }) {
-    if (_isDebugMode) {
+    if (_isDebugMode || _mirrorReleaseLogsToStdout) {
       final levelText = level != null ? 'LEVEL $level: ' : '';
       stdout.writeln('$levelText$message');
       if (error != null) stdout.writeln('Error details: $error');
       if (stackTrace != null) stdout.writeln('Stack trace: $stackTrace');
-    } else {
+    }
+    if (!_isDebugMode) {
       developer.log(
         message,
         name: name ?? _appName,

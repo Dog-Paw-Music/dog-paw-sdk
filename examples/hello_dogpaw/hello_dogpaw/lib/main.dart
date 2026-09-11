@@ -5,31 +5,20 @@ import 'package:provider/provider.dart';
 import 'app.dart';
 import 'controllers/hello_controller.dart';
 
-/// Purpose:
-///     Compose the minimal hello example and launch Flutter.
-/// Parameters:
-///     None.
-/// Return value:
-///     None.
-/// Requirements:
-///     Flutter bindings and the Dog Paw package must be available.
-/// Guarantees:
-///     Initializes logging, creates the hello controller, and starts the root
-///     widget tree.
-/// Invariants:
-///     Keeps dependency composition in main.dart while leaving runtime logic in
-///     HelloController.
+/// Compose dependencies and launch Flutter.
+///
+/// Keep this file thin: create the Dog Paw entity, hand it to the controller,
+/// then hand the UI to [HelloDogPawApp].
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   dp.AppLogger.initialize('HelloDogPaw');
 
+  // The entity name must be unique among apps talking to this Epiphany instance.
+  final dp.DogPawEntity entity = dp.DogPawEntity('HelloDogPaw');
+
   runApp(
     ChangeNotifierProvider<HelloController>(
-      create: (_) => HelloController(
-        client: EntityHelloDogPawClient(
-          dp.DogPawEntity('HelloDogPaw'),
-        ),
-      ),
+      create: (_) => HelloController(entity: entity),
       child: const HelloDogPawApp(),
     ),
   );

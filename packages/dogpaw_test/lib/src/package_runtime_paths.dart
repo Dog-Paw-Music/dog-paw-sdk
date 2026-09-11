@@ -261,9 +261,12 @@ List<String> buildEpiphanyBinarySearchPaths({
 /// - Explicit `DOGPAW_BRIDGE_LIB` appears first when present.
 /// - SDK-runtime and package-owned bridge candidates appear after the explicit
 ///   override.
+/// - Source-checkout build-output candidates are appended last as a temporary
+///   convenience fallback.
 ///
 /// Invariants:
-/// - Does not inspect source-checkout build directories.
+/// - SDK/runtime and package-owned bridge candidates remain preferred over
+///   source-checkout build-output convenience fallbacks.
 List<String> buildBridgeLibrarySearchPaths({
   required Map<String, String> environment,
   String? dogpawTestPackageRootPath,
@@ -302,6 +305,11 @@ List<String> buildBridgeLibrarySearchPaths({
   );
   if (resolvedDogpawPackageRootPath != null) {
     for (final String candidate in _buildDogpawPackageBridgeCandidates(
+      packageRootPath: resolvedDogpawPackageRootPath,
+    )) {
+      appendCandidate(candidate);
+    }
+    for (final String candidate in _buildSourceCheckoutBridgeCandidates(
       packageRootPath: resolvedDogpawPackageRootPath,
     )) {
       appendCandidate(candidate);
@@ -526,7 +534,7 @@ List<String> _buildSdkRuntimeEpiphanyCandidates({
 /// - [packageRootPath] points at the `packages/dogpaw_test` directory.
 ///
 /// Guarantees/Postconditions:
-/// - The host-runtime candidate appears first when its triplet is known.
+/// - The host-runtime candidate appears when its triplet is known.
 ///
 /// Invariants:
 /// - Does not inspect source-checkout build directories.
@@ -537,8 +545,6 @@ List<String> _buildSdkRuntimeBridgeCandidates({
     path.join(packageRootPath, '..', '..'),
   );
   final String runtimeLibRootPath = path.join(sdkRootPath, 'runtime', 'lib');
-  final Directory runtimeLibRoot = Directory(runtimeLibRootPath);
-
   final List<String> candidates = <String>[];
   final Set<String> seenPaths = <String>{};
 
@@ -559,17 +565,6 @@ List<String> _buildSdkRuntimeBridgeCandidates({
 
   appendCandidate(path.join(runtimeLibRootPath, _bridgeLibraryBaseName));
 
-  if (runtimeLibRoot.existsSync()) {
-    final List<Directory> tripletDirectories = runtimeLibRoot
-        .listSync(followLinks: false)
-        .whereType<Directory>()
-        .toList()
-      ..sort((Directory left, Directory right) => left.path.compareTo(right.path));
-    for (final Directory tripletDirectory in tripletDirectories) {
-      appendCandidate(path.join(tripletDirectory.path, _bridgeLibraryBaseName));
-    }
-  }
-
   return candidates;
 }
 
@@ -589,7 +584,7 @@ List<String> _buildSdkRuntimeBridgeCandidates({
 /// - [packageRootPath] points at the `dogpaw` package directory.
 ///
 /// Guarantees/Postconditions:
-/// - The host-runtime candidate appears first when its triplet is known.
+/// - The host-runtime candidate appears when its triplet is known.
 ///
 /// Invariants:
 /// - Only package-owned prebuilt assets are considered.
@@ -615,15 +610,71 @@ List<String> _buildDogpawPackageBridgeCandidates({
     );
   }
 
-  final Directory prebuiltRoot = Directory(prebuiltRootPath);
-  if (prebuiltRoot.existsSync()) {
-    final List<Directory> tripletDirectories = prebuiltRoot
+  return candidates;
+}
+
+/// Builds temporary source-checkout bridge candidates from nearby build
+/// directories.
+///
+/// Purpose:
+/// Keeps manual dev-repo Flutter test runs convenient without requiring callers
+/// to seed `DOGPAW_BRIDGE_LIB` for the common local-build case.
+///
+/// Parameters:
+/// - [packageRootPath]: Absolute `dogpaw` package root path.
+///
+/// Return value:
+/// - Ordered source-checkout bridge-library candidate paths.
+///
+/// Requirements/Preconditions:
+/// - [packageRootPath] points somewhere inside a source checkout when this
+///   fallback is expected to produce results.
+///
+/// Guarantees/Postconditions:
+/// - Returns candidates from nearest matching ancestor build directories first.
+///
+/// Invariants:
+/// - Runs after explicit, SDK-runtime, and package-owned candidates.
+/// - TODO: Remove this source-checkout convenience fallback after dev-repo runs
+///   use dedicated wrapper tooling again.
+List<String> _buildSourceCheckoutBridgeCandidates({
+  required String packageRootPath,
+}) {
+  final List<String> candidates = <String>[];
+  final Set<String> seenPaths = <String>{};
+
+  void appendCandidate(String candidate) {
+    if (candidate.isEmpty || seenPaths.contains(candidate)) {
+      return;
+    }
+    seenPaths.add(candidate);
+    candidates.add(candidate);
+  }
+
+  for (final Directory ancestor in _ancestorDirectories(packageRootPath)) {
+    if (!ancestor.existsSync()) {
+      continue;
+    }
+    final List<Directory> buildDirectories = ancestor
         .listSync(followLinks: false)
         .whereType<Directory>()
+        .where((Directory directory) =>
+            path.basename(directory.path).startsWith('build'))
         .toList()
-      ..sort((Directory left, Directory right) => left.path.compareTo(right.path));
-    for (final Directory tripletDirectory in tripletDirectories) {
-      appendCandidate(path.join(tripletDirectory.path, _bridgeLibraryBaseName));
+      ..sort((Directory left, Directory right) {
+        final String leftName = path.basename(left.path);
+        final String rightName = path.basename(right.path);
+        final int leftPriority = leftName == 'build' ? 1 : 0;
+        final int rightPriority = rightName == 'build' ? 1 : 0;
+        if (leftPriority != rightPriority) {
+          return leftPriority.compareTo(rightPriority);
+        }
+        return left.path.compareTo(right.path);
+      });
+    for (final Directory buildDirectory in buildDirectories) {
+      appendCandidate(
+        path.join(buildDirectory.path, 'lib', _bridgeLibraryBaseName),
+      );
     }
   }
 

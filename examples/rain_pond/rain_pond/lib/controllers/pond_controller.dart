@@ -13,10 +13,27 @@ import '../services/pond_key_input_service.dart';
 import '../services/visual_settings_store.dart';
 import '../utils/ripple_physics.dart';
 
+// =============================================================================
+// Rain Pond — controller
+//
+// Owns pond simulation (ripples, ambient rain, held expression). Dog Paw I/O is
+// delegated to [PondKeyInputService]. The first Dog Paw-related entry here is
+// [initialize] (prefs + connect); note events arrive via the service or
+// [submitKeyboardNote] (keyboard / tests).
+// =============================================================================
+
 /// Owns simulation state, settings, and optional Dog Paw key input.
 ///
 /// The canvas calls [advance] each frame; note events come from hardware or UI.
 class PondController extends ChangeNotifier {
+  /// Creates a controller for the pond simulation.
+  ///
+  /// Parameters:
+  /// - [entity]: Live [dp.DogPawEntity] owned by `main.dart`.
+  /// - [settings]: Shared visual settings (or a fresh default).
+  /// - [random]: Optional RNG (tests pass a seeded instance).
+  /// - [startInitialized]: When `true`, skips waiting for [initialize] before
+  ///   the sim runs — use in unit tests with [submitKeyboardNote] and no Epiphany.
   PondController({
     required dp.DogPawEntity entity,
     VisualSettings? settings,
@@ -49,9 +66,15 @@ class PondController extends ChangeNotifier {
   /// Live ripples for painting (do not mutate from widgets).
   List<SurfaceRipple> get ripples => List.unmodifiable(_ripples);
 
-  /// Loads prefs, connects to Epiphany (non-fatal on failure), starts key service.
+  // ---------------------------------------------------------------------------
+  // initialize() — prefs, then Dog Paw connect (non-fatal offline)
+  // ---------------------------------------------------------------------------
+
+  /// Load prefs, start the sim, and connect the key input service.
   ///
-  /// @return Connection handle to [complete] after first frame, or null.
+  /// @return Connection handle to [complete] after first frame, or `null` when
+  ///         offline (keyboard-only).
+  /// @post [_initialized] is true even if Epiphany is unreachable.
   Future<dp.ConnectionHandle?> initialize() async {
     final VisualSettings loaded = await VisualSettingsStore.load();
     settings.loadFrom(loaded);
@@ -82,43 +105,22 @@ class PondController extends ChangeNotifier {
     _lastSize = size;
   }
 
-  /// Feeds a note from keyboard simulation.
+  /// Feed a note from QWERTY (or tests) into the same path as hardware.
   ///
-  /// Purpose:
-  ///     Shares the same ripple path for desktop keyboard testing and Dog Paw
-  ///     hardware input so visuals stay consistent across both entry points.
-  /// Parameters:
-  ///     event: Keyboard-derived [RippleNoteEvent] carrying source, velocity, and
-  ///     press/release state.
-  /// Return value:
-  ///     None.
-  /// Requirements:
-  ///     `event.source` should use [RippleKeySource.keyboard] for keyboard input.
-  /// Guarantees:
-  ///     Forwards the event through the same handler used by hardware input.
-  /// Invariants:
-  ///     Does not bypass controller ripple spawning rules.
+  /// Production keyboard events and unit tests both use this entry point so
+  /// visuals stay consistent without Epiphany.
   void submitKeyboardNote(RippleNoteEvent event) {
     _onNoteEvent(event);
   }
 
-  /// Updates the continuous pressure and bend state for a key that is already held.
+  /// Updates continuous pressure and bend for a key that is already held.
   ///
-  /// Purpose:
-  ///     Accepts normalized `key_position` data from [PondKeyInputService] so
-  ///     held notes can keep generating visual motion after the first strike.
-  /// Parameters:
-  ///     source: Physical key whose expression changed.
-  ///     pressure: Normalized hold pressure in the range `0..1`.
-  ///     bend: Horizontal bend in the range `-1..1`.
-  /// Return value:
-  ///     None.
-  /// Requirements:
-  ///     `source` should already have an active entry in `_pressVisualBySource`.
-  /// Guarantees:
-  ///     Updates retained expression for that key or ignores out-of-order input.
-  /// Invariants:
-  ///     Does not create or remove held-key entries.
+  /// Called from [PondKeyInputService] with normalized `key_position` data.
+  ///
+  /// @param source Physical key whose expression changed.
+  /// @param pressure Normalized hold pressure in `0..1`.
+  /// @param bend Horizontal bend in `-1..1`.
+  /// @pre [source] should already be in `_pressVisualBySource` (ignored otherwise).
   void updateHeldNoteExpression({
     required RippleKeySource source,
     required double pressure,
